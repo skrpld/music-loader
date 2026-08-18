@@ -1,100 +1,88 @@
 # Music Loader
 
-Auto-download music from **Spotify** and **SoundCloud**, fetch synced **Genius** lyrics (`.lrc`), skip duplicates, and prepare a clean library for **Symfonium**.
+Скачивает музыку с метаданными из Spotify (через spotDL) и SoundCloud
+(через yt-dlp), ищет синхронизированные тексты (.lrc) и готовит библиотеку
+для Symfonium. Прогресс, скорость и статистика скачивания показываются в
+живом терминальном интерфейсе (на базе `rich`).
 
----
+## Структура проекта
 
-## Features
+```
+music-loader/
+├── pyproject.toml          # зависимости и точка входа
+├── README.md
+└── music_loader/           # исходный код пакета
+    ├── __main__.py         # python -m music_loader
+    ├── cli.py               # аргументы командной строки, главный цикл
+    ├── config.py             # пути и константы
+    ├── deps.py               # проверка ffmpeg / spotdl / yt-dlp
+    ├── process.py            # запуск подпроцессов с потоковым парсингом вывода
+    ├── spotify.py             # логика скачивания со Spotify
+    ├── soundcloud.py          # логика скачивания с SoundCloud
+    ├── lyrics.py              # поиск .lrc текстов
+    ├── playlist.py            # обновление .m3u8 плейлиста SoundCloud
+    ├── text_utils.py          # очистка названий треков
+    └── ui.py                  # живой дашборд (rich): прогресс-бары, лог, статистика
+```
 
-- **Spotify** (`spotDL`): downloads albums/tracks in 320 kbps MP3 with metadata, cover art, and `.lrc` lyrics. Organized as `Music/Artist - Album/01 - Title.mp3`.
-- **SoundCloud** (`yt-dlp`): downloads tracks/playlists into `Music/SoundCloud/`. Keeps an archive file to skip duplicates. Auto-builds `SoundCloud_New.m3u8`.
-- **Symfonium-ready**: folder structure, ID3 tags, M3U8 playlist, and `.lrc` karaoke subtitles out of the box.
+Код разложен по файлам по одной причине — так проще редактировать/чинить
+отдельную часть (например, только парсинг вывода yt-dlp), не трогая всё
+остальное. Всё лежит в поддиректории `music_loader/`, потому что это
+устанавливаемый Python-пакет (так его можно поставить через `pip install -e .`
+и вызывать командой `music-loader` откуда угодно, а не только из папки
+со скриптом).
 
----
-
-## Requirements
-
-- **Python 3.9+**
-- **FFmpeg** (required for audio conversion and thumbnail embedding)
-  - Windows: `winget install Gyan.FFmpeg` or `choco install ffmpeg`
-  - macOS: `brew install ffmpeg`
-  - Linux: `sudo apt update && sudo apt install ffmpeg`
-
-## Installation
-
-1. Clone or download this repo into a folder.
-2. Install Python dependencies:
+## Установка
 
 ```bash
-pip install spotdl>=4.2.0 yt-dlp>=2024.0.0 syncedlyrics>=0.10.0
+cd music-loader
+pip install -e .
 ```
 
----
-
-## Usage
-
-Three ways to run:
-
-### A) `links.txt` (recommended)
-
-Create `links.txt` next to the script, one URL per line. Mix Spotify and SoundCloud freely:
-
-```text
-https://open.spotify.com/album/4eLPsY3MfZB24A3A22
-https://open.spotify.com/artist/06HL4z0CvFAxyv2nD0gBvH
-https://soundcloud.com/artist-name/track-title
-```
-
-Then run:
+Также потребуется системный `ffmpeg` (не ставится через pip):
 
 ```bash
-python music_loader.py
+# Debian/Ubuntu
+sudo apt install ffmpeg
+# macOS
+brew install ffmpeg
 ```
 
-### B) Command-line arguments
+После установки `-e .` появится команда `music-loader` (см. `pyproject.toml`,
+секция `[project.scripts]`).
+
+## Использование
+
+Путь к ссылкам (или сама ссылка) и целевая папка Music указываются сразу
+при запуске:
 
 ```bash
-python music_loader.py "https://open.spotify.com/album/..." "https://soundcloud.com/..."
+# Одна ссылка
+music-loader "https://open.spotify.com/album/..." -o /path/to/Music
+
+# Файл со списком ссылок (по одной на строку)
+music-loader links.txt -o /path/to/Music
+
+# Несколько источников сразу
+music-loader links.txt "https://soundcloud.com/..." -o /path/to/Music
 ```
 
-### C) Interactive mode
+Если не указать ссылку или папку — скрипт спросит их интерактивно при
+запуске (один раз, до начала загрузки), но их всё равно нужно будет ввести
+до старта работы.
 
-Run without arguments and without `links.txt`:
+Альтернативный запуск без установки пакета:
 
 ```bash
-python music_loader.py
+pip install -r <(python3 -c "import tomllib;print('\n'.join(tomllib.load(open('pyproject.toml','rb'))['project']['dependencies']))")
+python3 -m music_loader links.txt -o ./Music
 ```
 
----
+## Замечание про парсинг прогресса
 
-## Output Structure
-
-```text
-Music/
-├── The Weeknd - After Hours/
-│   ├── 01 - Alone.mp3
-│   ├── 01 - Alone.lrc
-│   ├── 02 - Too Late.mp3
-│   └── 02 - Too Late.lrc
-├── SoundCloud/
-│   ├── .sc_archive.txt
-│   ├── SoundCloud_New.m3u8
-│   ├── Unreleased Track.mp3
-│   └── Unreleased Track.lrc
-```
-
----
-
-## Symfonium Setup (Android)
-
-1. **Sync folder**: copy `Music/` to your phone via USB, Syncthing, SMB, or local storage.
-2. **Scan library**: open Symfonium → **Settings** → **Media Sources** → add the `Music` folder.
-3. **Lyrics**: during playback, tap the lyrics icon. Symfonium auto-loads the matching `.lrc` file.
-4. **Playlist**: go to **Playlists** in Symfonium; `SoundCloud_New` contains all SoundCloud tracks. Rename files/tags directly in the app if needed.
-
----
-
-## Duplicate Handling
-
-- **Spotify**: spotDL checks existing tracks by metadata; skips re-downloads.
-- **SoundCloud**: yt-dlp writes unique track IDs into `.sc_archive.txt` and skips any already present.
+Прогресс/скорость для SoundCloud (yt-dlp) парсятся из стандартного формата
+вывода `[download] 45.2% of 3.45MiB at 1.23MiB/s ETA 00:02` — он стабилен.
+Прогресс для Spotify (spotdl) определяется по числам-процентам в выводе
+best-effort — формат вывода spotdl может немного отличаться между версиями,
+поэтому если процент не удаётся распознать, бар показывает индикатор
+активности, а точные сообщения всё равно видно в панели "Activity".

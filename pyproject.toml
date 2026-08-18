@@ -1,0 +1,21 @@
+[project]
+name = "music-loader"
+version = "1.0.0"
+description = "Downloads music with metadata from Spotify and SoundCloud, fetches synced lyrics, and prepares the library for Symfonium."
+requires-python = ">=3.10"
+dependencies = [
+    "spotdl>=4.2.0",
+    "yt-dlp>=2024.1.0",
+    "syncedlyrics>=0.6.0",
+    "rich>=13.7.0",
+]
+
+[project.scripts]
+music-loader = "music_loader.cli:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["music_loader*"]
