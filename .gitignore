@@ -28,3 +28,4 @@ SoundCloud_New.m3u8
 .sc_index.json
 .sc_downloads/
 .music-loader-logs/
+music_loader.egg-info/
