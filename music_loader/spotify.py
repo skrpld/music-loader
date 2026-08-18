@@ -17,10 +17,12 @@ from .process import run_streamed
 
 _FOUND_RE = re.compile(r"Found (\d+) songs? in", re.IGNORECASE)
 _DOWNLOADING_RE = re.compile(r"^Downloading[:\s]+(.+)$", re.IGNORECASE)
-_PERCENT_RE = re.compile(r"(\d{1,3})%")
+# Only accept 0-100 followed by a percent sign; a bare `\d{1,3}%` also matched
+# things like bitrates or ids inside a title and made the bar jump around.
+_PERCENT_RE = re.compile(r"\b(100|[0-9]{1,2})(?:\.\d+)?\s?%")
 _DOWNLOADED_RE = re.compile(r"^Downloaded\b", re.IGNORECASE)
 _SKIPPING_RE = re.compile(r"^Skipping\b", re.IGNORECASE)
-_ERROR_RE = re.compile(r"^(Error|LookupError|Failed)\b", re.IGNORECASE)
+_ERROR_RE = re.compile(r"^(Error|LookupError|AudioProviderError|Failed)\b", re.IGNORECASE)
 
 _HEARTBEAT_INTERVAL = 30.0  # seconds between "still working" log lines
 
