@@ -24,7 +24,7 @@ def fetch_lyrics(audio_path: Path, dashboard) -> bool:
     try:
         lrc_content = syncedlyrics.search(query, providers=LYRICS_PROVIDERS)
     except Exception as exc:
-        dashboard.log(f"[Lyrics] Error for '{query}': {exc}")
+        dashboard.log_error("Lyrics", f"Search failed for '{query}': {exc}")
         return False
 
     if not lrc_content:

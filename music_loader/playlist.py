@@ -11,10 +11,14 @@ def update_soundcloud_playlist(soundcloud_dir: Path, dashboard) -> int:
         if f.is_file() and f.suffix.lower() in AUDIO_EXTENSIONS
     )
 
-    with open(playlist_path, "w", encoding="utf-8") as f:
-        f.write("#EXTM3U\n")
-        for name in audio_files:
-            f.write(f"{name}\n")
+    try:
+        with open(playlist_path, "w", encoding="utf-8") as f:
+            f.write("#EXTM3U\n")
+            for name in audio_files:
+                f.write(f"{name}\n")
+    except OSError as exc:
+        dashboard.log_error("Playlist", f"Could not write '{playlist_path}': {exc}")
+        return 0
 
-    dashboard.log(f"Playlist updated: {playlist_path.name} ({len(audio_files)} tracks)")
+    dashboard.log(f"[Playlist] Updated: {playlist_path.name} ({len(audio_files)} tracks)")
     return len(audio_files)

@@ -5,8 +5,9 @@ from pathlib import Path
 
 from rich.console import Console
 
-from .config import AppConfig
+from .config import AppConfig, LOGS_DIRNAME
 from .deps import check_dependencies
+from .runlog import RunLog
 from .soundcloud import download_soundcloud
 from .spotify import download_spotify
 from .ui import Dashboard
@@ -71,7 +72,7 @@ def process_links(links: list[str], config: AppConfig, dashboard: Dashboard) -> 
             ok = download_soundcloud(link, config.soundcloud_dir, dashboard)
             dashboard.record("soundcloud", ok)
         else:
-            dashboard.log(f"[!] Unsupported link (not Spotify/SoundCloud): {link}")
+            dashboard.log_error("Links", f"Unsupported link (not Spotify/SoundCloud): {link}")
 
         dashboard.set_queue(index, total)
 
@@ -86,14 +87,26 @@ def print_summary(console: Console, dashboard: Dashboard) -> None:
     console.print()
     console.rule("Summary")
     console.print(
-        f"Spotify:    [green]{stats.spotify_ok} ok[/green] / [red]{stats.spotify_fail} failed[/red]"
+        f"Spotify:    [green]{stats.spotify_ok} link(s) ok[/green] / [red]{stats.spotify_fail} failed[/red]"
+        f"  -  tracks: [green]{stats.spotify_tracks_done} downloaded[/green], "
+        f"[cyan]{stats.spotify_tracks_skipped} already had[/cyan], "
+        f"[red]{stats.spotify_tracks_failed} failed[/red]"
     )
     console.print(
-        f"SoundCloud: [green]{stats.soundcloud_ok} ok[/green] / [red]{stats.soundcloud_fail} failed[/red]"
+        f"SoundCloud: [green]{stats.soundcloud_ok} link(s) ok[/green] / [red]{stats.soundcloud_fail} failed[/red]"
+        f"  -  tracks: [green]{stats.soundcloud_tracks_done} downloaded[/green], "
+        f"[cyan]{stats.soundcloud_tracks_skipped} already had[/cyan], "
+        f"[red]{stats.soundcloud_tracks_failed} failed[/red]"
     )
     console.print(
         f"Lyrics:     [green]{stats.lyrics_ok} found[/green] / [yellow]{stats.lyrics_fail} missing[/yellow]"
     )
+
+    if dashboard.runlog is not None and dashboard.runlog.count:
+        console.print(
+            f"\n[yellow]{dashboard.runlog.count} failed operation(s) logged to:[/yellow] "
+            f"{dashboard.runlog.path}"
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -112,14 +125,20 @@ def main(argv: list[str] | None = None) -> int:
     config = AppConfig.from_output_dir(Path(output))
     config.ensure_dirs()
 
+    runlog = RunLog(config.music_dir / LOGS_DIRNAME)
     dashboard = Dashboard(
-        console, source_label=f"{len(links)} link(s)", output_dir=str(config.music_dir)
+        console,
+        source_label=f"{len(links)} link(s)",
+        output_dir=str(config.music_dir),
+        runlog=runlog,
     )
     try:
         with dashboard:
             process_links(links, config, dashboard)
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted by user.[/yellow]")
+        if runlog.count:
+            console.print(f"[yellow]{runlog.count} failed operation(s) logged to:[/yellow] {runlog.path}")
         return 130
 
     print_summary(console, dashboard)

@@ -8,6 +8,18 @@ ARCHIVE_FILENAME = ".sc_archive.txt"
 PLAYLIST_FILENAME = "SoundCloud_New.m3u8"
 LYRICS_PROVIDERS = ["Musixmatch", "NetEase", "Lrclib", "Genius"]
 
+# Where per-run failure logs are written (see runlog.py). Kept as a hidden
+# subfolder of the music library so it doesn't clutter the main view but is
+# still easy to find (`ls -a`).
+LOGS_DIRNAME = ".music-loader-logs"
+
+# Long-running external commands (spotdl/yt-dlp) are killed if they produce
+# no output *and* don't exit within this many seconds. Set generously high
+# because a single link can be an entire artist discography (hundreds of
+# tracks), which spotdl can take a long time to resolve before printing
+# anything.
+SUBPROCESS_TIMEOUT_SECONDS = 6 * 60 * 60  # 6 hours
+
 
 @dataclass
 class AppConfig:
