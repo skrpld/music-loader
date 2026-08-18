@@ -6,6 +6,7 @@ run finishes. This module writes every failure to a plain-text file as it
 happens, so nothing is lost — the file can be checked (or grepped) after a
 long batch run to see exactly what needs retrying.
 """
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -18,15 +19,23 @@ class RunLog:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.path = directory / f"failures-{timestamp}.log"
         self.count = 0
+        # Failures are reported from several worker threads at once, so both
+        # the counter and the file writes need to be serialized.
+        self._lock = threading.Lock()
 
     def record(self, source: str, message: str) -> None:
         """Appends one failure line. `source` is a short tag such as
         'Spotify', 'SoundCloud', or 'Lyrics'."""
-        self.count += 1
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         line = f"[{timestamp}] [{source}] {message}\n"
-        # Opened/closed per call (not kept open) so the file is always
-        # flushed to disk and readable mid-run, and so a crash doesn't lose
-        # buffered lines.
-        with open(self.path, "a", encoding="utf-8") as f:
-            f.write(line)
+        with self._lock:
+            self.count += 1
+            # Opened/closed per call (not kept open) so the file is always
+            # flushed to disk and readable mid-run, and so a crash doesn't lose
+            # buffered lines.
+            try:
+                with open(self.path, "a", encoding="utf-8") as f:
+                    f.write(line)
+            except OSError:
+                # Logging a failure must never turn into a second failure.
+                pass
