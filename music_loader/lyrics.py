@@ -9,8 +9,6 @@ except ImportError:
 from .config import LYRICS_PROVIDERS
 from .text_utils import clean_track_title
 
-_MIN_QUERY_LENGTH = 3
-
 
 def fetch_lyrics(audio_path: Path, dashboard) -> bool:
     """Returns True if lyrics were found and saved next to `audio_path`."""
@@ -18,7 +16,7 @@ def fetch_lyrics(audio_path: Path, dashboard) -> bool:
         return False
 
     query = clean_track_title(audio_path.stem)
-    if len(query) < _MIN_QUERY_LENGTH:
+    if not query:
         dashboard.log(f"[Lyrics] Could not build a search query for '{audio_path.name}'")
         return False
 
@@ -34,10 +32,6 @@ def fetch_lyrics(audio_path: Path, dashboard) -> bool:
         return False
 
     lrc_path = audio_path.with_suffix(".lrc")
-    try:
-        lrc_path.write_text(lrc_content, encoding="utf-8")
-    except OSError as exc:
-        dashboard.log_error("Lyrics", f"Could not save '{lrc_path.name}': {exc}")
-        return False
+    lrc_path.write_text(lrc_content, encoding="utf-8")
     dashboard.log(f"[Lyrics] Saved: {lrc_path.name}")
     return True

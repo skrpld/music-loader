@@ -29,17 +29,6 @@ def check_dependencies(console: Console) -> bool:
             "will not be downloaded. Install with: pip install syncedlyrics[/yellow]"
         )
 
-    # Without mutagen, files downloaded by older versions (which are not in
-    # .sc_index.json yet) cannot be recognized and may be downloaded again.
-    try:
-        import mutagen  # noqa: F401
-    except ImportError:
-        console.print(
-            "[yellow]'mutagen' is not installed — SoundCloud files created before "
-            "the track index existed cannot be recognized and may be downloaded "
-            "again. Install with: pip install mutagen[/yellow]"
-        )
-
     # Deno/Node is optional: yt-dlp (used directly for SoundCloud and internally
     # by spotdl for YouTube sources) can use it to solve YouTube's signature
     # challenges. Without it, downloads still work but are more prone to

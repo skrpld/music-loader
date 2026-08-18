@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-AUDIO_EXTENSIONS = {".mp3", ".flac", ".m4a", ".ogg", ".opus", ".webm", ".wav", ".aac"}
+AUDIO_EXTENSIONS = {".mp3", ".flac", ".m4a", ".ogg", ".opus", ".webm"}
 SOUNDCLOUD_SUBDIR = "SoundCloud"
 ARCHIVE_FILENAME = ".sc_archive.txt"
 PLAYLIST_FILENAME = "SoundCloud_New.m3u8"
@@ -13,10 +13,11 @@ LYRICS_PROVIDERS = ["Musixmatch", "NetEase", "Lrclib", "Genius"]
 # still easy to find (`ls -a`).
 LOGS_DIRNAME = ".music-loader-logs"
 
-# Long-running external commands (spotdl/yt-dlp) are killed if they haven't
-# finished within this many seconds. Set generously high because a single link
-# can be an entire artist discography (hundreds of tracks), which spotdl can
-# take a long time to resolve before printing anything.
+# Long-running external commands (spotdl/yt-dlp) are killed if they produce
+# no output *and* don't exit within this many seconds. Set generously high
+# because a single link can be an entire artist discography (hundreds of
+# tracks), which spotdl can take a long time to resolve before printing
+# anything.
 SUBPROCESS_TIMEOUT_SECONDS = 6 * 60 * 60  # 6 hours
 
 

@@ -1,31 +1,17 @@
-"""Helpers for running external commands with live output handling.
-
-Output is read by a dedicated reader thread instead of `selectors`, because
-`selectors` cannot poll pipes on Windows and can also drop already-buffered
-lines when the child process exits between two polls.
-"""
+"""Helpers for running external commands with live output handling."""
+import selectors
 import subprocess
-import threading
 import time
-from queue import Empty, Queue
 from typing import Callable, Optional
-
-from .config import SUBPROCESS_TIMEOUT_SECONDS
 
 LineHandler = Callable[[str], None]
 IdleHandler = Callable[[float], None]
 
-_EXIT_GRACE_SECONDS = 60
+_DEFAULT_TIMEOUT = 6 * 60 * 60
 
 
-def run_captured(
-    cmd: list[str], timeout: int = SUBPROCESS_TIMEOUT_SECONDS
-) -> tuple[int, str, str]:
-    """Runs a command and returns ``(returncode, stdout, stderr)``.
-
-    A timeout (or a missing executable) is reported as returncode -1 with an
-    explanatory message in stderr, so callers never have to handle exceptions.
-    """
+def run_captured(cmd: list[str], timeout: int = _DEFAULT_TIMEOUT) -> tuple[int, str, str]:
+    """Runs a command and returns ``(returncode, stdout, stderr)``."""
     try:
         process = subprocess.run(
             cmd,
@@ -37,13 +23,7 @@ def run_captured(
     except subprocess.TimeoutExpired as exc:
         stdout = exc.stdout or ""
         stderr = exc.stderr or ""
-        if isinstance(stdout, bytes):
-            stdout = stdout.decode("utf-8", "replace")
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode("utf-8", "replace")
         return -1, stdout, stderr or f"command timed out after {timeout}s"
-    except OSError as exc:
-        return -1, "", f"could not start '{cmd[0]}': {exc}"
 
 
 def run_streamed(
@@ -51,80 +31,54 @@ def run_streamed(
     on_line: LineHandler,
     on_idle: Optional[IdleHandler] = None,
     idle_interval: float = 5.0,
-    timeout: int = SUBPROCESS_TIMEOUT_SECONDS,
+    timeout: int = _DEFAULT_TIMEOUT,
 ) -> int:
-    """Run ``cmd``, forwarding merged stdout/stderr lines to ``on_line``.
-
-    Returns the process exit code, or -1 if the command could not be started
-    or had to be killed after exceeding ``timeout``.
-    """
-    try:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-    except OSError:
-        return -1
-
-    lines: "Queue[Optional[str]]" = Queue()
-
-    def reader() -> None:
-        try:
-            assert process.stdout is not None
-            for line in process.stdout:
-                lines.put(line)
-        except (OSError, ValueError):
-            pass
-        finally:
-            lines.put(None)
-
-    thread = threading.Thread(target=reader, name="proc-reader", daemon=True)
-    thread.start()
+    """Run ``cmd``, forwarding merged stdout/stderr lines to ``on_line``."""
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
 
     start = time.monotonic()
     last_output = start
-    timed_out = False
+    sel = selectors.DefaultSelector()
 
     try:
+        assert process.stdout is not None
+        sel.register(process.stdout, selectors.EVENT_READ)
+
         while True:
             if time.monotonic() - start > timeout:
-                timed_out = True
-                break
+                process.kill()
+                process.wait()
+                return -1
 
-            try:
-                line = lines.get(timeout=idle_interval)
-            except Empty:
+            events = sel.select(timeout=idle_interval)
+            if events:
+                line = process.stdout.readline()
+                if line == "":
+                    break
+                last_output = time.monotonic()
+                stripped = line.strip()
+                if stripped:
+                    on_line(stripped)
+            else:
                 if on_idle is not None:
                     on_idle(time.monotonic() - last_output)
-                continue
+                if process.poll() is not None:
+                    break
 
-            if line is None:
-                break
-
-            last_output = time.monotonic()
-            stripped = line.strip()
-            if stripped:
-                on_line(stripped)
-
-        if timed_out:
-            process.kill()
-            process.wait()
-            return -1
-
-        process.wait(timeout=_EXIT_GRACE_SECONDS)
+        process.wait(timeout=60)
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
         return -1
     finally:
-        if process.stdout is not None:
-            try:
-                process.stdout.close()
-            except OSError:
-                pass
-        thread.join(timeout=5)
+        sel.close()
+        if process.stdout:
+            process.stdout.close()
 
     return process.returncode

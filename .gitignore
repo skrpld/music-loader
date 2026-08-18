@@ -21,11 +21,7 @@ Thumbs.db
 links.txt
 *.log
 
-# Generated music, playlists and downloader state
+# Generated music and playlists
 Music/
 SoundCloud_New.m3u8
 .sc_archive.txt
-.sc_index.json
-.sc_index.json.tmp
-.sc_downloads/
-.music-loader-logs/
