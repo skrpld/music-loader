@@ -6,10 +6,16 @@ from .config import AUDIO_EXTENSIONS, PLAYLIST_FILENAME
 
 def update_soundcloud_playlist(soundcloud_dir: Path, dashboard) -> int:
     playlist_path = soundcloud_dir / PLAYLIST_FILENAME
-    audio_files = sorted(
-        f.name for f in soundcloud_dir.iterdir()
-        if f.is_file() and f.suffix.lower() in AUDIO_EXTENSIONS
-    )
+    try:
+        audio_files = sorted(
+            f.name for f in soundcloud_dir.iterdir()
+            if f.is_file()
+            and not f.name.startswith(".")
+            and f.suffix.lower() in AUDIO_EXTENSIONS
+        )
+    except OSError as exc:
+        dashboard.log_error("Playlist", f"Could not read '{soundcloud_dir}': {exc}")
+        return 0
 
     try:
         with open(playlist_path, "w", encoding="utf-8") as f:
