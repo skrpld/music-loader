@@ -293,29 +293,41 @@ def _postprocess_track(
     return True, output_path
 
 
-def _discover_tracks(url: str) -> list[dict[str, Any]]:
-    # Full metadata (without download) gives worker threads the same identity,
-    # title/artist and thumbnail information that the old yt-dlp postprocessors
-    # used, while keeping the actual audio download free of post-processing.
+def _discover_tracks_flat(url: str) -> list[dict[str, Any]]:
+    """Quickly lists the tracks behind `url` (single track, set, or an
+    artist's whole discography) without resolving each one's full metadata.
+
+    `--flat-playlist` is what makes this fast: yt-dlp only enumerates ids /
+    titles / urls instead of fully extracting every single track first. A
+    prior version used `--dump-single-json` *without* `--flat-playlist`,
+    which forces yt-dlp to fully resolve every track (one real request per
+    track) before printing anything at all - for a set with many tracks
+    that meant a long, completely silent wait with the dashboard frozen on
+    "resolving tracks...", indistinguishable from a hang. Full per-track
+    metadata (thumbnail, description, precise duration) is picked up for
+    free later, as a side effect of actually downloading each track - see
+    `_download_one` - instead of being fetched a second time here.
+    """
     code, stdout, stderr = run_captured(
         [
-            "yt-dlp", "--dump-single-json", "--skip-download", "--no-warnings", url,
+            "yt-dlp", "--flat-playlist", "--dump-json", "--skip-download",
+            "--no-warnings", url,
         ],
         timeout=SUBPROCESS_TIMEOUT_SECONDS,
     )
     if code != 0:
         raise RuntimeError((stderr or stdout or f"yt-dlp exited with code {code}").strip())
-    try:
-        data = json.loads(stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Could not parse yt-dlp metadata: {exc}") from exc
 
-    entries = data.get("entries") if isinstance(data, dict) else None
-    if entries is None:
-        entries = [data]
     tracks: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for item in entries:
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
         if not isinstance(item, dict):
             continue
         track_id = str(item.get("id") or "")
@@ -333,7 +345,12 @@ def _download_one(
     info: dict[str, Any],
     staging_dir: Path,
     dashboard,
-) -> tuple[bool, Path | None]:
+) -> tuple[bool, Path | None, dict[str, Any] | None]:
+    """Downloads one track's audio. As a side effect (via --print-json),
+    also captures yt-dlp's full metadata for the track - the same
+    information a separate metadata-only pass would have to fetch again
+    from scratch - so the caller can use it for tagging/thumbnail/index
+    without a second, redundant extraction request."""
     track_id = str(info["id"])
     title = _clean_metadata(info.get("title"), track_id)
     output_template = str(staging_dir / f"{track_id}.%(ext)s")
@@ -341,6 +358,7 @@ def _download_one(
         "yt-dlp",
         "--no-playlist",
         "--newline",
+        "--print-json",
         "-f", "bestaudio/best",
         "--no-part",
         "-o", output_template,
@@ -349,9 +367,21 @@ def _download_one(
 
     dashboard.update_file(label=f"SoundCloud: {title[:60]}", percent=0, speed="", eta="")
     had_error = False
+    full_info: dict[str, Any] | None = None
 
     def on_line(line: str) -> None:
-        nonlocal had_error
+        nonlocal had_error, full_info
+        # --print-json emits the complete info dict as one JSON line, mixed
+        # in with the normal progress/status lines - pick it out here.
+        if line.startswith("{"):
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict):
+                full_info = parsed
+                return
+
         match = _PROGRESS_RE.search(line)
         if match:
             percent, speed, eta = match.groups()
@@ -362,7 +392,7 @@ def _download_one(
 
     code = run_streamed(cmd, on_line)
     if had_error or code != 0:
-        return False, None
+        return False, None, None
 
     candidates = sorted(
         p for p in staging_dir.glob(f"{track_id}.*")
@@ -370,8 +400,8 @@ def _download_one(
     )
     for path in candidates:
         if path.suffix.lower() in AUDIO_EXTENSIONS or path.suffix.lower() in {".m4a", ".wav", ".webm", ".opus", ".ogg"}:
-            return True, path
-    return False, None
+            return True, path, full_info
+    return False, None, None
 
 
 def download_soundcloud(
@@ -392,7 +422,7 @@ def download_soundcloud(
     index = _SoundCloudIndex(soundcloud_dir)
 
     try:
-        tracks = _discover_tracks(url)
+        tracks = _discover_tracks_flat(url)
     except Exception as exc:
         dashboard.log_error("SoundCloud", f"Could not resolve '{url}': {exc}")
         dashboard.finish_file()
@@ -472,9 +502,9 @@ def download_soundcloud(
                     continue
 
                 try:
-                    ok, raw_path = _download_one(info, staging_dir, dashboard)
+                    ok, raw_path, full_info = _download_one(info, staging_dir, dashboard)
                 except Exception as exc:
-                    ok, raw_path = False, None
+                    ok, raw_path, full_info = False, None, None
                     dashboard.log_error(
                         "SoundCloud", f"Download failed for '{info.get('title', info.get('id'))}': {exc}"
                     )
@@ -484,9 +514,16 @@ def download_soundcloud(
                     dashboard.record_track("soundcloud", "failed")
                     continue
 
+                # Merge the full metadata captured during the download (if any)
+                # on top of the flat listing - it has thumbnail/description/
+                # precise duration the flat listing doesn't carry.
+                merged_info = {**info, **(full_info or {})}
+                merged_info["id"] = info["id"]
+                merged_info["webpage_url"] = info["webpage_url"]
+
                 # The producer never waits for ffmpeg/metadata/thumbnail. It
                 # only blocks when the bounded queue is full.
-                queue.put((info, raw_path))
+                queue.put((merged_info, raw_path))
 
             queue.join()
             for _ in range(worker_count):
