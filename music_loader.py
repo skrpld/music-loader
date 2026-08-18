@@ -52,6 +52,17 @@ def check_dependencies() -> bool:
         print("[i] 'syncedlyrics' is not installed — lyrics for SoundCloud tracks "
               "will not be downloaded. Install with: pip install syncedlyrics")
 
+    # Deno (or Node.js) is not strictly required, but yt-dlp (used both
+    # directly for SoundCloud and internally by spotdl for YouTube sources)
+    # can use it as an external JS runtime to solve YouTube's signature/
+    # nsig challenges. Without it, downloads still work but are more prone
+    # to throttling or extraction failures.
+    if shutil.which("deno") is None and shutil.which("node") is None:
+        print("[i] Neither 'deno' nor 'node' was found — yt-dlp will fall back to its "
+              "built-in JS interpreter, which is slower and less reliable for YouTube "
+              "sources. Recommended: install Deno (https://deno.com) for more stable "
+              "downloads.")
+
     return True
 
 
