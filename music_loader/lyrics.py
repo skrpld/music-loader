@@ -32,6 +32,10 @@ def fetch_lyrics(audio_path: Path, dashboard) -> bool:
         return False
 
     lrc_path = audio_path.with_suffix(".lrc")
-    lrc_path.write_text(lrc_content, encoding="utf-8")
+    try:
+        lrc_path.write_text(lrc_content, encoding="utf-8")
+    except OSError as exc:
+        dashboard.log_error("Lyrics", f"Could not save '{lrc_path.name}': {exc}")
+        return False
     dashboard.log(f"[Lyrics] Saved: {lrc_path.name}")
     return True

@@ -10,6 +10,8 @@ Two levels of counting are tracked on purpose:
   processed (downloaded / already had it / failed). This is what answers
   "how many tracks are there in total" and "how many are actually done",
   which a link-only counter can't.
+
+Every public method is safe to call from the worker threads.
 """
 from collections import deque
 from dataclasses import dataclass
@@ -66,6 +68,7 @@ class Dashboard:
         self.runlog = runlog
         self._log: deque[str] = deque(maxlen=_LOG_LINES)
         self._lock = threading.RLock()
+        self._started = False
 
         self.queue_progress = Progress(
             TextColumn("[bold cyan]Queue [/bold cyan]"),
@@ -102,9 +105,11 @@ class Dashboard:
 
     def __enter__(self) -> "Dashboard":
         self._live.start()
+        self._started = True
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
+        self._started = False
         self._live.stop()
 
     # -- updates called from the downloader modules -------------------------
@@ -112,7 +117,8 @@ class Dashboard:
         """Adds a line to the live 'Activity' panel only. Use this for
         routine/informational events. For failures, prefer `log_error` so
         the failure also survives in the run's log file."""
-        self._log.append(message)
+        with self._lock:
+            self._log.append(message)
         self._refresh()
 
     def log_error(self, source: str, message: str) -> None:
@@ -124,30 +130,46 @@ class Dashboard:
             self.runlog.record(source, message)
 
     def set_queue(self, completed: int, total: int) -> None:
-        self.queue_progress.update(self._queue_task, completed=completed, total=max(total, 1))
+        with self._lock:
+            self.queue_progress.update(
+                self._queue_task, completed=completed, total=max(total, 1)
+            )
         self._refresh()
 
     def add_tracks_total(self, kind: str, count: int) -> None:
         """Adds newly discovered tracks to the running total."""
         if count <= 0:
             return
-        with self._lock:
-            attr = f"{kind}_tracks_total"
-            setattr(self.stats, attr, getattr(self.stats, attr) + count)
-            self._refresh()
+        self._bump(f"{kind}_tracks_total", count)
 
     def record_track(self, kind: str, status: str) -> None:
         """Records the outcome of a single track."""
+        self._bump(f"{kind}_tracks_{status}", 1)
+
+    def record_lyrics(self, found: bool) -> None:
+        """Records one lyrics lookup result (found / not found)."""
+        self._bump("lyrics_ok" if found else "lyrics_fail", 1)
+
+    def record(self, kind: str, ok: bool) -> None:
+        """Records the outcome of a whole link."""
+        self._bump(f"{kind}_{'ok' if ok else 'fail'}", 1)
+
+    def _bump(self, attr: str, amount: int) -> None:
         with self._lock:
-            attr = f"{kind}_tracks_{status}"
-            setattr(self.stats, attr, getattr(self.stats, attr) + 1)
-            self._refresh()
+            if not hasattr(self.stats, attr):
+                # An unknown counter name must never crash a worker thread.
+                self._log.append(f"[UI][!] Unknown counter '{attr}'")
+            else:
+                setattr(self.stats, attr, getattr(self.stats, attr) + amount)
+        self._refresh()
 
     def start_file(self, label: str) -> None:
-        self.file_progress.reset(self._file_task)
-        self.file_progress.update(
-            self._file_task, total=100, completed=0, label=label, speed="", eta="", visible=True
-        )
+        with self._lock:
+            self.file_progress.reset(self._file_task)
+            self.file_progress.update(
+                self._file_task, total=100, completed=0, label=label,
+                speed="", eta="", visible=True,
+            )
         self._refresh()
 
     def update_file(self, percent: float | None = None, label: str | None = None,
@@ -161,19 +183,14 @@ class Dashboard:
             fields["eta"] = eta
         if percent is not None:
             fields["completed"] = percent
-        self.file_progress.update(self._file_task, **fields)
+        with self._lock:
+            self.file_progress.update(self._file_task, **fields)
         self._refresh()
 
     def finish_file(self) -> None:
-        self.file_progress.update(self._file_task, visible=False)
-        self._refresh()
-
-    def record(self, kind: str, ok: bool) -> None:
-        """Records the outcome of a whole link."""
         with self._lock:
-            attr = f"{kind}_{'ok' if ok else 'fail'}"
-            setattr(self.stats, attr, getattr(self.stats, attr) + 1)
-            self._refresh()
+            self.file_progress.update(self._file_task, visible=False)
+        self._refresh()
 
     # -- rendering ------------------------------------------------------------
     @staticmethod

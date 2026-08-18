@@ -52,15 +52,30 @@ def collect_links(source_args: list[str], console: Console) -> list[str]:
         source_args = [entry] if entry else []
 
     links: list[str] = []
+    seen: set[str] = set()
+
+    def add(link: str) -> None:
+        if link and link not in seen:
+            seen.add(link)
+            links.append(link)
+
     for entry in source_args:
         path = Path(entry).expanduser()
-        if path.is_file():
-            with open(path, "r", encoding="utf-8-sig") as f:
-                links.extend(
-                    line.strip() for line in f if line.strip() and not line.startswith("#")
-                )
+        try:
+            is_file = path.is_file()
+        except OSError:
+            is_file = False
+        if is_file:
+            try:
+                with open(path, "r", encoding="utf-8-sig") as f:
+                    for raw_line in f:
+                        line = raw_line.strip()
+                        if line and not line.startswith("#"):
+                            add(line)
+            except OSError as exc:
+                console.print(f"[red]Could not read '{path}': {exc}[/red]")
         else:
-            links.append(entry)
+            add(entry)
     return links
 
 
@@ -77,20 +92,28 @@ def process_links(links: list[str], config: AppConfig, dashboard: Dashboard) -> 
     dashboard.set_queue(0, total)
 
     for index, link in enumerate(links, start=1):
-        if "spotify.com" in link:
-            ok = download_spotify(link, config.music_dir, dashboard)
-            dashboard.record("spotify", ok)
-        elif "soundcloud.com" in link:
-            ok = download_soundcloud(
-                link,
-                config.soundcloud_dir,
-                dashboard,
-                postprocess_workers=config.soundcloud_postprocess_workers,
-                lyrics_workers=config.lyrics_workers,
-            )
-            dashboard.record("soundcloud", ok)
-        else:
-            dashboard.log_error("Links", f"Unsupported link (not Spotify/SoundCloud): {link}")
+        try:
+            if "spotify.com" in link:
+                ok = download_spotify(link, config.music_dir, dashboard)
+                dashboard.record("spotify", ok)
+            elif "soundcloud.com" in link:
+                ok = download_soundcloud(
+                    link,
+                    config.soundcloud_dir,
+                    dashboard,
+                    postprocess_workers=config.soundcloud_postprocess_workers,
+                    lyrics_workers=config.lyrics_workers,
+                )
+                dashboard.record("soundcloud", ok)
+            else:
+                dashboard.log_error("Links", f"Unsupported link (not Spotify/SoundCloud): {link}")
+        except KeyboardInterrupt:
+            raise
+        except Exception as exc:
+            # One broken link must not abort the whole batch.
+            kind = "spotify" if "spotify.com" in link else "soundcloud"
+            dashboard.record(kind, False)
+            dashboard.log_error("Links", f"Unexpected error while processing '{link}': {exc}")
 
         dashboard.set_queue(index, total)
 
@@ -134,18 +157,36 @@ def main(argv: list[str] | None = None) -> int:
     if not check_dependencies(console):
         return 1
 
-    links = collect_links(args.source, console)
+    try:
+        links = collect_links(args.source, console)
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[yellow]Interrupted by user.[/yellow]")
+        return 130
     if not links:
         console.print("[red]No links provided.[/red]")
         return 1
 
-    output = resolve_output(args.output, console)
+    try:
+        output = resolve_output(args.output, console)
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[yellow]Interrupted by user.[/yellow]")
+        return 130
+
     config = AppConfig.from_output_dir(Path(output))
     config.soundcloud_postprocess_workers = max(1, args.soundcloud_workers)
     config.lyrics_workers = max(1, args.lyrics_workers)
-    config.ensure_dirs()
+    try:
+        config.ensure_dirs()
+    except OSError as exc:
+        console.print(f"[red]Could not use the target folder '{config.music_dir}': {exc}[/red]")
+        return 1
 
-    runlog = RunLog(config.music_dir / LOGS_DIRNAME)
+    try:
+        runlog = RunLog(config.music_dir / LOGS_DIRNAME)
+    except OSError as exc:
+        console.print(f"[yellow]Could not create the failure log: {exc}[/yellow]")
+        runlog = None
+
     dashboard = Dashboard(
         console,
         source_label=f"{len(links)} link(s)",
@@ -157,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
             process_links(links, config, dashboard)
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted by user.[/yellow]")
-        if runlog.count:
+        if runlog is not None and runlog.count:
             console.print(f"[yellow]{runlog.count} failed operation(s) logged to:[/yellow] {runlog.path}")
         return 130
 

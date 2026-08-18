@@ -10,6 +10,23 @@ IdleHandler = Callable[[float], None]
 _DEFAULT_TIMEOUT = 6 * 60 * 60
 
 
+def _terminate(process: subprocess.Popen) -> None:
+    """Stops a child process without leaving it running in the background."""
+    if process.poll() is not None:
+        return
+    try:
+        process.terminate()
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+    except OSError:
+        pass
+
+
 def run_captured(cmd: list[str], timeout: int = _DEFAULT_TIMEOUT) -> tuple[int, str, str]:
     """Runs a command and returns ``(returncode, stdout, stderr)``."""
     try:
@@ -23,6 +40,10 @@ def run_captured(cmd: list[str], timeout: int = _DEFAULT_TIMEOUT) -> tuple[int, 
     except subprocess.TimeoutExpired as exc:
         stdout = exc.stdout or ""
         stderr = exc.stderr or ""
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode("utf-8", "replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", "replace")
         return -1, stdout, stderr or f"command timed out after {timeout}s"
 
 
@@ -33,7 +54,12 @@ def run_streamed(
     idle_interval: float = 5.0,
     timeout: int = _DEFAULT_TIMEOUT,
 ) -> int:
-    """Run ``cmd``, forwarding merged stdout/stderr lines to ``on_line``."""
+    """Run ``cmd``, forwarding merged stdout/stderr lines to ``on_line``.
+
+    The child process is always terminated before this function returns,
+    including when the caller is interrupted (Ctrl+C), so no orphaned
+    yt-dlp/spotdl processes keep downloading in the background.
+    """
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -46,14 +72,28 @@ def run_streamed(
     last_output = start
     sel = selectors.DefaultSelector()
 
+    def emit(raw_line: str) -> None:
+        stripped = raw_line.strip()
+        if stripped:
+            on_line(stripped)
+
+    def drain() -> None:
+        # Data can still sit in Python's buffer after the process exits;
+        # without this final read the last lines (often the error message)
+        # would be silently dropped.
+        try:
+            for pending in process.stdout:  # type: ignore[union-attr]
+                emit(pending)
+        except (OSError, ValueError):
+            pass
+
     try:
         assert process.stdout is not None
         sel.register(process.stdout, selectors.EVENT_READ)
 
         while True:
             if time.monotonic() - start > timeout:
-                process.kill()
-                process.wait()
+                _terminate(process)
                 return -1
 
             events = sel.select(timeout=idle_interval)
@@ -62,23 +102,28 @@ def run_streamed(
                 if line == "":
                     break
                 last_output = time.monotonic()
-                stripped = line.strip()
-                if stripped:
-                    on_line(stripped)
+                emit(line)
             else:
                 if on_idle is not None:
                     on_idle(time.monotonic() - last_output)
                 if process.poll() is not None:
+                    drain()
                     break
 
         process.wait(timeout=60)
     except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()
+        _terminate(process)
         return -1
+    except BaseException:
+        # Includes KeyboardInterrupt: never leave the child process behind.
+        _terminate(process)
+        raise
     finally:
         sel.close()
         if process.stdout:
-            process.stdout.close()
+            try:
+                process.stdout.close()
+            except OSError:
+                pass
 
     return process.returncode
