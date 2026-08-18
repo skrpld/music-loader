@@ -11,6 +11,7 @@ import json
 import re
 import subprocess
 import threading
+import time
 import urllib.request
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
@@ -44,6 +45,15 @@ _HEARTBEAT_INTERVAL = 30.0
 _INDEX_FILENAME = ".sc_index.json"
 _STAGING_DIRNAME = ".sc_downloads"
 _DEFAULT_LYRICS_WORKERS = 2
+
+# A track download can fail transiently (dropped connection mid-stream,
+# SoundCloud briefly rate-limiting, etc.), which often shows up as yt-dlp's
+# own postprocessing step choking on an incomplete/corrupt file ("Invalid
+# data found when processing input") rather than a clean download error.
+# Retrying the whole download a couple of times clears most of these without
+# giving up on a track that would otherwise succeed on a second attempt.
+_MAX_DOWNLOAD_RETRIES = 2
+_RETRY_DELAY_SECONDS = 3.0
 
 
 class _SoundCloudIndex:
@@ -102,13 +112,6 @@ class _SoundCloudIndex:
             # New files are embedded with the SoundCloud URL.  The persistent
             # index above is the primary mapping; metadata matching is only a
             # compatibility path for files created by older versions.
-            if not title or not artist:
-                # Discovery is now a fast --flat-playlist listing, so title
-                # may be present but artist/duration often aren't. Without
-                # both title and artist there is nothing reliable to match
-                # against in the legacy scan, so skip it rather than risk a
-                # false match on an empty string.
-                return None
             for candidate, old_title, old_artist, old_duration in self._legacy:
                 if old_title != title or old_artist != artist:
                     continue
@@ -301,19 +304,12 @@ def _postprocess_track(
 
 
 def _discover_tracks(url: str) -> list[dict[str, Any]]:
-    # Uses --flat-playlist: for a playlist/set/discography URL this returns
-    # only the lightweight per-entry listing (id, webpage_url, and usually a
-    # title) without yt-dlp visiting every single track's page to resolve
-    # full metadata first. That full resolution (artist, duration, cover,
-    # description) used to happen for the *entire* playlist upfront, which is
-    # what made "resolving tracks..." take a very long time on big playlists
-    # before a single track even started downloading. Full metadata for each
-    # track is now fetched lazily, per-track, right when it's downloaded (see
-    # `_download_one`'s use of --write-info-json).
+    # Full metadata (without download) gives worker threads the same identity,
+    # title/artist and thumbnail information that the old yt-dlp postprocessors
+    # used, while keeping the actual audio download free of post-processing.
     code, stdout, stderr = run_captured(
         [
-            "yt-dlp", "--flat-playlist", "--dump-single-json", "--skip-download",
-            "--no-warnings", url,
+            "yt-dlp", "--dump-single-json", "--skip-download", "--no-warnings", url,
         ],
         timeout=SUBPROCESS_TIMEOUT_SECONDS,
     )
@@ -347,7 +343,7 @@ def _download_one(
     info: dict[str, Any],
     staging_dir: Path,
     dashboard,
-) -> tuple[bool, Path | None, dict[str, Any]]:
+) -> tuple[bool, Path | None]:
     track_id = str(info["id"])
     title = _clean_metadata(info.get("title"), track_id)
     output_template = str(staging_dir / f"{track_id}.%(ext)s")
@@ -357,7 +353,6 @@ def _download_one(
         "--newline",
         "-f", "bestaudio/best",
         "--no-part",
-        "--write-info-json",
         "-o", output_template,
         info["webpage_url"],
     ]
@@ -376,41 +371,59 @@ def _download_one(
             dashboard.log_error("SoundCloud", line)
 
     code = run_streamed(cmd, on_line)
+
+    # Clean up any partial/corrupt leftovers from this attempt so a retry (or
+    # the caller's failure path) never confuses a stale fragment for a
+    # finished download.
+    def _cleanup_partial() -> None:
+        for path in staging_dir.glob(f"{track_id}.*"):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
     if had_error or code != 0:
-        return False, None, info
+        _cleanup_partial()
+        return False, None
 
     candidates = sorted(
         p for p in staging_dir.glob(f"{track_id}.*")
         if p.is_file() and p.suffix.lower() not in {".part", ".tmp"}
-        and p.name != f"{track_id}.info.json"
     )
-    audio_path: Path | None = None
     for path in candidates:
         if path.suffix.lower() in AUDIO_EXTENSIONS or path.suffix.lower() in {".m4a", ".wav", ".webm", ".opus", ".ogg"}:
-            audio_path = path
-            break
-    if audio_path is None:
-        return False, None, info
+            return True, path
 
-    # The flat-playlist listing used for discovery only has an id/url (and
-    # maybe a title). The full metadata needed for tagging/cover art
-    # (artist, duration, thumbnail, description) is written by yt-dlp
-    # alongside the download itself - read it now instead of doing a
-    # separate full-metadata fetch for every track ahead of time.
-    full_info = info
-    info_json_path = staging_dir / f"{track_id}.info.json"
-    if info_json_path.exists():
-        try:
-            loaded = json.loads(info_json_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                loaded.setdefault("webpage_url", info.get("webpage_url"))
-                full_info = loaded
-        except (OSError, json.JSONDecodeError):
-            full_info = info
-        finally:
-            info_json_path.unlink(missing_ok=True)
+    _cleanup_partial()
+    return False, None
 
-    return True, audio_path, full_info
+
+def _download_one_with_retries(
+    info: dict[str, Any],
+    staging_dir: Path,
+    dashboard,
+    max_retries: int = _MAX_DOWNLOAD_RETRIES,
+) -> tuple[bool, Path | None]:
+    """Wraps `_download_one` with a few retries.
+
+    Failures here are frequently transient (a dropped connection mid-stream
+    leaves yt-dlp with an incomplete file, which then fails at its own
+    postprocessing step with an "Invalid data found" ffmpeg error) rather
+    than a track that's genuinely unavailable. Retrying clears most of these.
+    """
+    title = _clean_metadata(info.get("title"), str(info.get("id")))
+    attempt = 0
+    while True:
+        ok, raw_path = _download_one(info, staging_dir, dashboard)
+        if ok:
+            return True, raw_path
+        if attempt >= max_retries:
+            return False, None
+        attempt += 1
+        dashboard.log(
+            f"[SoundCloud] Retrying '{title}' (attempt {attempt + 1}/{max_retries + 1})"
+        )
+        time.sleep(_RETRY_DELAY_SECONDS)
 
 
 def download_soundcloud(
@@ -499,10 +512,6 @@ def download_soundcloud(
 
         try:
             for info in tracks:
-                # NOTE: this is a fast index lookup only (by id, or by legacy
-                # title+artist match when both are known) - it does not
-                # trigger any network access, so it doesn't reintroduce the
-                # slow upfront resolution the flat-playlist listing avoids.
                 existing = index.find(info)
                 if existing is not None:
                     # Promote a legacy metadata match into the exact persistent
@@ -515,9 +524,9 @@ def download_soundcloud(
                     continue
 
                 try:
-                    ok, raw_path, full_info = _download_one(info, staging_dir, dashboard)
+                    ok, raw_path = _download_one_with_retries(info, staging_dir, dashboard)
                 except Exception as exc:
-                    ok, raw_path, full_info = False, None, info
+                    ok, raw_path = False, None
                     dashboard.log_error(
                         "SoundCloud", f"Download failed for '{info.get('title', info.get('id'))}': {exc}"
                     )
@@ -529,7 +538,7 @@ def download_soundcloud(
 
                 # The producer never waits for ffmpeg/metadata/thumbnail. It
                 # only blocks when the bounded queue is full.
-                queue.put((full_info, raw_path))
+                queue.put((info, raw_path))
 
             queue.join()
             for _ in range(worker_count):
