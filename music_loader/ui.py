@@ -21,10 +21,14 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 from rich.table import Table
+from rich.markup import escape
+from rich.text import Text
 
 from .runlog import RunLog
 
 _LOG_LINES = 10
+_VALID_KINDS = ("spotify", "soundcloud")
+_VALID_STATUSES = ("done", "skipped", "failed")
 
 
 @dataclass
@@ -66,6 +70,7 @@ class Dashboard:
         self.runlog = runlog
         self._log: deque[str] = deque(maxlen=_LOG_LINES)
         self._lock = threading.RLock()
+        self._started = False
 
         self.queue_progress = Progress(
             TextColumn("[bold cyan]Queue [/bold cyan]"),
@@ -102,9 +107,11 @@ class Dashboard:
 
     def __enter__(self) -> "Dashboard":
         self._live.start()
+        self._started = True
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
+        self._started = False
         self._live.stop()
 
     # -- updates called from the downloader modules -------------------------
@@ -112,7 +119,8 @@ class Dashboard:
         """Adds a line to the live 'Activity' panel only. Use this for
         routine/informational events. For failures, prefer `log_error` so
         the failure also survives in the run's log file."""
-        self._log.append(message)
+        with self._lock:
+            self._log.append(message)
         self._refresh()
 
     def log_error(self, source: str, message: str) -> None:
@@ -129,24 +137,37 @@ class Dashboard:
 
     def add_tracks_total(self, kind: str, count: int) -> None:
         """Adds newly discovered tracks to the running total."""
-        if count <= 0:
+        if count <= 0 or kind not in _VALID_KINDS:
             return
         with self._lock:
             attr = f"{kind}_tracks_total"
             setattr(self.stats, attr, getattr(self.stats, attr) + count)
-            self._refresh()
+        self._refresh()
 
     def record_track(self, kind: str, status: str) -> None:
         """Records the outcome of a single track."""
+        if kind not in _VALID_KINDS or status not in _VALID_STATUSES:
+            return
         with self._lock:
             attr = f"{kind}_tracks_{status}"
             setattr(self.stats, attr, getattr(self.stats, attr) + 1)
-            self._refresh()
+        self._refresh()
+
+    def record_lyrics(self, found: bool) -> None:
+        """Records the outcome of one lyrics lookup."""
+        with self._lock:
+            if found:
+                self.stats.lyrics_ok += 1
+            else:
+                self.stats.lyrics_fail += 1
+        self._refresh()
 
     def start_file(self, label: str) -> None:
+        # Track titles routinely contain square brackets, which rich would
+        # read as style markup; escape them before they reach a progress bar.
         self.file_progress.reset(self._file_task)
         self.file_progress.update(
-            self._file_task, total=100, completed=0, label=label, speed="", eta="", visible=True
+            self._file_task, total=100, completed=0, label=escape(label), speed="", eta="", visible=True
         )
         self._refresh()
 
@@ -154,13 +175,13 @@ class Dashboard:
                      speed: str | None = None, eta: str | None = None) -> None:
         fields = {}
         if label is not None:
-            fields["label"] = label
+            fields["label"] = escape(label)
         if speed is not None:
             fields["speed"] = speed
         if eta is not None:
             fields["eta"] = eta
         if percent is not None:
-            fields["completed"] = percent
+            fields["completed"] = max(0.0, min(100.0, float(percent)))
         self.file_progress.update(self._file_task, **fields)
         self._refresh()
 
@@ -170,10 +191,12 @@ class Dashboard:
 
     def record(self, kind: str, ok: bool) -> None:
         """Records the outcome of a whole link."""
+        if kind not in _VALID_KINDS:
+            return
         with self._lock:
             attr = f"{kind}_{'ok' if ok else 'fail'}"
             setattr(self.stats, attr, getattr(self.stats, attr) + 1)
-            self._refresh()
+        self._refresh()
 
     # -- rendering ------------------------------------------------------------
     @staticmethod
@@ -189,10 +212,10 @@ class Dashboard:
         table = Table.grid(padding=(0, 2))
         table.add_column(justify="right", style="bold")
         table.add_column()
-        table.add_row("Source:", self.source_label)
-        table.add_row("Destination:", self.output_dir)
+        table.add_row("Source:", escape(self.source_label))
+        table.add_row("Destination:", escape(self.output_dir))
         if self.runlog is not None:
-            table.add_row("Failure log:", f"[dim]{self.runlog.path}[/dim]")
+            table.add_row("Failure log:", f"[dim]{escape(str(self.runlog.path))}[/dim]")
         table.add_row(
             "Spotify links:",
             f"[green]{s.spotify_ok} ok[/green] / [red]{s.spotify_fail} failed[/red]",
@@ -227,9 +250,24 @@ class Dashboard:
         total = max(total, done)
         self.tracks_progress.update(self._tracks_task, completed=done, total=max(total, 1))
 
+    def _log_panel_content(self) -> Text:
+        """Builds the Activity text.
+
+        Lines come straight from spotdl/yt-dlp and are full of square
+        brackets (`[download] ...`), which `rich` would otherwise try to
+        interpret as style markup and fail on. A `Text` object is rendered
+        literally, so any output is safe to show.
+        """
+        content = Text()
+        lines = list(self._log) or ["..."]
+        for i, line in enumerate(lines):
+            style = "red" if "[!]" in line else ""
+            content.append(line if i == len(lines) - 1 else line + "\n", style=style)
+        return content
+
     def _render(self) -> Group:
         self._sync_tracks_progress()
-        log_text = "\n".join(self._log) or "..."
+        log_text = self._log_panel_content()
         return Group(
             Panel(self._stats_table(), title="Music Loader", border_style="blue"),
             self.queue_progress,
@@ -244,5 +282,7 @@ class Dashboard:
         )
 
     def _refresh(self) -> None:
+        if not self._started:
+            return
         with self._lock:
             self._live.update(self._render())
