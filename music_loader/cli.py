@@ -47,20 +47,36 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def collect_links(source_args: list[str], console: Console) -> list[str]:
     if not source_args:
-        console.print("[bold]Enter a link, or a path to a links.txt file:[/bold]")
-        entry = input("> ").strip()
+        try:
+            console.print("[bold]Enter a link, or a path to a links.txt file:[/bold]")
+            entry = input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return []
         source_args = [entry] if entry else []
 
     links: list[str] = []
+    seen: set[str] = set()
     for entry in source_args:
-        path = Path(entry).expanduser()
-        if path.is_file():
-            with open(path, "r", encoding="utf-8-sig") as f:
-                links.extend(
-                    line.strip() for line in f if line.strip() and not line.startswith("#")
-                )
+        try:
+            path = Path(entry).expanduser()
+            is_file = path.is_file()
+        except OSError:
+            is_file = False
+        if is_file:
+            try:
+                with open(path, "r", encoding="utf-8-sig") as f:
+                    raw_lines = [line.strip() for line in f]
+            except OSError as exc:
+                console.print(f"[red]Could not read '{entry}': {exc}[/red]")
+                continue
+            candidates = [line for line in raw_lines if line and not line.startswith("#")]
         else:
-            links.append(entry)
+            candidates = [entry]
+
+        for link in candidates:
+            if link not in seen:
+                seen.add(link)
+                links.append(link)
     return links
 
 
@@ -68,7 +84,10 @@ def resolve_output(output_arg: str | None, console: Console) -> str:
     if output_arg:
         return output_arg
     console.print("[bold]Target Music folder:[/bold] (default: ./Music)")
-    entry = input("> ").strip()
+    try:
+        entry = input("> ").strip()
+    except (EOFError, KeyboardInterrupt):
+        entry = ""
     return entry or "./Music"
 
 
@@ -77,10 +96,11 @@ def process_links(links: list[str], config: AppConfig, dashboard: Dashboard) -> 
     dashboard.set_queue(0, total)
 
     for index, link in enumerate(links, start=1):
-        if "spotify.com" in link:
+        lowered = link.lower()
+        if "spotify.com" in lowered or lowered.startswith("spotify:"):
             ok = download_spotify(link, config.music_dir, dashboard)
             dashboard.record("spotify", ok)
-        elif "soundcloud.com" in link:
+        elif "soundcloud.com" in lowered or "snd.sc" in lowered:
             ok = download_soundcloud(
                 link,
                 config.soundcloud_dir,
@@ -99,7 +119,10 @@ def print_summary(console: Console, dashboard: Dashboard) -> None:
     stats = dashboard.stats
     total_ok = stats.spotify_ok + stats.soundcloud_ok
     total_fail = stats.spotify_fail + stats.soundcloud_fail
-    if total_ok + total_fail == 0:
+    failures = dashboard.runlog.count if dashboard.runlog is not None else 0
+    # A run where every link was unsupported produced no link stats at all and
+    # used to end without printing anything, hiding the errors.
+    if total_ok + total_fail == 0 and failures == 0:
         return
 
     console.print()
@@ -120,9 +143,9 @@ def print_summary(console: Console, dashboard: Dashboard) -> None:
         f"Lyrics:     [green]{stats.lyrics_ok} found[/green] / [yellow]{stats.lyrics_fail} missing[/yellow]"
     )
 
-    if dashboard.runlog is not None and dashboard.runlog.count:
+    if failures:
         console.print(
-            f"\n[yellow]{dashboard.runlog.count} failed operation(s) logged to:[/yellow] "
+            f"\n[yellow]{failures} failed operation(s) logged to:[/yellow] "
             f"{dashboard.runlog.path}"
         )
 
@@ -140,12 +163,21 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     output = resolve_output(args.output, console)
-    config = AppConfig.from_output_dir(Path(output))
-    config.soundcloud_postprocess_workers = max(1, args.soundcloud_workers)
-    config.lyrics_workers = max(1, args.lyrics_workers)
-    config.ensure_dirs()
+    try:
+        config = AppConfig.from_output_dir(Path(output))
+        config.soundcloud_postprocess_workers = max(1, args.soundcloud_workers)
+        config.lyrics_workers = max(1, args.lyrics_workers)
+        config.ensure_dirs()
+    except OSError as exc:
+        console.print(f"[red]Could not use '{output}' as the target folder: {exc}[/red]")
+        return 1
 
-    runlog = RunLog(config.music_dir / LOGS_DIRNAME)
+    try:
+        runlog = RunLog(config.music_dir / LOGS_DIRNAME)
+    except OSError as exc:
+        console.print(f"[yellow]Failure log is disabled ({exc})[/yellow]")
+        runlog = None
+
     dashboard = Dashboard(
         console,
         source_label=f"{len(links)} link(s)",
@@ -157,11 +189,13 @@ def main(argv: list[str] | None = None) -> int:
             process_links(links, config, dashboard)
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted by user.[/yellow]")
-        if runlog.count:
+        if runlog is not None and runlog.count:
             console.print(f"[yellow]{runlog.count} failed operation(s) logged to:[/yellow] {runlog.path}")
         return 130
 
     print_summary(console, dashboard)
+    if dashboard.stats.spotify_fail or dashboard.stats.soundcloud_fail:
+        return 2
     return 0
 
 
