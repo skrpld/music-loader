@@ -26,6 +26,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
              "If omitted, you will be prompted interactively.",
     )
     parser.add_argument(
+        "--soundcloud-workers",
+        type=int,
+        default=4,
+        help="Number of parallel SoundCloud post-processing workers (default: 4).",
+    )
+    parser.add_argument(
+        "--lyrics-workers",
+        type=int,
+        default=2,
+        help="Number of parallel lyrics workers (default: 2).",
+    )
+    parser.add_argument(
         "-o", "--output",
         default=None,
         help="Target Music folder. If omitted, you will be prompted interactively.",
@@ -69,7 +81,13 @@ def process_links(links: list[str], config: AppConfig, dashboard: Dashboard) -> 
             ok = download_spotify(link, config.music_dir, dashboard)
             dashboard.record("spotify", ok)
         elif "soundcloud.com" in link:
-            ok = download_soundcloud(link, config.soundcloud_dir, dashboard)
+            ok = download_soundcloud(
+                link,
+                config.soundcloud_dir,
+                dashboard,
+                postprocess_workers=config.soundcloud_postprocess_workers,
+                lyrics_workers=config.lyrics_workers,
+            )
             dashboard.record("soundcloud", ok)
         else:
             dashboard.log_error("Links", f"Unsupported link (not Spotify/SoundCloud): {link}")
@@ -123,6 +141,8 @@ def main(argv: list[str] | None = None) -> int:
 
     output = resolve_output(args.output, console)
     config = AppConfig.from_output_dir(Path(output))
+    config.soundcloud_postprocess_workers = max(1, args.soundcloud_workers)
+    config.lyrics_workers = max(1, args.lyrics_workers)
     config.ensure_dirs()
 
     runlog = RunLog(config.music_dir / LOGS_DIRNAME)

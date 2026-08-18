@@ -14,6 +14,7 @@ Two levels of counting are tracked on purpose:
 from collections import deque
 from dataclasses import dataclass
 from typing import Optional
+import threading
 
 from rich.console import Console, Group
 from rich.live import Live
@@ -64,6 +65,7 @@ class Dashboard:
         self.stats = Stats()
         self.runlog = runlog
         self._log: deque[str] = deque(maxlen=_LOG_LINES)
+        self._lock = threading.RLock()
 
         self.queue_progress = Progress(
             TextColumn("[bold cyan]Queue [/bold cyan]"),
@@ -126,22 +128,20 @@ class Dashboard:
         self._refresh()
 
     def add_tracks_total(self, kind: str, count: int) -> None:
-        """Adds `count` newly-discovered tracks to the running total for
-        `kind` ('spotify' or 'soundcloud'). Called as soon as a downloader
-        learns how many tracks a link actually contains."""
+        """Adds newly discovered tracks to the running total."""
         if count <= 0:
             return
-        attr = f"{kind}_tracks_total"
-        setattr(self.stats, attr, getattr(self.stats, attr) + count)
-        self._refresh()
+        with self._lock:
+            attr = f"{kind}_tracks_total"
+            setattr(self.stats, attr, getattr(self.stats, attr) + count)
+            self._refresh()
 
     def record_track(self, kind: str, status: str) -> None:
-        """Records the outcome of a single track. `status` is one of
-        'done' (freshly downloaded), 'skipped' (already existed), or
-        'failed'."""
-        attr = f"{kind}_tracks_{status}"
-        setattr(self.stats, attr, getattr(self.stats, attr) + 1)
-        self._refresh()
+        """Records the outcome of a single track."""
+        with self._lock:
+            attr = f"{kind}_tracks_{status}"
+            setattr(self.stats, attr, getattr(self.stats, attr) + 1)
+            self._refresh()
 
     def start_file(self, label: str) -> None:
         self.file_progress.reset(self._file_task)
@@ -169,11 +169,11 @@ class Dashboard:
         self._refresh()
 
     def record(self, kind: str, ok: bool) -> None:
-        """Records the outcome of a whole link (not an individual track).
-        See `record_track` for per-track outcomes."""
-        attr = f"{kind}_{'ok' if ok else 'fail'}"
-        setattr(self.stats, attr, getattr(self.stats, attr) + 1)
-        self._refresh()
+        """Records the outcome of a whole link."""
+        with self._lock:
+            attr = f"{kind}_{'ok' if ok else 'fail'}"
+            setattr(self.stats, attr, getattr(self.stats, attr) + 1)
+            self._refresh()
 
     # -- rendering ------------------------------------------------------------
     @staticmethod
@@ -244,4 +244,5 @@ class Dashboard:
         )
 
     def _refresh(self) -> None:
-        self._live.update(self._render())
+        with self._lock:
+            self._live.update(self._render())

@@ -25,6 +25,8 @@ SUBPROCESS_TIMEOUT_SECONDS = 6 * 60 * 60  # 6 hours
 class AppConfig:
     music_dir: Path
     soundcloud_dir: Path
+    soundcloud_postprocess_workers: int = 4
+    lyrics_workers: int = 2
 
     @classmethod
     def from_output_dir(cls, output_dir: Path) -> "AppConfig":

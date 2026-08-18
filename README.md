@@ -86,3 +86,9 @@ python3 -m music_loader links.txt -o ./Music
 best-effort — формат вывода spotdl может немного отличаться между версиями,
 поэтому если процент не удаётся распознать, бар показывает индикатор
 активности, а точные сообщения всё равно видно в панели "Activity".
+
+### SoundCloud pipeline and duplicate detection
+
+SoundCloud downloads use a producer/worker pipeline: yt-dlp downloads only the source audio, then a configurable pool performs MP3 conversion, metadata and thumbnail embedding. The default is 4 post-processing workers and 2 lyrics workers; configure them with `--soundcloud-workers N` and `--lyrics-workers N`. Lyrics are queued independently and do not block subsequent audio downloads.
+
+A hidden `.sc_index.json` in the SoundCloud directory maps the SoundCloud track ID to the actual local file. The downloader also performs a legacy compatibility scan using embedded artist/title/duration metadata, so files created before the index existed can be recognized without relying only on filenames or `--no-overwrites`. Recognized legacy files are promoted into the exact ID mapping and the existing `.sc_archive.txt` is updated only after a successful post-processing step. Track statistics are counted once per discovered track as `downloaded / already existed / failed`.
