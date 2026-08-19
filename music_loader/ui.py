@@ -173,7 +173,7 @@ class Dashboard:
         self._refresh()
 
     def update_file(self, percent: float | None = None, label: str | None = None,
-                     speed: str | None = None, eta: str | None = None) -> None:
+                    speed: str | None = None, eta: str | None = None) -> None:
         fields = {}
         if label is not None:
             fields["label"] = label
@@ -217,7 +217,7 @@ class Dashboard:
         table.add_row(
             "Spotify tracks:",
             self._track_line(s.spotify_tracks_done, s.spotify_tracks_skipped,
-                              s.spotify_tracks_failed, s.spotify_tracks_total),
+                             s.spotify_tracks_failed, s.spotify_tracks_total),
         )
         table.add_row(
             "SoundCloud links:",
@@ -226,7 +226,7 @@ class Dashboard:
         table.add_row(
             "SoundCloud tracks:",
             self._track_line(s.soundcloud_tracks_done, s.soundcloud_tracks_skipped,
-                              s.soundcloud_tracks_failed, s.soundcloud_tracks_total),
+                             s.soundcloud_tracks_failed, s.soundcloud_tracks_total),
         )
         table.add_row(
             "Lyrics:",
@@ -239,7 +239,8 @@ class Dashboard:
         total = s.spotify_tracks_total + s.soundcloud_tracks_total
         done = (
             s.spotify_tracks_done + s.spotify_tracks_skipped + s.spotify_tracks_failed
-            + s.soundcloud_tracks_done + s.soundcloud_tracks_skipped + s.soundcloud_tracks_failed
+            + s.soundcloud_tracks_done + s.soundcloud_tracks_skipped
+            + s.soundcloud_tracks_failed
         )
         total = max(total, done)
         self.tracks_progress.update(self._tracks_task, completed=done, total=max(total, 1))
@@ -255,11 +256,14 @@ class Dashboard:
             Panel(
                 log_text,
                 title="Activity",
-                subtitle="[dim]recent events, newest at bottom - failures are also saved to the log file above[/dim]",
+                subtitle="[dim]recent events, newest at bottom - failures are also saved "
+                         "to the log file above[/dim]",
                 border_style="grey50",
             ),
         )
 
     def _refresh(self) -> None:
+        if not self._started:
+            return
         with self._lock:
             self._live.update(self._render())

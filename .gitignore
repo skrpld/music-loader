@@ -5,6 +5,11 @@
 __pycache__/
 *.py[cod]
 
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
 # Environment variables / secrets
 .env
 .env.*
@@ -28,4 +33,3 @@ SoundCloud_New.m3u8
 .sc_index.json
 .sc_downloads/
 .music-loader-logs/
-music_loader.egg-info/

@@ -13,6 +13,7 @@ into a visible "still working" status instead of letting it look frozen.
 import re
 from pathlib import Path
 
+from .config import SUBPROCESS_TIMEOUT_SECONDS
 from .process import run_streamed
 
 _FOUND_RE = re.compile(r"Found (\d+) songs? in", re.IGNORECASE)
@@ -62,7 +63,7 @@ def download_spotify(url: str, music_dir: Path, dashboard) -> bool:
 
         percent_match = _PERCENT_RE.search(line)
         if percent_match:
-            dashboard.update_file(percent=int(percent_match.group(1)))
+            dashboard.update_file(percent=min(100, int(percent_match.group(1))))
 
         if _DOWNLOADED_RE.match(line):
             done_tracks += 1
@@ -90,7 +91,7 @@ def download_spotify(url: str, music_dir: Path, dashboard) -> bool:
             dashboard.log(f"[Spotify] Still working, no output for {int(idle_seconds)}s...")
             last_heartbeat = idle_seconds
 
-    returncode = run_streamed(cmd, on_line, on_idle=on_idle)
+    returncode = run_streamed(cmd, on_line, on_idle=on_idle, timeout=SUBPROCESS_TIMEOUT_SECONDS)
     dashboard.finish_file()
 
     if returncode == -1:

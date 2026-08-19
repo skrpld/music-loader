@@ -45,6 +45,8 @@ def run_captured(cmd: list[str], timeout: int = _DEFAULT_TIMEOUT) -> tuple[int, 
         if isinstance(stderr, bytes):
             stderr = stderr.decode("utf-8", "replace")
         return -1, stdout, stderr or f"command timed out after {timeout}s"
+    except OSError as exc:
+        return -1, "", str(exc)
 
 
 def run_streamed(

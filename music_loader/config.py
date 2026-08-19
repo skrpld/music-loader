@@ -3,10 +3,19 @@ from dataclasses import dataclass
 from pathlib import Path
 
 AUDIO_EXTENSIONS = {".mp3", ".flac", ".m4a", ".ogg", ".opus", ".webm"}
+# Source formats yt-dlp may hand over before conversion to MP3.
+RAW_EXTENSIONS = AUDIO_EXTENSIONS | {".wav", ".aac", ".mp4", ".m4b"}
+
 SOUNDCLOUD_SUBDIR = "SoundCloud"
 ARCHIVE_FILENAME = ".sc_archive.txt"
 PLAYLIST_FILENAME = "SoundCloud_New.m3u8"
+INDEX_FILENAME = ".sc_index.json"
+STAGING_DIRNAME = ".sc_downloads"
 LYRICS_PROVIDERS = ["Musixmatch", "NetEase", "Lrclib", "Genius"]
+
+# Leftovers of an interrupted run older than this are deleted at the start of
+# the next run.
+STALE_STAGING_SECONDS = 24 * 60 * 60
 
 # Where per-run failure logs are written (see runlog.py). Kept as a hidden
 # subfolder of the music library so it doesn't clutter the main view but is
@@ -18,7 +27,7 @@ LOGS_DIRNAME = ".music-loader-logs"
 # because a single link can be an entire artist discography (hundreds of
 # tracks), which spotdl can take a long time to resolve before printing
 # anything.
-SUBPROCESS_TIMEOUT_SECONDS = 6 * 60 * 60  # 6 hours
+SUBPROCESS_TIMEOUT_SECONDS = 6 * 60 * 60
 
 
 @dataclass

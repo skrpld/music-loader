@@ -1,5 +1,11 @@
 """SoundCloud downloads with a decoupled download/post-processing pipeline.
 
+Track discovery uses a *flat* playlist listing (ids and urls only), so a large
+playlist or a whole user profile resolves in seconds instead of minutes.  The
+full metadata needed for tagging (title, uploader, thumbnail, description) is
+printed by yt-dlp while the track is being downloaded, so nothing is resolved
+twice.
+
 The producer only downloads the source audio.  Finished downloads are put into
 an internal queue and a small worker pool performs the expensive ffmpeg /
 thumbnail / metadata work.  Lyrics use a separate, independently limited pool
@@ -15,6 +21,7 @@ import json
 import re
 import subprocess
 import threading
+import time
 import urllib.request
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
@@ -31,7 +38,15 @@ try:
 except ImportError:  # pragma: no cover - dependency is declared in pyproject
     sanitize_filename = None
 
-from .config import ARCHIVE_FILENAME, AUDIO_EXTENSIONS, SUBPROCESS_TIMEOUT_SECONDS
+from .config import (
+    ARCHIVE_FILENAME,
+    AUDIO_EXTENSIONS,
+    INDEX_FILENAME,
+    RAW_EXTENSIONS,
+    STAGING_DIRNAME,
+    STALE_STAGING_SECONDS,
+    SUBPROCESS_TIMEOUT_SECONDS,
+)
 from .lyrics import fetch_lyrics
 from .playlist import update_soundcloud_playlist
 from .process import run_captured, run_streamed
@@ -42,24 +57,25 @@ _PROGRESS_RE = re.compile(
     r"\[download\]\s+(\d{1,3}(?:\.\d)?)%\s+of\s+~?\s*[\d.]+\w+\s+at\s+"
     r"([\d.]+\w+/s|Unknown speed)\s+ETA\s+(\S+)"
 )
-_DEST_RE = re.compile(r"\[download\] Destination:\s+(.+)$")
 _ERROR_RE = re.compile(r"^ERROR:", re.IGNORECASE)
-_HEARTBEAT_INTERVAL = 30.0
-_INDEX_FILENAME = ".sc_index.json"
-_STAGING_DIRNAME = ".sc_downloads"
 _DEFAULT_LYRICS_WORKERS = 2
-_RAW_EXTENSIONS = AUDIO_EXTENSIONS | {".m4a", ".wav", ".webm", ".opus", ".ogg", ".aac"}
 
 
 class _SoundCloudIndex:
-    """Persistent id -> local-file mapping plus a legacy metadata index."""
+    """Persistent id -> local-file mapping plus a legacy metadata index.
+
+    The legacy metadata scan reads tags from every audio file in the library,
+    which is expensive.  It is therefore performed lazily: only when an id
+    lookup misses, and only once per run (the instance is reused across all
+    links of a run, see `get_index`).
+    """
 
     def __init__(self, soundcloud_dir: Path):
-        self.path = soundcloud_dir / _INDEX_FILENAME
+        self.dir = soundcloud_dir
+        self.path = soundcloud_dir / INDEX_FILENAME
         self._lock = threading.RLock()
         self._data: dict[str, dict[str, Any]] = self._load()
-        self._legacy: list[tuple[Path, str, str, float | None]] = []
-        self._scan_legacy_files(soundcloud_dir)
+        self._legacy: list[tuple[Path, str, str, float | None]] | None = None
 
     def _load(self) -> dict[str, dict[str, Any]]:
         try:
@@ -72,14 +88,32 @@ class _SoundCloudIndex:
     def _norm(value: Any) -> str:
         return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
 
-    def _scan_legacy_files(self, soundcloud_dir: Path) -> None:
+    def _ensure_legacy_locked(self) -> None:
+        if self._legacy is not None:
+            return
+        self._legacy = []
         if mutagen_file is None:
             return
-        known = {entry.get("path", "") for entry in self._data.values()}
-        for path in soundcloud_dir.rglob("*"):
-            if not path.is_file() or path.suffix.lower() not in AUDIO_EXTENSIONS:
+        known = {entry.get("path") for entry in self._data.values()}
+        try:
+            candidates = list(self.dir.rglob("*"))
+        except OSError:
+            return
+        for path in candidates:
+            try:
+                relative_parts = path.relative_to(self.dir).parts
+            except ValueError:
                 continue
-            if _STAGING_DIRNAME in path.parts or str(path) in known:
+            # Skip hidden folders such as the staging directory: they hold
+            # partial downloads, not library files.
+            if any(part.startswith(".") for part in relative_parts):
+                continue
+            try:
+                if not path.is_file() or path.suffix.lower() not in AUDIO_EXTENSIONS:
+                    continue
+            except OSError:
+                continue
+            if str(path) in known:
                 continue
             try:
                 audio = mutagen_file(path, easy=True)
@@ -96,26 +130,35 @@ class _SoundCloudIndex:
 
     def find(self, info: dict[str, Any]) -> Path | None:
         track_id = str(info.get("id") or "")
-        title = self._norm(info.get("track", info.get("title", "")))
+        title = self._norm(info.get("track") or info.get("title"))
         artist = self._norm(info.get("uploader") or info.get("artist") or info.get("creator"))
         duration = info.get("duration")
         with self._lock:
-            entry = self._data.get(track_id)
+            entry = self._data.get(track_id) if track_id else None
             if entry:
                 candidate = Path(entry.get("path", ""))
                 if candidate.exists():
                     return candidate
                 self._data.pop(track_id, None)
 
-            # New files are embedded with the SoundCloud URL.  The persistent
+            # A flat listing has neither a reliable title nor an uploader, so
+            # metadata matching would compare empty strings against each other.
+            if not title or not artist:
+                return None
+
+            # New files carry the SoundCloud URL in their tags.  The persistent
             # index above is the primary mapping; metadata matching is only a
             # compatibility path for files created by older versions.
-            for candidate, old_title, old_artist, old_duration in self._legacy:
+            self._ensure_legacy_locked()
+            for candidate, old_title, old_artist, old_duration in self._legacy or []:
                 if old_title != title or old_artist != artist:
                     continue
                 if duration is not None and old_duration is not None:
-                    if abs(float(duration) - float(old_duration)) > 2.0:
-                        continue
+                    try:
+                        if abs(float(duration) - float(old_duration)) > 2.0:
+                            continue
+                    except (TypeError, ValueError):
+                        pass
                 if not candidate.exists():
                     continue
                 return candidate
@@ -134,11 +177,17 @@ class _SoundCloudIndex:
                 "webpage_url": info.get("webpage_url"),
             }
             self._save_locked()
+            if self._legacy is None:
+                return
+            try:
+                duration = float(info["duration"]) if info.get("duration") is not None else None
+            except (TypeError, ValueError):
+                duration = None
             fingerprint = (
                 path,
                 self._norm(info.get("title")),
                 self._norm(info.get("uploader") or info.get("artist") or info.get("creator")),
-                float(info["duration"]) if info.get("duration") is not None else None,
+                duration,
             )
             self._legacy = [item for item in self._legacy if item[0] != path]
             self._legacy.append(fingerprint)
@@ -163,12 +212,14 @@ _INDEX_CACHE: dict[Path, _SoundCloudIndex] = {}
 _INDEX_CACHE_LOCK = threading.Lock()
 
 
-def _get_index(soundcloud_dir: Path) -> _SoundCloudIndex:
+def get_index(soundcloud_dir: Path) -> _SoundCloudIndex:
+    """Returns one shared index per directory, so the expensive library scan
+    happens at most once even when many links are processed in a row."""
     key = soundcloud_dir.resolve()
     with _INDEX_CACHE_LOCK:
         index = _INDEX_CACHE.get(key)
         if index is None:
-            index = _SoundCloudIndex(soundcloud_dir)
+            index = _SoundCloudIndex(key)
             _INDEX_CACHE[key] = index
         return index
 
@@ -181,9 +232,7 @@ class _SoundCloudArchive:
         self._lock = threading.Lock()
         try:
             self._lines = set(path.read_text(encoding="utf-8").splitlines())
-        except FileNotFoundError:
-            self._lines = set()
-        except OSError:
+        except (FileNotFoundError, OSError):
             self._lines = set()
 
     def add(self, track_id: str) -> None:
@@ -240,6 +289,27 @@ def _remove_quietly(path: Path | None) -> None:
         pass
 
 
+def _cleanup_stale_staging(staging_dir: Path) -> None:
+    """Removes leftovers from runs that were interrupted long ago."""
+    cutoff = time.time() - STALE_STAGING_SECONDS
+    try:
+        entries = list(staging_dir.iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        try:
+            if entry.is_file():
+                if entry.stat().st_mtime < cutoff:
+                    entry.unlink(missing_ok=True)
+            elif entry.is_dir():
+                for child in entry.iterdir():
+                    if child.is_file() and child.stat().st_mtime < cutoff:
+                        child.unlink(missing_ok=True)
+                entry.rmdir()
+        except OSError:
+            continue
+
+
 def _download_thumbnail(info: dict[str, Any], work_dir: Path) -> Path | None:
     url = info.get("thumbnail")
     if not url:
@@ -250,7 +320,8 @@ def _download_thumbnail(info: dict[str, Any], work_dir: Path) -> Path | None:
         with urllib.request.urlopen(str(url), timeout=30) as response, raw.open("wb") as out:
             out.write(response.read())
         convert = subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error", "-i", str(raw), "-frames:v", "1", "-q:v", "2", str(jpg)],
+            ["ffmpeg", "-y", "-loglevel", "error", "-i", str(raw),
+             "-frames:v", "1", "-q:v", "2", str(jpg)],
             capture_output=True,
             text=True,
             timeout=120,
@@ -269,16 +340,19 @@ def _postprocess_track(
     index: _SoundCloudIndex,
     archive: _SoundCloudArchive,
     dashboard,
-) -> tuple[bool, Path | None]:
+) -> tuple[bool, Path | None, bool]:
+    """Returns ``(ok, final_path, already_existed)``."""
     existing = index.find(info)
     if existing is not None:
-        # Already in the library: drop the freshly downloaded source file
-        # instead of leaving it behind in the staging folder.
+        # Recognized only after the download (e.g. a legacy file matched by
+        # full metadata). Register it and drop the redundant source file.
+        index.add(info, existing)
+        archive.add(str(info.get("id") or ""))
         _remove_quietly(raw_path)
-        return True, existing
+        return True, existing, True
 
     output_path = _allocate_output(soundcloud_dir, info)
-    work_dir = soundcloud_dir / _STAGING_DIRNAME / str(info["id"])
+    work_dir = soundcloud_dir / STAGING_DIRNAME / str(info["id"])
     work_dir.mkdir(parents=True, exist_ok=True)
     cover = _download_thumbnail(info, work_dir)
     tmp_output = output_path.with_suffix(".mp3.part")
@@ -297,7 +371,8 @@ def _postprocess_track(
         "-i", str(raw_path),
     ]
     if cover is not None:
-        cmd += ["-i", str(cover), "-map", "0:a:0", "-map", "1:v:0", "-c:v", "mjpeg", "-disposition:v:0", "attached_pic"]
+        cmd += ["-i", str(cover), "-map", "0:a:0", "-map", "1:v:0",
+                "-c:v", "mjpeg", "-disposition:v:0", "attached_pic"]
     else:
         cmd += ["-map", "0:a:0"]
     cmd += [
@@ -321,14 +396,16 @@ def _postprocess_track(
         )
         if result.returncode != 0 or not tmp_output.exists():
             message = (result.stderr or result.stdout or "ffmpeg failed").strip()
-            dashboard.log_error("SoundCloud", f"Post-processing failed for '{title}': {message[:500]}")
+            dashboard.log_error(
+                "SoundCloud", f"Post-processing failed for '{title}': {message[:500]}"
+            )
             _remove_quietly(tmp_output)
-            return False, None
+            return False, None, False
         tmp_output.replace(output_path)
     except (OSError, subprocess.SubprocessError) as exc:
         dashboard.log_error("SoundCloud", f"Post-processing failed for '{title}': {exc}")
         _remove_quietly(tmp_output)
-        return False, None
+        return False, None, False
     finally:
         _remove_quietly(raw_path)
         try:
@@ -340,26 +417,10 @@ def _postprocess_track(
 
     index.add(info, output_path)
     archive.add(str(info.get("id") or ""))
-    return True, output_path
+    return True, output_path, False
 
 
-def _discover_tracks(url: str) -> list[dict[str, Any]]:
-    # Full metadata (without download) gives worker threads the same identity,
-    # title/artist and thumbnail information that the old yt-dlp postprocessors
-    # used, while keeping the actual audio download free of post-processing.
-    code, stdout, stderr = run_captured(
-        [
-            "yt-dlp", "--dump-single-json", "--skip-download", "--no-warnings", url,
-        ],
-        timeout=SUBPROCESS_TIMEOUT_SECONDS,
-    )
-    if code != 0:
-        raise RuntimeError((stderr or stdout or f"yt-dlp exited with code {code}").strip())
-    try:
-        data = json.loads(stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Could not parse yt-dlp metadata: {exc}") from exc
-
+def _parse_entries(data: Any) -> list[dict[str, Any]]:
     entries = data.get("entries") if isinstance(data, dict) else None
     if entries is None:
         entries = [data]
@@ -368,22 +429,97 @@ def _discover_tracks(url: str) -> list[dict[str, Any]]:
     for item in entries:
         if not isinstance(item, dict):
             continue
+        # Nested collections (e.g. a user profile with several playlists).
+        if item.get("entries"):
+            for nested in _parse_entries(item):
+                if nested["id"] not in seen:
+                    seen.add(nested["id"])
+                    tracks.append(nested)
+            continue
         track_id = str(item.get("id") or "")
         track_url = item.get("webpage_url") or item.get("url")
         if not track_id or not track_url or track_id in seen:
             continue
         item = dict(item)
+        item["id"] = track_id
         item["webpage_url"] = track_url
         seen.add(track_id)
         tracks.append(item)
     return tracks
 
 
+def _discover_tracks(url: str, dashboard) -> list[dict[str, Any]]:
+    """Lists the tracks of a link without resolving each one of them.
+
+    `--flat-playlist` keeps this to a single cheap request even for large
+    playlists; the per-track metadata that post-processing needs is collected
+    later, while the track is being downloaded.
+    """
+    json_lines: list[str] = []
+    other_lines: list[str] = []
+    started = time.monotonic()
+
+    def on_line(line: str) -> None:
+        if line.startswith("{"):
+            json_lines.append(line)
+        else:
+            other_lines.append(line)
+
+    def on_idle(_idle_seconds: float) -> None:
+        elapsed = int(time.monotonic() - started)
+        dashboard.update_file(label=f"SoundCloud: resolving tracks... ({elapsed}s)")
+
+    code = run_streamed(
+        ["yt-dlp", "--flat-playlist", "--dump-single-json", "--no-warnings", url],
+        on_line,
+        on_idle=on_idle,
+        timeout=SUBPROCESS_TIMEOUT_SECONDS,
+    )
+    if code != 0 or not json_lines:
+        detail = "\n".join(other_lines[-5:]) or f"yt-dlp exited with code {code}"
+        raise RuntimeError(detail.strip())
+
+    try:
+        data = json.loads(json_lines[-1])
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Could not parse yt-dlp metadata: {exc}") from exc
+
+    return _parse_entries(data)
+
+
+def _merge_info(base: dict[str, Any], full: dict[str, Any] | None) -> dict[str, Any]:
+    if not full:
+        return base
+    merged = dict(base)
+    for key, value in full.items():
+        if value is not None:
+            merged[key] = value
+    if not merged.get("webpage_url"):
+        merged["webpage_url"] = base.get("webpage_url")
+    merged["id"] = str(merged.get("id") or base.get("id") or "")
+    return merged
+
+
+def _fetch_full_info(url: str) -> dict[str, Any] | None:
+    """Fallback used only when the download did not print metadata."""
+    code, stdout, _stderr = run_captured(
+        ["yt-dlp", "--no-playlist", "--dump-single-json", "--skip-download", "--no-warnings", url],
+        timeout=300,
+    )
+    if code != 0:
+        return None
+    try:
+        data = json.loads(stdout)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def _download_one(
     info: dict[str, Any],
     staging_dir: Path,
     dashboard,
-) -> tuple[bool, Path | None]:
+) -> tuple[bool, Path | None, dict[str, Any]]:
     track_id = str(info["id"])
     title = _clean_metadata(info.get("title"), track_id)
     output_template = str(staging_dir / f"{track_id}.%(ext)s")
@@ -391,6 +527,9 @@ def _download_one(
         "yt-dlp",
         "--no-playlist",
         "--newline",
+        "--progress",
+        "--no-simulate",
+        "--dump-json",
         "-f", "bestaudio/best",
         "--no-part",
         "-o", output_template,
@@ -399,9 +538,18 @@ def _download_one(
 
     dashboard.update_file(label=f"SoundCloud: {title[:60]}", percent=0, speed="", eta="")
     had_error = False
+    full_info: dict[str, Any] | None = None
 
     def on_line(line: str) -> None:
-        nonlocal had_error
+        nonlocal had_error, full_info
+        if full_info is None and line.startswith("{"):
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict) and parsed.get("id"):
+                full_info = parsed
+                return
         match = _PROGRESS_RE.search(line)
         if match:
             percent, speed, eta = match.groups()
@@ -421,12 +569,18 @@ def _download_one(
         # behind for the next run to trip over.
         for path in candidates:
             _remove_quietly(path)
-        return False, None
+        return False, None, _merge_info(info, full_info)
+
+    if full_info is None:
+        # Rare: the metadata line was not printed. One extra cheap request
+        # keeps the tags correct instead of writing "Unknown Artist".
+        full_info = _fetch_full_info(str(info["webpage_url"]))
+    merged = _merge_info(info, full_info)
 
     for path in candidates:
-        if path.suffix.lower() in _RAW_EXTENSIONS:
-            return True, path
-    return False, None
+        if path.suffix.lower() in RAW_EXTENSIONS:
+            return True, path, merged
+    return False, None, merged
 
 
 def _drain_queue(queue: "Queue[tuple[dict[str, Any], Path] | None]") -> None:
@@ -455,21 +609,22 @@ def download_soundcloud(
     dashboard.start_file(label="SoundCloud: resolving tracks...")
 
     soundcloud_dir.mkdir(parents=True, exist_ok=True)
-    staging_dir = soundcloud_dir / _STAGING_DIRNAME
+    staging_dir = soundcloud_dir / STAGING_DIRNAME
     staging_dir.mkdir(exist_ok=True)
+    _cleanup_stale_staging(staging_dir)
     archive = _SoundCloudArchive(soundcloud_dir / ARCHIVE_FILENAME)
-    index = _get_index(soundcloud_dir)
+    index = get_index(soundcloud_dir)
 
     try:
-        tracks = _discover_tracks(url)
+        tracks = _discover_tracks(url, dashboard)
     except Exception as exc:
         dashboard.log_error("SoundCloud", f"Could not resolve '{url}': {exc}")
         dashboard.finish_file()
         return False
 
     dashboard.add_tracks_total("soundcloud", len(tracks))
+    dashboard.log(f"[SoundCloud] Found {len(tracks)} track(s)")
     if not tracks:
-        dashboard.log("[SoundCloud] No tracks found")
         dashboard.finish_file()
         update_soundcloud_playlist(soundcloud_dir, dashboard)
         return True
@@ -501,7 +656,7 @@ def download_soundcloud(
                 info, raw_path = job
                 title = _clean_metadata(info.get("title"), str(info.get("id")))
                 try:
-                    ok, final_path = _postprocess_track(
+                    ok, final_path, already_existed = _postprocess_track(
                         info, raw_path, soundcloud_dir, index, archive, dashboard
                     )
                     if not ok or final_path is None:
@@ -510,19 +665,32 @@ def download_soundcloud(
                         dashboard.record_track("soundcloud", "failed")
                         continue
 
-                    dashboard.record_track("soundcloud", "done")
-                    dashboard.log(f"[SoundCloud] Ready: {title}")
+                    if already_existed:
+                        dashboard.record_track("soundcloud", "skipped")
+                        dashboard.log(f"[SoundCloud] Already exists: {final_path.name}")
+                    else:
+                        dashboard.record_track("soundcloud", "done")
+                        dashboard.log(f"[SoundCloud] Ready: {title}")
                     with state_lock:
                         lyrics_futures.append(lyrics_pool.submit(_lyrics_task, final_path))
                 except Exception as exc:
                     with state_lock:
                         had_failure = True
                     dashboard.record_track("soundcloud", "failed")
-                    dashboard.log_error(
-                        "SoundCloud", f"Worker failed for '{title}': {exc}"
-                    )
+                    dashboard.log_error("SoundCloud", f"Worker failed for '{title}': {exc}")
             finally:
                 queue.task_done()
+
+    def put_job(job: tuple[dict[str, Any], Path]) -> bool:
+        """Hands a job to the workers, but never blocks forever if every
+        worker thread has died."""
+        while True:
+            try:
+                queue.put(job, timeout=5)
+                return True
+            except Full:
+                if all(future.done() for future in futures):
+                    return False
 
     # One executor for conversion/metadata/thumbnail and a separate limited
     # executor for lyrics.  Lyrics futures are submitted as soon as a track is
@@ -537,7 +705,7 @@ def download_soundcloud(
                 existing = index.find(info)
                 if existing is not None:
                     # Promote a legacy metadata match into the exact persistent
-                    # id -> file mapping so future runs no longer need the fallback.
+                    # id -> file mapping so future runs skip the fallback.
                     index.add(info, existing)
                     archive.add(str(info.get("id") or ""))
                     dashboard.record_track("soundcloud", "skipped")
@@ -547,11 +715,12 @@ def download_soundcloud(
                     continue
 
                 try:
-                    ok, raw_path = _download_one(info, staging_dir, dashboard)
+                    ok, raw_path, info = _download_one(info, staging_dir, dashboard)
                 except Exception as exc:
                     ok, raw_path = False, None
                     dashboard.log_error(
-                        "SoundCloud", f"Download failed for '{info.get('title', info.get('id'))}': {exc}"
+                        "SoundCloud",
+                        f"Download failed for '{info.get('title', info.get('id'))}': {exc}",
                     )
                 if not ok or raw_path is None:
                     with state_lock:
@@ -561,7 +730,12 @@ def download_soundcloud(
 
                 # The producer never waits for ffmpeg/metadata/thumbnail. It
                 # only blocks when the bounded queue is full.
-                queue.put((info, raw_path))
+                if not put_job((info, raw_path)):
+                    _remove_quietly(raw_path)
+                    with state_lock:
+                        had_failure = True
+                    dashboard.log_error("SoundCloud", "All post-processing workers stopped")
+                    break
 
             queue.join()
         except BaseException:
@@ -588,17 +762,23 @@ def download_soundcloud(
                     had_failure = True
                     dashboard.log_error("SoundCloud", f"Worker crashed: {exc}")
 
-            with state_lock:
-                pending_lyrics = list(lyrics_futures)
-            for future in pending_lyrics:
-                if aborted:
-                    future.cancel()
-                    continue
-                try:
-                    future.result()
-                except Exception as exc:
-                    had_failure = True
-                    dashboard.log_error("Lyrics", f"Lyrics worker failed: {exc}")
+            # Workers may still have queued new lyrics jobs while the previous
+            # batch was being awaited, so drain until nothing is left.
+            while True:
+                with state_lock:
+                    pending = list(lyrics_futures)
+                    lyrics_futures.clear()
+                if not pending:
+                    break
+                for future in pending:
+                    if aborted:
+                        future.cancel()
+                        continue
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        had_failure = True
+                        dashboard.log_error("Lyrics", f"Lyrics worker failed: {exc}")
 
             dashboard.finish_file()
 

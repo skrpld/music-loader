@@ -87,16 +87,27 @@ def resolve_output(output_arg: str | None, console: Console) -> str:
     return entry or "./Music"
 
 
+def link_kind(link: str) -> str | None:
+    """Returns 'spotify', 'soundcloud', or None for unsupported links."""
+    lowered = link.lower()
+    if "spotify.com" in lowered or lowered.startswith("spotify:"):
+        return "spotify"
+    if "soundcloud.com" in lowered or "snd.sc" in lowered:
+        return "soundcloud"
+    return None
+
+
 def process_links(links: list[str], config: AppConfig, dashboard: Dashboard) -> None:
     total = len(links)
     dashboard.set_queue(0, total)
 
     for index, link in enumerate(links, start=1):
+        kind = link_kind(link)
         try:
-            if "spotify.com" in link:
+            if kind == "spotify":
                 ok = download_spotify(link, config.music_dir, dashboard)
                 dashboard.record("spotify", ok)
-            elif "soundcloud.com" in link:
+            elif kind == "soundcloud":
                 ok = download_soundcloud(
                     link,
                     config.soundcloud_dir,
@@ -111,8 +122,8 @@ def process_links(links: list[str], config: AppConfig, dashboard: Dashboard) -> 
             raise
         except Exception as exc:
             # One broken link must not abort the whole batch.
-            kind = "spotify" if "spotify.com" in link else "soundcloud"
-            dashboard.record(kind, False)
+            if kind is not None:
+                dashboard.record(kind, False)
             dashboard.log_error("Links", f"Unexpected error while processing '{link}': {exc}")
 
         dashboard.set_queue(index, total)
@@ -128,19 +139,22 @@ def print_summary(console: Console, dashboard: Dashboard) -> None:
     console.print()
     console.rule("Summary")
     console.print(
-        f"Spotify:    [green]{stats.spotify_ok} link(s) ok[/green] / [red]{stats.spotify_fail} failed[/red]"
+        f"Spotify:    [green]{stats.spotify_ok} link(s) ok[/green] / "
+        f"[red]{stats.spotify_fail} failed[/red]"
         f"  -  tracks: [green]{stats.spotify_tracks_done} downloaded[/green], "
         f"[cyan]{stats.spotify_tracks_skipped} already had[/cyan], "
         f"[red]{stats.spotify_tracks_failed} failed[/red]"
     )
     console.print(
-        f"SoundCloud: [green]{stats.soundcloud_ok} link(s) ok[/green] / [red]{stats.soundcloud_fail} failed[/red]"
+        f"SoundCloud: [green]{stats.soundcloud_ok} link(s) ok[/green] / "
+        f"[red]{stats.soundcloud_fail} failed[/red]"
         f"  -  tracks: [green]{stats.soundcloud_tracks_done} downloaded[/green], "
         f"[cyan]{stats.soundcloud_tracks_skipped} already had[/cyan], "
         f"[red]{stats.soundcloud_tracks_failed} failed[/red]"
     )
     console.print(
-        f"Lyrics:     [green]{stats.lyrics_ok} found[/green] / [yellow]{stats.lyrics_fail} missing[/yellow]"
+        f"Lyrics:     [green]{stats.lyrics_ok} found[/green] / "
+        f"[yellow]{stats.lyrics_fail} missing[/yellow]"
     )
 
     if dashboard.runlog is not None and dashboard.runlog.count:
@@ -199,7 +213,9 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted by user.[/yellow]")
         if runlog is not None and runlog.count:
-            console.print(f"[yellow]{runlog.count} failed operation(s) logged to:[/yellow] {runlog.path}")
+            console.print(
+                f"[yellow]{runlog.count} failed operation(s) logged to:[/yellow] {runlog.path}"
+            )
         return 130
 
     print_summary(console, dashboard)
