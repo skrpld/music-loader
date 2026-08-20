@@ -99,13 +99,25 @@ audio, then a configurable pool performs MP3 conversion, metadata and thumbnail
 embedding. Lyrics are queued independently and never block subsequent audio
 downloads.
 
+Conversion writes to a temporary `.part` file and the target container is
+passed to ffmpeg explicitly (`-f mp3`), because ffmpeg cannot infer a format
+from the `.part` extension. Output names are reserved in memory while a worker
+converts, so two tracks with the same title cannot overwrite each other.
+
 A hidden `.sc_index.json` in the SoundCloud directory maps the SoundCloud track
 ID to the actual local file. A legacy compatibility scan of embedded
 artist/title/duration metadata recognizes files created before the index
 existed; that scan is expensive, so it runs lazily — only when an ID lookup
-misses — and at most once per run, shared across all links. Recognized legacy
-files are promoted into the exact ID mapping, and `.sc_archive.txt` is updated
-only after a successful post-processing step.
+misses — at most once per run, shared across all links, and outside the index
+lock so post-processing workers are not blocked behind it. Index writes are
+coalesced (at most one full rewrite every few seconds, plus a final flush)
+instead of rewriting the whole file after every track. Recognized legacy files
+are promoted into the exact ID mapping, and `.sc_archive.txt` is updated only
+after a successful post-processing step.
+
+A download counts as failed based on yt-dlp's exit code and the resulting file,
+not on the presence of `ERROR:` lines — yt-dlp routinely prints errors it then
+recovers from (a format that returns 403, a retried fragment).
 
 Interrupted runs can leave partial files in the hidden `.sc_downloads` staging
 folder; leftovers older than 24 hours are removed automatically at the start of
@@ -113,17 +125,26 @@ the next run.
 
 ## Lyrics search
 
-The lyrics search query is built from the track's real artist and title tags
-(read back from the downloaded file, or from platform metadata as a fallback)
-rather than from the filename, so a short/common title is disambiguated by
-its artist instead of matching an unrelated song.
+SoundCloud naming is inconsistent: the uploader is often a label or a repost
+channel rather than the artist, and the real artist is part of the title
+("Artist - Song (Official Video) [Free DL] feat. Someone"). A single query
+built from uploader + raw title therefore misses very often.
 
-If a lyrics search finds nothing for a track, that result is remembered in a
-hidden `.sc_lyrics_attempts.json` in the SoundCloud directory. The same track
-is not searched again until 7 days have passed, so already-downloaded tracks
-with no available lyrics don't cost search time on every run. Once lyrics are
-found and saved as a `.lrc` file, that file's presence alone is enough to skip
-the track in future runs.
+Instead the title is split into parts — artist part, song name, `feat.` /
+`prod.` tails, promotional brackets — and several progressively looser queries
+are tried in order, stopping at the first provider hit:
+
+1. artist from the title + song name
+2. artist from the title + song name without the `feat.` tail
+3. uploader + song name
+4. song name alone
+
+Tags read back from the downloaded file are preferred over platform metadata as
+the input for that split. If every variant finds nothing, the result is
+remembered in a hidden `.sc_lyrics_attempts.json` in the SoundCloud directory
+and the same track is not searched again for 7 days. Once lyrics are found and
+saved as a `.lrc` file, that file's presence alone is enough to skip the track
+in future runs.
 
 ## Note on progress parsing
 
@@ -133,6 +154,11 @@ Spotify progress (spotdl) is detected best-effort from percentage values in the
 output, because spotdl's format can differ slightly between versions. If a
 percentage cannot be recognized, the bar shows an activity indicator and the
 exact messages remain visible in the "Activity" panel.
+
+Child output is consumed by a dedicated reader thread, so a burst of lines is
+never left sitting in a buffer waiting for the next readiness event. The
+subprocess timeout is an *idle* timeout: a job is killed only if it neither
+prints anything nor exits.
 
 ## Output
 
