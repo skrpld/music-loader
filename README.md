@@ -86,18 +86,42 @@ music-loader links.txt -o /path/to/Music \
 
 Defaults: 4 post-processing workers, 2 lyrics workers.
 
+## Child process output
+
+Both spotdl and yt-dlp are Python programs. When their standard output is a
+pipe rather than a terminal, CPython block-buffers it, so their messages only
+arrive in multi-kilobyte chunks — which during a long download looks exactly
+like a hang. Children are therefore started with unbuffered output
+(`PYTHONUNBUFFERED`) and with stdin closed, so an unexpected interactive prompt
+can never block a run forever.
+
+Child output is consumed by a dedicated reader thread, so a burst of lines is
+never left sitting in a buffer waiting for the next readiness event. The
+subprocess timeout is an *idle* timeout: a job is killed only if it neither
+prints anything nor exits.
+
 ## Spotify progress
 
 spotDL's default interface redraws a live progress area instead of printing
 plain lines, so from the outside a run can look completely silent for minutes
-while tracks are already being written to disk. `--simple-tui` is therefore
-passed to spotdl: it emits one line per event, which the parser turns into
-track counters and the overall progress bar.
+while tracks are already being written to disk. `--simple-tui` and an explicit
+`--log-level INFO` are therefore passed to spotdl: it emits one line per event,
+which the parser turns into track counters and the overall progress bar.
+
+Every line spotdl prints is forwarded to the Activity panel, including the ones
+the parser does not recognize. Showing only recognized lines meant that an
+unexpected spotdl version, a credentials problem or a "no results" message was
+swallowed silently and the run simply looked frozen.
 
 As a second safety net, whenever spotdl stays quiet the target folder is
 checked for audio files created since the run started, so the dashboard shows
 real progress ("N file(s) written so far") instead of claiming there is no
 output.
+
+A link that finishes with exit code 0 but yields no tracks at all is reported
+as a failure, not as success: that combination means spotdl could not resolve
+the link (wrong link type for the installed version, Spotify API/token issue),
+and silently counting it as "ok" hid the fact that no music arrived.
 
 ## SoundCloud album tags
 
@@ -191,11 +215,6 @@ SoundCloud progress and speed (yt-dlp) are parsed from the standard output
 format `[download] 45.2% of 3.45MiB at 1.23MiB/s ETA 00:02`, which is stable.
 Spotify progress is derived from spotdl's simple-TUI lines (found / downloaded /
 skipped) plus the file-count fallback described above.
-
-Child output is consumed by a dedicated reader thread, so a burst of lines is
-never left sitting in a buffer waiting for the next readiness event. The
-subprocess timeout is an *idle* timeout: a job is killed only if it neither
-prints anything nor exits.
 
 ## Output
 
