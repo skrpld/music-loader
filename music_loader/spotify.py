@@ -6,11 +6,6 @@ while tracks are in fact already being written to disk. `--simple-tui` is
 therefore forced: it makes spotdl print one line per event, which is what
 the parsing below relies on.
 
-Every line spotdl prints is shown in the Activity panel, even the ones the
-parser does not recognize. Only forwarding recognized lines meant that an
-unexpected spotdl version, a credentials problem or a "no results" message
-was swallowed silently and the run just looked frozen.
-
 As a second safety net, the idle handler counts audio files that appeared
 in the target folder since the run started, so even a version whose output
 we cannot parse still shows real progress instead of "no output".
@@ -26,20 +21,21 @@ from pathlib import Path
 from .config import AUDIO_EXTENSIONS, SUBPROCESS_TIMEOUT_SECONDS
 from .process import run_streamed
 
-_FOUND_RE = re.compile(r"Found (\d+) songs?\b", re.IGNORECASE)
+_FOUND_RE = re.compile(r"Found (\d+) songs? in", re.IGNORECASE)
 _DOWNLOADING_RE = re.compile(r"^Downloading[:\s]+(.+)$", re.IGNORECASE)
 _PERCENT_RE = re.compile(r"(\d{1,3})%")
 _DOWNLOADED_RE = re.compile(r'^Downloaded\b[:\s]*"?(.*?)"?\s*[:.]?\s*$', re.IGNORECASE)
 _SKIPPING_RE = re.compile(r"^Skipping\b", re.IGNORECASE)
-_ERROR_RE = re.compile(
-    r"^(Error|LookupError|AudioProviderError|SpotifyError|Failed)\b",
-    re.IGNORECASE,
-)
-# Pure progress noise that would flood the Activity panel if echoed.
-_NOISE_RE = re.compile(r"^\s*\d{1,3}%\s*$")
+_ERROR_RE = re.compile(r"^(Error|LookupError|AudioProviderError|Failed)\b", re.IGNORECASE)
 
 _HEARTBEAT_INTERVAL = 20.0  # seconds between "still working" log lines
-_MAX_LOGGED_LINE = 160
+
+# spotDL's own template variables. The extension placeholder is
+# "{output-ext}"; an unknown placeholder such as "{ext}" is left in the name
+# verbatim, which produces files ending in a bogus extension that ffmpeg
+# cannot even write ("unable to find a suitable output format") - every
+# track of the link then fails and nothing appears in the library.
+_OUTPUT_TEMPLATE = "{artist} - {album}/{track-number} - {title}.{output-ext}"
 
 
 def _count_new_files(music_dir: Path, since: float) -> int:
@@ -66,28 +62,29 @@ def download_spotify(url: str, music_dir: Path, dashboard) -> bool:
     dashboard.log(f"[Spotify] Starting: {url}")
     dashboard.start_file(label="Spotify: preparing...")
 
-    output_template = f"{music_dir}/{{artist}} - {{album}}/{{track-number}} - {{title}}.{{ext}}"
+    output_template = f"{music_dir}/{_OUTPUT_TEMPLATE}"
     cmd = [
         "spotdl", "download", url,
         "--output", output_template,
         "--format", "mp3",
         "--bitrate", "320k",
-        "--lyrics", "genius",
+        # "synced" is what actually produces timestamped .lrc files;
+        # genius/musixmatch stay as fallbacks for plain embedded lyrics.
+        "--lyrics", "synced", "musixmatch", "genius",
         "--generate-lrc",
         "--overwrite", "skip",
+        # Print the reason a song could not be downloaded instead of
+        # failing silently, so the failure log says something useful.
+        "--print-errors",
         # Plain, line-based output instead of the redrawn live progress area.
         "--simple-tui",
-        # Without this spotdl only prints warnings and errors in simple-tui
-        # mode on some versions, which is indistinguishable from a hang.
-        "--log-level", "INFO",
     ]
 
     started = time.time()
     total_tracks = 0
     done_tracks = 0
-    failed_tracks = 0
     first_output_seen = False
-    last_heartbeat_at = 0.0
+    last_heartbeat = 0.0  # monotonic timestamp of the last heartbeat line
     last_seen_on_disk = 0
 
     def _sync_percent() -> None:
@@ -96,11 +93,8 @@ def download_spotify(url: str, music_dir: Path, dashboard) -> bool:
             dashboard.update_file(percent=percent)
 
     def on_line(line: str) -> None:
-        nonlocal total_tracks, done_tracks, failed_tracks, first_output_seen
-        nonlocal last_heartbeat_at
+        nonlocal total_tracks, done_tracks, first_output_seen
         first_output_seen = True
-        # Real output arrived, so the "still working" timer starts over.
-        last_heartbeat_at = time.monotonic()
 
         found = _FOUND_RE.search(line)
         if found:
@@ -108,13 +102,10 @@ def download_spotify(url: str, music_dir: Path, dashboard) -> bool:
             total_tracks += count
             dashboard.add_tracks_total("spotify", count)
             dashboard.log(f"[Spotify] Found {count} track(s)")
-            return
 
         downloading_match = _DOWNLOADING_RE.match(line)
         if downloading_match:
             dashboard.update_file(label=f"Spotify: {downloading_match.group(1)[:60]}")
-            dashboard.log(f"[Spotify] {line[:_MAX_LOGGED_LINE]}")
-            return
 
         downloaded_match = _DOWNLOADED_RE.match(line)
         if downloaded_match:
@@ -124,7 +115,7 @@ def download_spotify(url: str, music_dir: Path, dashboard) -> bool:
             if name:
                 dashboard.update_file(label=f"Spotify: {name[:60]}")
             _sync_percent()
-            dashboard.log(f"[Spotify] {line[:_MAX_LOGGED_LINE]} ({done_tracks}/{total_tracks or '?'})")
+            dashboard.log(f"[Spotify] {line} ({done_tracks}/{total_tracks or '?'})")
             return
 
         if _SKIPPING_RE.match(line):
@@ -133,32 +124,28 @@ def download_spotify(url: str, music_dir: Path, dashboard) -> bool:
             done_tracks += 1
             dashboard.record_track("spotify", "skipped")
             _sync_percent()
-            dashboard.log(f"[Spotify] {line[:_MAX_LOGGED_LINE]} ({done_tracks}/{total_tracks or '?'})")
+            dashboard.log(f"[Spotify] {line} ({done_tracks}/{total_tracks or '?'})")
             return
 
         if _ERROR_RE.match(line):
-            failed_tracks += 1
             dashboard.record_track("spotify", "failed")
-            dashboard.log_error("Spotify", line[:500])
+            dashboard.log_error("Spotify", line)
             return
 
         percent_match = _PERCENT_RE.search(line)
         if percent_match and total_tracks == 0:
             dashboard.update_file(percent=min(100, int(percent_match.group(1))))
 
-        if _NOISE_RE.match(line):
-            return
-
-        # Anything else spotdl has to say is shown as-is. An unrecognized but
-        # visible line is far more useful than a silent dashboard.
-        dashboard.log(f"[Spotify] {line[:_MAX_LOGGED_LINE]}")
-
     def on_idle(idle_seconds: float) -> None:
-        nonlocal last_heartbeat_at, last_seen_on_disk
+        nonlocal last_heartbeat, last_seen_on_disk
         now = time.monotonic()
-        if now - last_heartbeat_at < _HEARTBEAT_INTERVAL:
+        # Compared against a real timestamp, not against the idle counter:
+        # the counter restarts from zero every time the child prints
+        # something, which used to silence the heartbeat for good after the
+        # first long quiet stretch.
+        if now - last_heartbeat < _HEARTBEAT_INTERVAL:
             return
-        last_heartbeat_at = now
+        last_heartbeat = now
 
         # spotdl may be silent while it is either resolving the link or
         # actually writing files. Looking at the folder tells the difference.
@@ -183,9 +170,6 @@ def download_spotify(url: str, music_dir: Path, dashboard) -> bool:
                 f"[Spotify] Resolving the link, no output yet ({int(idle_seconds)}s)..."
             )
         else:
-            dashboard.update_file(
-                label=f"Spotify: working, quiet for {int(idle_seconds)}s..."
-            )
             dashboard.log(
                 f"[Spotify] Working, no new output for {int(idle_seconds)}s "
                 f"and no file written yet..."
@@ -202,16 +186,4 @@ def download_spotify(url: str, music_dir: Path, dashboard) -> bool:
     if returncode != 0:
         dashboard.log_error("Spotify", f"spotdl exited with code {returncode} for '{url}'")
         return False
-
-    if total_tracks == 0 and done_tracks == 0 and failed_tracks == 0:
-        # spotdl finished successfully but produced nothing at all: usually a
-        # link type this spotdl version cannot resolve, or a Spotify API/token
-        # problem. Reporting it as success hid the fact that no music arrived.
-        dashboard.log_error(
-            "Spotify",
-            f"spotdl finished without finding any tracks for '{url}'. "
-            f"Try the same link manually: spotdl download \"{url}\" --simple-tui",
-        )
-        return False
-
     return True
