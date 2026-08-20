@@ -13,6 +13,15 @@ INDEX_FILENAME = ".sc_index.json"
 STAGING_DIRNAME = ".sc_downloads"
 LYRICS_PROVIDERS = ["Musixmatch", "NetEase", "Lrclib", "Genius"]
 
+# Remembers when a lyrics search last found nothing for a track, so a track
+# whose lyrics simply aren't available anywhere isn't re-searched on every
+# single run.
+LYRICS_ATTEMPTS_FILENAME = ".sc_lyrics_attempts.json"
+
+# How long to wait before retrying a previously-failed lyrics search for the
+# same track.
+LYRICS_RETRY_COOLDOWN_SECONDS = 7 * 24 * 60 * 60
+
 # Leftovers of an interrupted run older than this are deleted at the start of
 # the next run.
 STALE_STAGING_SECONDS = 24 * 60 * 60

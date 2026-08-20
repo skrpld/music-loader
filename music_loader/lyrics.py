@@ -10,12 +10,30 @@ from .config import LYRICS_PROVIDERS
 from .text_utils import clean_track_title
 
 
-def fetch_lyrics(audio_path: Path, dashboard) -> bool:
-    """Returns True if lyrics were found and saved next to `audio_path`."""
+def fetch_lyrics(
+    audio_path: Path,
+    dashboard,
+    artist: str | None = None,
+    title: str | None = None,
+) -> bool:
+    """Returns True if lyrics were found and saved next to `audio_path`.
+
+    When `artist`/`title` are supplied (the track's real metadata) the search
+    query is built from them instead of the filename. SoundCloud upload
+    titles frequently don't match how a song is credited on lyrics providers
+    (missing artist, reworded title, etc.), which used to cause both missed
+    matches and wrong matches against an unrelated song with the same
+    filename. Falls back to the filename only if no metadata is available.
+    """
     if syncedlyrics is None:
         return False
 
-    query = clean_track_title(audio_path.stem)
+    if title:
+        raw_query = f"{artist} - {title}" if artist else title
+    else:
+        raw_query = audio_path.stem
+
+    query = clean_track_title(raw_query)
     if not query:
         dashboard.log(f"[Lyrics] Could not build a search query for '{audio_path.name}'")
         return False
