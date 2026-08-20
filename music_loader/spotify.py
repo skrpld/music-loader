@@ -1,29 +1,54 @@
 """Spotify downloads via spotDL, with best-effort progress parsing.
 
-spotDL's own console output format can vary slightly between versions, so
-parsing here is best-effort: percentages and track titles are shown when
-they can be recognized, and every raw line is still visible in the
-dashboard's activity log regardless.
+spotDL's rich-based TUI redraws a live progress area instead of printing
+plain lines, so from the outside it can look completely silent for minutes
+while tracks are in fact already being written to disk. `--simple-tui` is
+therefore forced: it makes spotdl print one line per event, which is what
+the parsing below relies on.
+
+As a second safety net, the idle handler counts audio files that appeared
+in the target folder since the run started, so even a version whose output
+we cannot parse still shows real progress instead of "no output".
 
 A link can be a single track, an album, a playlist, or an entire artist's
 discography - the latter can mean spotdl needs a while to enumerate tracks
-before it prints anything at all. `on_idle` below turns that silent wait
-into a visible "still working" status instead of letting it look frozen.
+before it prints anything at all.
 """
 import re
+import time
 from pathlib import Path
 
-from .config import SUBPROCESS_TIMEOUT_SECONDS
+from .config import AUDIO_EXTENSIONS, SUBPROCESS_TIMEOUT_SECONDS
 from .process import run_streamed
 
 _FOUND_RE = re.compile(r"Found (\d+) songs? in", re.IGNORECASE)
 _DOWNLOADING_RE = re.compile(r"^Downloading[:\s]+(.+)$", re.IGNORECASE)
 _PERCENT_RE = re.compile(r"(\d{1,3})%")
-_DOWNLOADED_RE = re.compile(r"^Downloaded\b", re.IGNORECASE)
+_DOWNLOADED_RE = re.compile(r'^Downloaded\b[:\s]*"?(.*?)"?\s*[:.]?\s*$', re.IGNORECASE)
 _SKIPPING_RE = re.compile(r"^Skipping\b", re.IGNORECASE)
 _ERROR_RE = re.compile(r"^(Error|LookupError|Failed)\b", re.IGNORECASE)
 
-_HEARTBEAT_INTERVAL = 30.0  # seconds between "still working" log lines
+_HEARTBEAT_INTERVAL = 20.0  # seconds between "still working" log lines
+
+
+def _count_new_files(music_dir: Path, since: float) -> int:
+    """Number of audio files written into the library since `since`.
+
+    Used only to prove that something is happening while spotdl is quiet.
+    """
+    count = 0
+    try:
+        for path in music_dir.rglob("*"):
+            try:
+                if path.suffix.lower() not in AUDIO_EXTENSIONS or not path.is_file():
+                    continue
+                if path.stat().st_mtime >= since:
+                    count += 1
+            except OSError:
+                continue
+    except OSError:
+        return count
+    return count
 
 
 def download_spotify(url: str, music_dir: Path, dashboard) -> bool:
@@ -39,12 +64,21 @@ def download_spotify(url: str, music_dir: Path, dashboard) -> bool:
         "--lyrics", "genius",
         "--generate-lrc",
         "--overwrite", "skip",
+        # Plain, line-based output instead of the redrawn live progress area.
+        "--simple-tui",
     ]
 
+    started = time.time()
     total_tracks = 0
     done_tracks = 0
     first_output_seen = False
     last_heartbeat = 0.0
+    last_seen_on_disk = 0
+
+    def _sync_percent() -> None:
+        if total_tracks > 0:
+            percent = min(100, int(done_tracks * 100 / total_tracks))
+            dashboard.update_file(percent=percent)
 
     def on_line(line: str) -> None:
         nonlocal total_tracks, done_tracks, first_output_seen
@@ -61,35 +95,65 @@ def download_spotify(url: str, music_dir: Path, dashboard) -> bool:
         if downloading_match:
             dashboard.update_file(label=f"Spotify: {downloading_match.group(1)[:60]}")
 
-        percent_match = _PERCENT_RE.search(line)
-        if percent_match:
-            dashboard.update_file(percent=min(100, int(percent_match.group(1))))
-
-        if _DOWNLOADED_RE.match(line):
+        downloaded_match = _DOWNLOADED_RE.match(line)
+        if downloaded_match:
             done_tracks += 1
             dashboard.record_track("spotify", "done")
+            name = downloaded_match.group(1).strip()
+            if name:
+                dashboard.update_file(label=f"Spotify: {name[:60]}")
+            _sync_percent()
             dashboard.log(f"[Spotify] {line} ({done_tracks}/{total_tracks or '?'})")
-        elif _SKIPPING_RE.match(line):
+            return
+
+        if _SKIPPING_RE.match(line):
             # Track already exists on disk - this used to vanish from the
             # counters entirely. Now it counts as "already had".
             done_tracks += 1
             dashboard.record_track("spotify", "skipped")
+            _sync_percent()
             dashboard.log(f"[Spotify] {line} ({done_tracks}/{total_tracks or '?'})")
-        elif _ERROR_RE.match(line):
+            return
+
+        if _ERROR_RE.match(line):
             dashboard.record_track("spotify", "failed")
             dashboard.log_error("Spotify", line)
+            return
+
+        percent_match = _PERCENT_RE.search(line)
+        if percent_match and total_tracks == 0:
+            dashboard.update_file(percent=min(100, int(percent_match.group(1))))
 
     def on_idle(idle_seconds: float) -> None:
-        nonlocal last_heartbeat
-        if not first_output_seen:
-            # Nothing printed yet at all - most likely spotdl is still
-            # resolving the link (e.g. enumerating a whole discography).
+        nonlocal last_heartbeat, last_seen_on_disk
+        if idle_seconds - last_heartbeat < _HEARTBEAT_INTERVAL:
+            return
+        last_heartbeat = idle_seconds
+
+        # spotdl may be silent while it is either resolving the link or
+        # actually writing files. Looking at the folder tells the difference.
+        on_disk = _count_new_files(music_dir, started)
+        if on_disk:
+            new_since_last = on_disk - last_seen_on_disk
+            last_seen_on_disk = on_disk
             dashboard.update_file(
-                label=f"Spotify: preparing... (still working, {int(idle_seconds)}s, no output yet)"
+                label=f"Spotify: downloading... ({on_disk} file(s) written so far)"
             )
-        if idle_seconds - last_heartbeat >= _HEARTBEAT_INTERVAL:
-            dashboard.log(f"[Spotify] Still working, no output for {int(idle_seconds)}s...")
-            last_heartbeat = idle_seconds
+            dashboard.log(
+                f"[Spotify] Working: {on_disk} file(s) written so far "
+                f"(+{new_since_last} since the last check)"
+            )
+            return
+
+        if not first_output_seen:
+            dashboard.update_file(
+                label=f"Spotify: resolving the link... ({int(idle_seconds)}s)"
+            )
+            dashboard.log(
+                f"[Spotify] Resolving the link, no output yet ({int(idle_seconds)}s)..."
+            )
+        else:
+            dashboard.log(f"[Spotify] Working, no output for {int(idle_seconds)}s...")
 
     returncode = run_streamed(cmd, on_line, on_idle=on_idle, timeout=SUBPROCESS_TIMEOUT_SECONDS)
     dashboard.finish_file()

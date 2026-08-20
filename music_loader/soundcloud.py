@@ -47,13 +47,15 @@ from .config import (
     LYRICS_ATTEMPTS_FILENAME,
     LYRICS_RETRY_COOLDOWN_SECONDS,
     RAW_EXTENSIONS,
+    SINGLE_ALBUM_SUFFIX,
     STAGING_DIRNAME,
     STALE_STAGING_SECONDS,
     SUBPROCESS_TIMEOUT_SECONDS,
 )
 from .lyrics import fetch_lyrics
-from .playlist import update_soundcloud_playlist
+from .playlist import update_soundcloud_playlist, write_named_playlist
 from .process import run_captured, run_streamed
+from .text_utils import split_artist_title
 
 # Matches yt-dlp's default (--newline) progress line, e.g.:
 # [download] 45.2% of ~3.45MiB at 1.23MiB/s ETA 00:02
@@ -63,6 +65,12 @@ _PROGRESS_RE = re.compile(
 )
 _ERROR_RE = re.compile(r"^ERROR:", re.IGNORECASE)
 _DEFAULT_LYRICS_WORKERS = 2
+
+# SoundCloud serves user avatars from ".../avatars-..." and real track/album
+# artwork from ".../artworks-...".  When a track has no artwork of its own,
+# yt-dlp falls back to the uploader's avatar, which ends up embedded as a
+# completely unrelated cover.  Avatars are therefore never used.
+_AVATAR_MARKERS = ("/avatars-", "avatars-")
 
 
 class _SoundCloudIndex:
@@ -383,6 +391,26 @@ def _read_audio_tags(audio_path: Path) -> tuple[str, str]:
         return "", ""
 
 
+def _track_album(info: dict[str, Any], title: str) -> str:
+    """Album tag for a SoundCloud track.
+
+    SoundCloud does expose an album for tracks that belong to one (yt-dlp
+    reports it as `album`, and a track downloaded as part of an album-type
+    set carries the set title). Everything else is a standalone upload, and
+    tagging all of those with a shared "SoundCloud" album lumped the whole
+    library into one fake album. A single now gets its own album named after
+    the song.
+    """
+    album = _clean_metadata(info.get("album"))
+    if album:
+        return album
+    if info.get("playlist_is_album") and info.get("playlist_title"):
+        return _clean_metadata(info.get("playlist_title"))
+    _artist_part, song = split_artist_title(title)
+    song = _clean_metadata(song or title, "Unknown Title")
+    return f"{song}{SINGLE_ALBUM_SUFFIX}"
+
+
 def _final_name(info: dict[str, Any]) -> str:
     title = _clean_metadata(info.get("title"), "SoundCloud track")
     if sanitize_filename is not None:
@@ -455,8 +483,50 @@ def _cleanup_stale_staging(staging_dir: Path) -> None:
             continue
 
 
+def _is_avatar(url: str) -> bool:
+    lowered = url.lower()
+    return any(marker in lowered for marker in _AVATAR_MARKERS)
+
+
+def _pick_artwork_url(info: dict[str, Any]) -> str | None:
+    """Chooses real track artwork and never the uploader's avatar.
+
+    yt-dlp lists the uploader's profile picture as a thumbnail for tracks
+    that have no cover of their own; embedding it produced covers that had
+    nothing to do with the song. When no real artwork exists, the track is
+    simply left without an embedded cover.
+    """
+    best_url: str | None = None
+    best_score = (-1, -1)
+    for thumb in info.get("thumbnails") or []:
+        if not isinstance(thumb, dict):
+            continue
+        url = str(thumb.get("url") or "")
+        if not url or _is_avatar(url):
+            continue
+        try:
+            preference = int(thumb.get("preference") or 0)
+        except (TypeError, ValueError):
+            preference = 0
+        try:
+            width = int(thumb.get("width") or 0)
+        except (TypeError, ValueError):
+            width = 0
+        score = (preference, width)
+        if score > best_score:
+            best_score = score
+            best_url = url
+    if best_url:
+        return best_url
+
+    url = str(info.get("thumbnail") or "")
+    if url and not _is_avatar(url):
+        return url
+    return None
+
+
 def _download_thumbnail(info: dict[str, Any], work_dir: Path) -> Path | None:
-    url = info.get("thumbnail")
+    url = _pick_artwork_url(info)
     if not url:
         return None
     raw = work_dir / "cover.original"
@@ -507,7 +577,7 @@ def _postprocess_track(
         "Unknown Artist",
     )
     title = _clean_metadata(info.get("title"), "Unknown Title")
-    album = "SoundCloud"
+    album = _track_album(info, title)
     webpage_url = _clean_metadata(info.get("webpage_url"))
     description = _clean_metadata(info.get("description"))
 
@@ -600,12 +670,31 @@ def _parse_entries(data: Any) -> list[dict[str, Any]]:
     return tracks
 
 
-def _discover_tracks(url: str, dashboard) -> list[dict[str, Any]]:
+def _playlist_info(data: Any) -> tuple[str, bool]:
+    """Returns ``(playlist_title, is_album)`` for a resolved link.
+
+    An empty title means the link was a single track, not a collection, and
+    no playlist file should be written for it.
+    """
+    if not isinstance(data, dict) or not data.get("entries"):
+        return "", False
+    title = _clean_metadata(data.get("title") or data.get("playlist_title"))
+    uploader = _clean_metadata(data.get("uploader") or data.get("channel"))
+    is_album = str(data.get("playlist_type") or "").lower() in {"album", "ep", "single"}
+    if title and uploader and uploader.casefold() not in title.casefold():
+        title = f"{uploader} - {title}"
+    return title, is_album
+
+
+def _discover_tracks(url: str, dashboard) -> tuple[list[dict[str, Any]], str, bool]:
     """Lists the tracks of a link without resolving each one of them.
 
     `--flat-playlist` keeps this to a single cheap request even for large
     playlists; the per-track metadata that post-processing needs is collected
     later, while the track is being downloaded.
+
+    Also returns the playlist title (empty for a single-track link) so a
+    matching .m3u8 can be written afterwards.
     """
     json_lines: list[str] = []
     other_lines: list[str] = []
@@ -636,7 +725,8 @@ def _discover_tracks(url: str, dashboard) -> list[dict[str, Any]]:
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Could not parse yt-dlp metadata: {exc}") from exc
 
-    return _parse_entries(data)
+    playlist_title, is_album = _playlist_info(data)
+    return _parse_entries(data), playlist_title, is_album
 
 
 def _merge_info(base: dict[str, Any], full: dict[str, Any] | None) -> dict[str, Any]:
@@ -781,11 +871,18 @@ def download_soundcloud(
     lyrics_attempts = get_lyrics_attempts(soundcloud_dir)
 
     try:
-        tracks = _discover_tracks(url, dashboard)
+        tracks, playlist_title, playlist_is_album = _discover_tracks(url, dashboard)
     except Exception as exc:
         dashboard.log_error("SoundCloud", f"Could not resolve '{url}': {exc}")
         dashboard.finish_file()
         return False
+
+    if playlist_title:
+        # Carried into every track so the album tag can use it for album-type
+        # sets, and so the per-link playlist can be written afterwards.
+        for track in tracks:
+            track["playlist_title"] = playlist_title
+            track["playlist_is_album"] = playlist_is_album
 
     dashboard.add_tracks_total("soundcloud", len(tracks))
     dashboard.log(f"[SoundCloud] Found {len(tracks)} track(s)")
@@ -802,6 +899,9 @@ def download_soundcloud(
     had_failure = False
     aborted = False
     state_lock = threading.Lock()
+    # track id -> final file, used to write the per-link playlist in the
+    # original order once every worker is done.
+    results: dict[str, Path] = {}
 
     def _lyrics_task(info: dict[str, Any], audio_path: Path) -> bool:
         if audio_path.with_suffix(".lrc").exists():
@@ -856,6 +956,7 @@ def download_soundcloud(
                         dashboard.record_track("soundcloud", "done")
                         dashboard.log(f"[SoundCloud] Ready: {title}")
                     with state_lock:
+                        results[str(info.get("id") or "")] = final_path
                         lyrics_futures.append(lyrics_pool.submit(_lyrics_task, info, final_path))
                 except Exception as exc:
                     with state_lock:
@@ -895,6 +996,7 @@ def download_soundcloud(
                     dashboard.record_track("soundcloud", "skipped")
                     dashboard.log(f"[SoundCloud] Already exists: {existing.name}")
                     with state_lock:
+                        results[str(info.get("id") or "")] = existing
                         lyrics_futures.append(lyrics_pool.submit(_lyrics_task, info, existing))
                     continue
 
@@ -973,4 +1075,15 @@ def download_soundcloud(
         pass
 
     update_soundcloud_playlist(soundcloud_dir, dashboard)
+
+    if playlist_title and not aborted:
+        with state_lock:
+            ordered = [results.get(str(track.get("id") or "")) for track in tracks]
+        write_named_playlist(
+            soundcloud_dir,
+            playlist_title,
+            [path for path in ordered if path is not None],
+            dashboard,
+        )
+
     return not had_failure

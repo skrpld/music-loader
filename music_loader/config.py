@@ -13,6 +13,11 @@ INDEX_FILENAME = ".sc_index.json"
 STAGING_DIRNAME = ".sc_downloads"
 LYRICS_PROVIDERS = ["Musixmatch", "NetEase", "Lrclib", "Genius"]
 
+# Tagging every SoundCloud upload with a shared "SoundCloud" album collapsed
+# the whole library into one fake album. A standalone upload now gets its own
+# album named after the song, following the usual "<song> - Single" convention.
+SINGLE_ALBUM_SUFFIX = " - Single"
+
 # A SoundCloud title is rarely a clean "song name": the uploader is often a
 # label or a repost channel, and the real artist is hidden inside the title
 # ("Artist - Song (Official Video) [Free DL]"). One single query built from

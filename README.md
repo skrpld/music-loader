@@ -70,7 +70,8 @@ music-loader/
 - **Spotify** – albums, playlists, artists (via spotDL, MP3 320 kbps, Genius lyrics)
 - **SoundCloud** – single tracks, playlists and whole profiles (via yt-dlp)
 - **Synced lyrics** (.lrc) – Musixmatch, NetEase, Lrclib, Genius
-- **Metadata** – artist, album, duration, embedded thumbnails
+- **Metadata** – artist, real album (or `<song> - Single`), duration, track artwork
+- **Playlists** – a SoundCloud playlist link produces a matching .m3u8
 - **Live dashboard** – progress bars, activity log, link/track statistics
 - **Duplicate detection** – persistent ID index prevents re-downloads
 - **Failure logging** – errors saved to `.music-loader-logs/`
@@ -84,6 +85,44 @@ music-loader links.txt -o /path/to/Music \
 ```
 
 Defaults: 4 post-processing workers, 2 lyrics workers.
+
+## Spotify progress
+
+spotDL's default interface redraws a live progress area instead of printing
+plain lines, so from the outside a run can look completely silent for minutes
+while tracks are already being written to disk. `--simple-tui` is therefore
+passed to spotdl: it emits one line per event, which the parser turns into
+track counters and the overall progress bar.
+
+As a second safety net, whenever spotdl stays quiet the target folder is
+checked for audio files created since the run started, so the dashboard shows
+real progress ("N file(s) written so far") instead of claiming there is no
+output.
+
+## SoundCloud album tags
+
+The album tag comes from the track itself when SoundCloud provides one, and
+from the source set when the link is an album/EP. A standalone upload gets its
+own album named after the song (`<song> - Single`) instead of being lumped into
+one shared fake "SoundCloud" album.
+
+## Artwork
+
+Only real track artwork is embedded. yt-dlp reports the uploader's profile
+picture as a thumbnail for tracks that have no cover of their own, which
+produced covers unrelated to the song; those avatar URLs are filtered out and
+such tracks are simply left without an embedded cover.
+
+## Playlists
+
+Two kinds of `.m3u8` are written into the SoundCloud folder:
+
+- `SoundCloud_New.m3u8` – everything currently in the folder;
+- one playlist per playlist/album link, named after the source playlist
+  (`<uploader> - <playlist>.m3u8`) and keeping its original track order.
+  Entries are relative paths, so the folder can be copied to a phone as is.
+  Already-downloaded tracks are included too, so re-running a link rebuilds the
+  full playlist.
 
 ## SoundCloud pipeline and duplicate detection
 
@@ -150,10 +189,8 @@ in future runs.
 
 SoundCloud progress and speed (yt-dlp) are parsed from the standard output
 format `[download] 45.2% of 3.45MiB at 1.23MiB/s ETA 00:02`, which is stable.
-Spotify progress (spotdl) is detected best-effort from percentage values in the
-output, because spotdl's format can differ slightly between versions. If a
-percentage cannot be recognized, the bar shows an activity indicator and the
-exact messages remain visible in the "Activity" panel.
+Spotify progress is derived from spotdl's simple-TUI lines (found / downloaded /
+skipped) plus the file-count fallback described above.
 
 Child output is consumed by a dedicated reader thread, so a burst of lines is
 never left sitting in a buffer waiting for the next readiness event. The
@@ -167,7 +204,8 @@ Music/
 ├── Spotify downloads (organized by artist/album)
 ├── SoundCloud/
 │   ├── track files
-│   ├── SoundCloud_New.m3u8 (playlist)
+│   ├── SoundCloud_New.m3u8 (all tracks in the folder)
+│   ├── <uploader> - <playlist>.m3u8 (one per playlist link)
 │   ├── .sc_index.json (dedup index)
 │   └── .sc_lyrics_attempts.json (lyrics retry cooldown)
 └── .music-loader-logs/
