@@ -1,6 +1,7 @@
 """Helpers for running external commands with live output handling."""
-import selectors
+import queue
 import subprocess
+import threading
 import time
 from typing import Callable, Optional
 
@@ -58,6 +59,17 @@ def run_streamed(
 ) -> int:
     """Run ``cmd``, forwarding merged stdout/stderr lines to ``on_line``.
 
+    Output is consumed by a dedicated reader thread. The previous
+    ``selectors``-based loop only read a single line per readiness event,
+    so when a child printed a burst of lines the rest stayed stuck in
+    Python's buffer until the next event - which for a downloader that goes
+    quiet for minutes could mean the important line (the metadata JSON, an
+    error) was seen far too late or not at all.
+
+    ``timeout`` is an *idle* timeout: the child is killed only if it neither
+    prints anything nor exits for that long, so a legitimately slow but
+    talkative job is never cut off.
+
     The child process is always terminated before this function returns,
     including when the caller is interrupted (Ctrl+C), so no orphaned
     yt-dlp/spotdl processes keep downloading in the background.
@@ -70,47 +82,43 @@ def run_streamed(
         bufsize=1,
     )
 
-    start = time.monotonic()
-    last_output = start
-    sel = selectors.DefaultSelector()
+    lines: "queue.Queue[Optional[str]]" = queue.Queue()
 
-    def emit(raw_line: str) -> None:
-        stripped = raw_line.strip()
-        if stripped:
-            on_line(stripped)
-
-    def drain() -> None:
-        # Data can still sit in Python's buffer after the process exits;
-        # without this final read the last lines (often the error message)
-        # would be silently dropped.
+    def reader() -> None:
         try:
-            for pending in process.stdout:  # type: ignore[union-attr]
-                emit(pending)
+            assert process.stdout is not None
+            for raw_line in process.stdout:
+                lines.put(raw_line)
         except (OSError, ValueError):
             pass
+        finally:
+            lines.put(None)
+
+    thread = threading.Thread(target=reader, name="proc-reader", daemon=True)
+    thread.start()
+
+    last_output = time.monotonic()
 
     try:
-        assert process.stdout is not None
-        sel.register(process.stdout, selectors.EVENT_READ)
-
         while True:
-            if time.monotonic() - start > timeout:
+            if time.monotonic() - last_output > timeout:
                 _terminate(process)
                 return -1
 
-            events = sel.select(timeout=idle_interval)
-            if events:
-                line = process.stdout.readline()
-                if line == "":
-                    break
-                last_output = time.monotonic()
-                emit(line)
-            else:
+            try:
+                raw_line = lines.get(timeout=idle_interval)
+            except queue.Empty:
                 if on_idle is not None:
                     on_idle(time.monotonic() - last_output)
-                if process.poll() is not None:
-                    drain()
-                    break
+                continue
+
+            if raw_line is None:
+                break
+
+            last_output = time.monotonic()
+            stripped = raw_line.strip()
+            if stripped:
+                on_line(stripped)
 
         process.wait(timeout=60)
     except subprocess.TimeoutExpired:
@@ -121,11 +129,11 @@ def run_streamed(
         _terminate(process)
         raise
     finally:
-        sel.close()
         if process.stdout:
             try:
                 process.stdout.close()
             except OSError:
                 pass
+        thread.join(timeout=5)
 
     return process.returncode
