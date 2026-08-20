@@ -9,11 +9,7 @@ twice.
 The producer only downloads the source audio.  Finished downloads are put into
 an internal queue and a small worker pool performs the expensive ffmpeg /
 thumbnail / metadata work.  Lyrics use a separate, independently limited pool
-so network lookups cannot stall the download producer. A lyrics search query
-is built from the track's actual artist/title tags (read back from the file,
-falling back to platform metadata), not the filename, and a track whose
-lyrics were not found is not re-searched again until a cooldown period has
-passed, so already-downloaded tracks don't cost time on every run.
+so network lookups cannot stall the download producer.
 
 Shutdown is explicit: whatever happens in the producer (an unexpected error or
 Ctrl+C), the workers always receive their stop signals, so the run can never
@@ -47,6 +43,7 @@ from .config import (
     ARCHIVE_FILENAME,
     AUDIO_EXTENSIONS,
     INDEX_FILENAME,
+    INDEX_SAVE_INTERVAL_SECONDS,
     LYRICS_ATTEMPTS_FILENAME,
     LYRICS_RETRY_COOLDOWN_SECONDS,
     RAW_EXTENSIONS,
@@ -74,15 +71,20 @@ class _SoundCloudIndex:
     The legacy metadata scan reads tags from every audio file in the library,
     which is expensive.  It is therefore performed lazily: only when an id
     lookup misses, and only once per run (the instance is reused across all
-    links of a run, see `get_index`).
+    links of a run, see `get_index`).  It also runs *outside* the main lock,
+    so post-processing workers are not all blocked behind the one thread that
+    happens to trigger the scan.
     """
 
     def __init__(self, soundcloud_dir: Path):
         self.dir = soundcloud_dir
         self.path = soundcloud_dir / INDEX_FILENAME
         self._lock = threading.RLock()
+        self._legacy_lock = threading.RLock()
         self._data: dict[str, dict[str, Any]] = self._load()
         self._legacy: list[tuple[Path, str, str, float | None]] | None = None
+        self._dirty = False
+        self._last_save = 0.0
 
     def _load(self) -> dict[str, dict[str, Any]]:
         try:
@@ -95,17 +97,17 @@ class _SoundCloudIndex:
     def _norm(value: Any) -> str:
         return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
 
-    def _ensure_legacy_locked(self) -> None:
-        if self._legacy is not None:
-            return
-        self._legacy = []
+    # -- legacy compatibility scan -------------------------------------------
+    def _scan_legacy(self) -> list[tuple[Path, str, str, float | None]]:
+        found: list[tuple[Path, str, str, float | None]] = []
         if mutagen_file is None:
-            return
-        known = {entry.get("path") for entry in self._data.values()}
+            return found
+        with self._lock:
+            known = {entry.get("path") for entry in self._data.values()}
         try:
             candidates = list(self.dir.rglob("*"))
         except OSError:
-            return
+            return found
         for path in candidates:
             try:
                 relative_parts = path.relative_to(self.dir).parts
@@ -131,15 +133,24 @@ class _SoundCloudIndex:
                 artist = tags.get("artist", [""])[0]
                 duration = getattr(audio.info, "length", None)
                 if title and artist:
-                    self._legacy.append((path, self._norm(title), self._norm(artist), duration))
+                    found.append((path, self._norm(title), self._norm(artist), duration))
             except Exception:
                 continue
+        return found
 
+    def _get_legacy(self) -> list[tuple[Path, str, str, float | None]]:
+        with self._legacy_lock:
+            if self._legacy is None:
+                self._legacy = self._scan_legacy()
+            return list(self._legacy)
+
+    # -- lookups --------------------------------------------------------------
     def find(self, info: dict[str, Any]) -> Path | None:
         track_id = str(info.get("id") or "")
         title = self._norm(info.get("track") or info.get("title"))
         artist = self._norm(info.get("uploader") or info.get("artist") or info.get("creator"))
         duration = info.get("duration")
+
         with self._lock:
             entry = self._data.get(track_id) if track_id else None
             if entry:
@@ -147,28 +158,28 @@ class _SoundCloudIndex:
                 if candidate.exists():
                     return candidate
                 self._data.pop(track_id, None)
+                self._dirty = True
 
-            # A flat listing has neither a reliable title nor an uploader, so
-            # metadata matching would compare empty strings against each other.
-            if not title or not artist:
-                return None
+        # A flat listing has neither a reliable title nor an uploader, so
+        # metadata matching would compare empty strings against each other.
+        if not title or not artist:
+            return None
 
-            # New files carry the SoundCloud URL in their tags.  The persistent
-            # index above is the primary mapping; metadata matching is only a
-            # compatibility path for files created by older versions.
-            self._ensure_legacy_locked()
-            for candidate, old_title, old_artist, old_duration in self._legacy or []:
-                if old_title != title or old_artist != artist:
-                    continue
-                if duration is not None and old_duration is not None:
-                    try:
-                        if abs(float(duration) - float(old_duration)) > 2.0:
-                            continue
-                    except (TypeError, ValueError):
-                        pass
-                if not candidate.exists():
-                    continue
-                return candidate
+        # New files carry the SoundCloud URL in their tags.  The persistent
+        # index above is the primary mapping; metadata matching is only a
+        # compatibility path for files created by older versions.
+        for candidate, old_title, old_artist, old_duration in self._get_legacy():
+            if old_title != title or old_artist != artist:
+                continue
+            if duration is not None and old_duration is not None:
+                try:
+                    if abs(float(duration) - float(old_duration)) > 2.0:
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            if not candidate.exists():
+                continue
+            return candidate
         return None
 
     def add(self, info: dict[str, Any], path: Path) -> None:
@@ -183,7 +194,10 @@ class _SoundCloudIndex:
                 "duration": info.get("duration"),
                 "webpage_url": info.get("webpage_url"),
             }
-            self._save_locked()
+            self._dirty = True
+            self._maybe_save_locked()
+
+        with self._legacy_lock:
             if self._legacy is None:
                 return
             try:
@@ -199,11 +213,28 @@ class _SoundCloudIndex:
             self._legacy = [item for item in self._legacy if item[0] != path]
             self._legacy.append(fingerprint)
 
+    # -- persistence ----------------------------------------------------------
+    def _maybe_save_locked(self) -> None:
+        """Rewriting the whole index after every single track is what made a
+        large library slow.  Writes are coalesced instead; `flush` guarantees
+        the final state reaches disk."""
+        now = time.monotonic()
+        if now - self._last_save < INDEX_SAVE_INTERVAL_SECONDS:
+            return
+        self._save_locked()
+
+    def flush(self) -> None:
+        with self._lock:
+            if self._dirty:
+                self._save_locked()
+
     def _save_locked(self) -> None:
-        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        tmp = self.path.with_name(self.path.name + ".tmp")
         try:
             tmp.write_text(json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")
             tmp.replace(self.path)
+            self._dirty = False
+            self._last_save = time.monotonic()
         except OSError:
             # A failing index write must never abort a finished download.
             try:
@@ -297,7 +328,7 @@ class _LyricsAttempts:
             self._save_locked()
 
     def _save_locked(self) -> None:
-        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        tmp = self.path.with_name(self.path.name + ".tmp")
         try:
             tmp.write_text(json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")
             tmp.replace(self.path)
@@ -307,6 +338,22 @@ class _LyricsAttempts:
                 tmp.unlink(missing_ok=True)
             except OSError:
                 pass
+
+
+# Like the index, this is shared per directory: two links of the same run must
+# not hold two separate copies, or the second one overwrites the first's file.
+_ATTEMPTS_CACHE: dict[Path, _LyricsAttempts] = {}
+_ATTEMPTS_CACHE_LOCK = threading.Lock()
+
+
+def get_lyrics_attempts(soundcloud_dir: Path) -> _LyricsAttempts:
+    key = soundcloud_dir.resolve()
+    with _ATTEMPTS_CACHE_LOCK:
+        attempts = _ATTEMPTS_CACHE.get(key)
+        if attempts is None:
+            attempts = _LyricsAttempts(key / LYRICS_ATTEMPTS_FILENAME)
+            _ATTEMPTS_CACHE[key] = attempts
+        return attempts
 
 
 def _clean_metadata(value: Any, fallback: str = "") -> str:
@@ -343,22 +390,39 @@ def _final_name(info: dict[str, Any]) -> str:
     return re.sub(r"[\\/:*?\"<>|]", "_", title).strip() or "SoundCloud track"
 
 
+_ALLOCATE_LOCK = threading.Lock()
+# Names handed out to a worker but not yet written to disk. Without this two
+# workers converting different tracks with the same title at the same time
+# both see a free name and one overwrites the other.
+_ALLOCATED: set[Path] = set()
+
+
 def _allocate_output(soundcloud_dir: Path, info: dict[str, Any]) -> Path:
     base = _final_name(info)
-    candidate = soundcloud_dir / f"{base}.mp3"
     track_id = str(info.get("id") or "")
-    if not candidate.exists():
+
+    def taken(path: Path) -> bool:
+        return path in _ALLOCATED or path.exists()
+
+    with _ALLOCATE_LOCK:
+        candidate = soundcloud_dir / f"{base}.mp3"
+        if taken(candidate):
+            # If a title collision belongs to another SoundCloud track, don't
+            # overwrite it; make the identity explicit in the filename while
+            # the index remains the authoritative mapping.
+            suffix = f" [{track_id}]" if track_id else " (2)"
+            candidate = soundcloud_dir / f"{base}{suffix}.mp3"
+            n = 2
+            while taken(candidate):
+                candidate = soundcloud_dir / f"{base}{suffix} ({n}).mp3"
+                n += 1
+        _ALLOCATED.add(candidate)
         return candidate
-    # If a title collision belongs to another SoundCloud track, don't overwrite
-    # it; make the identity explicit in the filename while the index remains
-    # the authoritative mapping.
-    suffix = f" [{track_id}]" if track_id else " (2)"
-    candidate = soundcloud_dir / f"{base}{suffix}.mp3"
-    n = 2
-    while candidate.exists():
-        candidate = soundcloud_dir / f"{base}{suffix} ({n}).mp3"
-        n += 1
-    return candidate
+
+
+def _release_output(path: Path) -> None:
+    with _ALLOCATE_LOCK:
+        _ALLOCATED.discard(path)
 
 
 def _remove_quietly(path: Path | None) -> None:
@@ -402,7 +466,7 @@ def _download_thumbnail(info: dict[str, Any], work_dir: Path) -> Path | None:
             out.write(response.read())
         convert = subprocess.run(
             ["ffmpeg", "-y", "-loglevel", "error", "-i", str(raw),
-             "-frames:v", "1", "-q:v", "2", str(jpg)],
+             "-frames:v", "1", "-q:v", "2", "-f", "mjpeg", str(jpg)],
             capture_output=True,
             text=True,
             timeout=120,
@@ -436,7 +500,7 @@ def _postprocess_track(
     work_dir = soundcloud_dir / STAGING_DIRNAME / str(info["id"])
     work_dir.mkdir(parents=True, exist_ok=True)
     cover = _download_thumbnail(info, work_dir)
-    tmp_output = output_path.with_suffix(".mp3.part")
+    tmp_output = output_path.with_name(output_path.name + ".part")
 
     artist = _clean_metadata(
         info.get("uploader") or info.get("artist") or info.get("creator"),
@@ -457,6 +521,7 @@ def _postprocess_track(
     else:
         cmd += ["-map", "0:a:0"]
     cmd += [
+        "-map_metadata", "-1",
         "-c:a", "libmp3lame", "-q:a", "0", "-id3v2_version", "3",
         "-metadata", f"title={title}",
         "-metadata", f"artist={artist}",
@@ -466,7 +531,10 @@ def _postprocess_track(
     ]
     if description:
         cmd += ["-metadata", f"description={description}"]
-    cmd.append(str(tmp_output))
+    # The temporary file ends in ".part", from which ffmpeg cannot infer the
+    # container - without this it refuses to start ("unable to find a suitable
+    # output format"), which failed every freshly downloaded track.
+    cmd += ["-f", "mp3", str(tmp_output)]
 
     try:
         result = subprocess.run(
@@ -481,11 +549,13 @@ def _postprocess_track(
                 "SoundCloud", f"Post-processing failed for '{title}': {message[:500]}"
             )
             _remove_quietly(tmp_output)
+            _remove_quietly(output_path)
             return False, None, False
         tmp_output.replace(output_path)
     except (OSError, subprocess.SubprocessError) as exc:
         dashboard.log_error("SoundCloud", f"Post-processing failed for '{title}': {exc}")
         _remove_quietly(tmp_output)
+        _remove_quietly(output_path)
         return False, None, False
     finally:
         _remove_quietly(raw_path)
@@ -496,6 +566,7 @@ def _postprocess_track(
         except OSError:
             pass
 
+    _release_output(output_path)
     index.add(info, output_path)
     archive.add(str(info.get("id") or ""))
     return True, output_path, False
@@ -618,11 +689,11 @@ def _download_one(
     ]
 
     dashboard.update_file(label=f"SoundCloud: {title[:60]}", percent=0, speed="", eta="")
-    had_error = False
+    error_lines: list[str] = []
     full_info: dict[str, Any] | None = None
 
     def on_line(line: str) -> None:
-        nonlocal had_error, full_info
+        nonlocal full_info
         if full_info is None and line.startswith("{"):
             try:
                 parsed = json.loads(line)
@@ -636,16 +707,28 @@ def _download_one(
             percent, speed, eta = match.groups()
             dashboard.update_file(percent=float(percent), speed=speed, eta=f"ETA {eta}")
         if _ERROR_RE.match(line):
-            had_error = True
-            dashboard.log_error("SoundCloud", line)
+            # yt-dlp prints ERROR lines it then recovers from (a format that
+            # 403s, a retried fragment). Remember them for the log, but let
+            # the exit code and the resulting file decide success.
+            error_lines.append(line)
 
-    code = run_streamed(cmd, on_line)
+    code = run_streamed(cmd, on_line, timeout=SUBPROCESS_TIMEOUT_SECONDS)
 
     candidates = sorted(
         p for p in staging_dir.glob(f"{track_id}.*")
         if p.is_file() and p.suffix.lower() not in {".part", ".tmp"}
     )
-    if had_error or code != 0:
+    audio = [p for p in candidates if p.suffix.lower() in RAW_EXTENSIONS]
+
+    if code != 0 or not audio:
+        for line in error_lines[-3:]:
+            dashboard.log_error("SoundCloud", line)
+        if code == 0 and not audio:
+            dashboard.log_error(
+                "SoundCloud",
+                f"No usable audio file was produced for '{title}' "
+                f"(got: {', '.join(p.name for p in candidates) or 'nothing'})",
+            )
         # A partially downloaded source file is useless and must not be left
         # behind for the next run to trip over.
         for path in candidates:
@@ -659,9 +742,9 @@ def _download_one(
     merged = _merge_info(info, full_info)
 
     for path in candidates:
-        if path.suffix.lower() in RAW_EXTENSIONS:
-            return True, path, merged
-    return False, None, merged
+        if path not in audio:
+            _remove_quietly(path)
+    return True, audio[0], merged
 
 
 def _drain_queue(queue: "Queue[tuple[dict[str, Any], Path] | None]") -> None:
@@ -695,7 +778,7 @@ def download_soundcloud(
     _cleanup_stale_staging(staging_dir)
     archive = _SoundCloudArchive(soundcloud_dir / ARCHIVE_FILENAME)
     index = get_index(soundcloud_dir)
-    lyrics_attempts = _LyricsAttempts(soundcloud_dir / LYRICS_ATTEMPTS_FILENAME)
+    lyrics_attempts = get_lyrics_attempts(soundcloud_dir)
 
     try:
         tracks = _discover_tracks(url, dashboard)
@@ -881,6 +964,7 @@ def download_soundcloud(
                         had_failure = True
                         dashboard.log_error("Lyrics", f"Lyrics worker failed: {exc}")
 
+            index.flush()
             dashboard.finish_file()
 
     try:
