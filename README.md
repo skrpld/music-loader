@@ -61,7 +61,7 @@ music-loader/
     ├── lyrics.py           # .lrc lyrics lookup
     ├── playlist.py         # SoundCloud .m3u8 playlist updates
     ├── runlog.py           # persistent per-run failure log
-    ├── text_utils.py       # track title cleanup
+    ├── text_utils.py       # track title cleanup, lyrics query building
     └── ui.py               # live dashboard (rich): progress bars, log, statistics
 ```
 
@@ -111,6 +111,20 @@ Interrupted runs can leave partial files in the hidden `.sc_downloads` staging
 folder; leftovers older than 24 hours are removed automatically at the start of
 the next run.
 
+## Lyrics search
+
+The lyrics search query is built from the track's real artist and title tags
+(read back from the downloaded file, or from platform metadata as a fallback)
+rather than from the filename, so a short/common title is disambiguated by
+its artist instead of matching an unrelated song.
+
+If a lyrics search finds nothing for a track, that result is remembered in a
+hidden `.sc_lyrics_attempts.json` in the SoundCloud directory. The same track
+is not searched again until 7 days have passed, so already-downloaded tracks
+with no available lyrics don't cost search time on every run. Once lyrics are
+found and saved as a `.lrc` file, that file's presence alone is enough to skip
+the track in future runs.
+
 ## Note on progress parsing
 
 SoundCloud progress and speed (yt-dlp) are parsed from the standard output
@@ -128,7 +142,8 @@ Music/
 ├── SoundCloud/
 │   ├── track files
 │   ├── SoundCloud_New.m3u8 (playlist)
-│   └── .sc_index.json (dedup index)
+│   ├── .sc_index.json (dedup index)
+│   └── .sc_lyrics_attempts.json (lyrics retry cooldown)
 └── .music-loader-logs/
     └── failures-YYYYMMDD-HHMMSS.log
 ```
