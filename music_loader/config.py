@@ -13,6 +13,13 @@ INDEX_FILENAME = ".sc_index.json"
 STAGING_DIRNAME = ".sc_downloads"
 LYRICS_PROVIDERS = ["Musixmatch", "NetEase", "Lrclib", "Genius"]
 
+# A SoundCloud title is rarely a clean "song name": the uploader is often a
+# label or a repost channel, and the real artist is hidden inside the title
+# ("Artist - Song (Official Video) [Free DL]"). One single query built from
+# uploader + raw title therefore misses very often. Instead the title is split
+# into parts and several progressively looser queries are tried in order.
+LYRICS_MAX_QUERY_VARIANTS = 4
+
 # Remembers when a lyrics search last found nothing for a track, so a track
 # whose lyrics simply aren't available anywhere isn't re-searched on every
 # single run.
@@ -21,6 +28,11 @@ LYRICS_ATTEMPTS_FILENAME = ".sc_lyrics_attempts.json"
 # How long to wait before retrying a previously-failed lyrics search for the
 # same track.
 LYRICS_RETRY_COOLDOWN_SECONDS = 7 * 24 * 60 * 60
+
+# The dedup index is rewritten in full on every save. With hundreds of tracks
+# per run that becomes the dominant cost, so writes are coalesced: at most one
+# write per this many seconds, plus a final flush at the end of a link.
+INDEX_SAVE_INTERVAL_SECONDS = 5.0
 
 # Leftovers of an interrupted run older than this are deleted at the start of
 # the next run.
