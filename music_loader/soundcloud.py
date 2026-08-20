@@ -9,7 +9,11 @@ twice.
 The producer only downloads the source audio.  Finished downloads are put into
 an internal queue and a small worker pool performs the expensive ffmpeg /
 thumbnail / metadata work.  Lyrics use a separate, independently limited pool
-so network lookups cannot stall the download producer.
+so network lookups cannot stall the download producer. A lyrics search query
+is built from the track's actual artist/title tags (read back from the file,
+falling back to platform metadata), not the filename, and a track whose
+lyrics were not found is not re-searched again until a cooldown period has
+passed, so already-downloaded tracks don't cost time on every run.
 
 Shutdown is explicit: whatever happens in the producer (an unexpected error or
 Ctrl+C), the workers always receive their stop signals, so the run can never
@@ -24,7 +28,7 @@ import threading
 import time
 import urllib.request
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 from queue import Empty, Full, Queue
 from typing import Any
@@ -44,7 +48,7 @@ from .config import (
     AUDIO_EXTENSIONS,
     INDEX_FILENAME,
     LYRICS_ATTEMPTS_FILENAME,
-    LYRICS_RETRY_DAYS,
+    LYRICS_RETRY_COOLDOWN_SECONDS,
     RAW_EXTENSIONS,
     STAGING_DIRNAME,
     STALE_STAGING_SECONDS,
@@ -254,57 +258,43 @@ class _SoundCloudArchive:
 
 
 class _LyricsAttempts:
-    """Remembers the last time a *failed* lyrics search was made for a
-    SoundCloud track id, so a run doesn't re-search the same still-missing
-    lyrics on every single run. Without this, a library that is mostly
-    "already downloaded" still pays the full lyrics-search cost every time,
-    since a missing .lrc alone can't tell "never looked" apart from
-    "looked and it isn't out there".
+    """Remembers when a lyrics search last found nothing for a track.
+
+    Without this, a track whose lyrics genuinely aren't available anywhere
+    gets searched again on every single run, which adds up across a large
+    already-downloaded library. A failed lookup is skipped until
+    `LYRICS_RETRY_COOLDOWN_SECONDS` has passed, after which it's tried again
+    in case the lyrics provider has since added it.
     """
 
-    def __init__(self, path: Path, retry_after_days: int):
+    def __init__(self, path: Path):
         self.path = path
-        self.retry_after = timedelta(days=retry_after_days)
         self._lock = threading.Lock()
-        self._data: dict[str, str] = self._load()
-
-    def _load(self) -> dict[str, str]:
         try:
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            self._data: dict[str, str] = raw if isinstance(raw, dict) else {}
         except (FileNotFoundError, OSError, json.JSONDecodeError):
-            return {}
-        return raw if isinstance(raw, dict) else {}
+            self._data = {}
 
-    def should_attempt(self, track_id: str) -> bool:
-        """True if this track has never failed a search, or failed one long
-        enough ago that it's worth checking again."""
+    def should_skip(self, track_id: str) -> bool:
         if not track_id:
-            return True
+            return False
         with self._lock:
             last = self._data.get(track_id)
         if not last:
-            return True
+            return False
         try:
-            last_at = datetime.fromisoformat(last)
+            last_attempt = datetime.fromisoformat(last)
         except ValueError:
-            return True
-        return datetime.now(timezone.utc) - last_at >= self.retry_after
+            return False
+        return (datetime.now() - last_attempt).total_seconds() < LYRICS_RETRY_COOLDOWN_SECONDS
 
     def record(self, track_id: str) -> None:
         if not track_id:
             return
         with self._lock:
-            self._data[track_id] = datetime.now(timezone.utc).isoformat()
+            self._data[track_id] = datetime.now().isoformat()
             self._save_locked()
-
-    def clear(self, track_id: str) -> None:
-        """Drops the remembered failure once a search succeeds, so a
-        provider that adds the lyrics later doesn't stay skipped forever."""
-        if not track_id:
-            return
-        with self._lock:
-            if self._data.pop(track_id, None) is not None:
-                self._save_locked()
 
     def _save_locked(self) -> None:
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
@@ -312,7 +302,7 @@ class _LyricsAttempts:
             tmp.write_text(json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")
             tmp.replace(self.path)
         except OSError:
-            # A failing write here must never abort a finished download.
+            # A failing write must never abort a finished download.
             try:
                 tmp.unlink(missing_ok=True)
             except OSError:
@@ -322,6 +312,28 @@ class _LyricsAttempts:
 def _clean_metadata(value: Any, fallback: str = "") -> str:
     text = str(value or fallback).replace("\x00", "").strip()
     return text[:1000]
+
+
+def _read_audio_tags(audio_path: Path) -> tuple[str, str]:
+    """Returns (artist, title) read back from the file's own embedded tags.
+
+    These are the most reliable source for a lyrics search query: they were
+    written from the track's full metadata during post-processing, unlike
+    the flat playlist listing used for already-downloaded tracks, which may
+    have an empty or unreliable title/uploader.
+    """
+    if mutagen_file is None:
+        return "", ""
+    try:
+        audio = mutagen_file(audio_path, easy=True)
+        if audio is None:
+            return "", ""
+        tags = audio.tags or {}
+        title = tags.get("title", [""])[0]
+        artist = tags.get("artist", [""])[0]
+        return artist, title
+    except Exception:
+        return "", ""
 
 
 def _final_name(info: dict[str, Any]) -> str:
@@ -683,9 +695,7 @@ def download_soundcloud(
     _cleanup_stale_staging(staging_dir)
     archive = _SoundCloudArchive(soundcloud_dir / ARCHIVE_FILENAME)
     index = get_index(soundcloud_dir)
-    lyrics_attempts = _LyricsAttempts(
-        soundcloud_dir / LYRICS_ATTEMPTS_FILENAME, LYRICS_RETRY_DAYS
-    )
+    lyrics_attempts = _LyricsAttempts(soundcloud_dir / LYRICS_ATTEMPTS_FILENAME)
 
     try:
         tracks = _discover_tracks(url, dashboard)
@@ -716,18 +726,23 @@ def download_soundcloud(
             return True
 
         track_id = str(info.get("id") or "")
-        if not lyrics_attempts.should_attempt(track_id):
-            # Already failed a search recently for this exact track - skip
-            # the network round-trip instead of repeating a known miss.
+        if track_id and lyrics_attempts.should_skip(track_id):
+            # Already tried and failed recently for this exact track - don't
+            # spend time searching again until the cooldown passes.
             dashboard.record_lyrics(False)
             return False
 
-        artist = info.get("uploader") or info.get("artist") or info.get("creator")
-        title = info.get("title") or info.get("track")
-        found = fetch_lyrics(audio_path, dashboard, artist=artist, title=title)
-        if found:
-            lyrics_attempts.clear(track_id)
-        else:
+        # The file's own embedded tags (written during post-processing) are
+        # the most reliable source; the flat-listing `info` is a fallback
+        # for cases where tags can't be read.
+        artist, title = _read_audio_tags(audio_path)
+        if not title:
+            title = _clean_metadata(info.get("title"))
+        if not artist:
+            artist = _clean_metadata(info.get("uploader") or info.get("artist") or info.get("creator"))
+
+        found = fetch_lyrics(audio_path, artist, title, dashboard)
+        if not found and track_id:
             lyrics_attempts.record(track_id)
         dashboard.record_lyrics(found)
         return found
@@ -758,9 +773,7 @@ def download_soundcloud(
                         dashboard.record_track("soundcloud", "done")
                         dashboard.log(f"[SoundCloud] Ready: {title}")
                     with state_lock:
-                        lyrics_futures.append(
-                            lyrics_pool.submit(_lyrics_task, info, final_path)
-                        )
+                        lyrics_futures.append(lyrics_pool.submit(_lyrics_task, info, final_path))
                 except Exception as exc:
                     with state_lock:
                         had_failure = True
@@ -799,9 +812,7 @@ def download_soundcloud(
                     dashboard.record_track("soundcloud", "skipped")
                     dashboard.log(f"[SoundCloud] Already exists: {existing.name}")
                     with state_lock:
-                        lyrics_futures.append(
-                            lyrics_pool.submit(_lyrics_task, info, existing)
-                        )
+                        lyrics_futures.append(lyrics_pool.submit(_lyrics_task, info, existing))
                     continue
 
                 try:
