@@ -12,10 +12,15 @@ we cannot parse still shows real progress instead of "no output".
 
 A link can be a single track, an album, a playlist, or an entire artist's
 discography - the latter can mean spotdl needs a while to enumerate tracks
-before it prints anything at all.
+before it prints anything at all. An artist link also issues far more
+Spotify API calls than a single album, which is exactly the case where
+spotDL's shared default API credentials get rate limited or rejected. The
+last lines spotdl printed are therefore kept and written to the failure log,
+so the real reason is visible instead of only an exit code.
 """
 import re
 import time
+from collections import deque
 from pathlib import Path
 
 from .config import AUDIO_EXTENSIONS, SUBPROCESS_TIMEOUT_SECONDS
@@ -26,15 +31,16 @@ _DOWNLOADING_RE = re.compile(r"^Downloading[:\s]+(.+)$", re.IGNORECASE)
 _PERCENT_RE = re.compile(r"(\d{1,3})%")
 _DOWNLOADED_RE = re.compile(r'^Downloaded\b[:\s]*"?(.*?)"?\s*[:.]?\s*$', re.IGNORECASE)
 _SKIPPING_RE = re.compile(r"^Skipping\b", re.IGNORECASE)
-_ERROR_RE = re.compile(r"^(Error|LookupError|AudioProviderError|Failed)\b", re.IGNORECASE)
+_ERROR_RE = re.compile(r"^(Error|LookupError|Failed)\b", re.IGNORECASE)
 
 _HEARTBEAT_INTERVAL = 20.0  # seconds between "still working" log lines
+_TAIL_LINES = 20  # how much of spotdl's output is kept for failure reports
 
-# spotDL's own template variables. The extension placeholder is
-# "{output-ext}"; an unknown placeholder such as "{ext}" is left in the name
-# verbatim, which produces files ending in a bogus extension that ffmpeg
-# cannot even write ("unable to find a suitable output format") - every
-# track of the link then fails and nothing appears in the library.
+# spotdl's own file-extension variable. Any other name (for example "{ext}")
+# is not a known template variable, so spotdl leaves it in the file name
+# verbatim: files end up called "01 - Title.{ext}" instead of ".mp3", which
+# no player recognizes, the library scan cannot see, and every later run
+# downloads again because the expected .mp3 is never there.
 _OUTPUT_TEMPLATE = "{artist} - {album}/{track-number} - {title}.{output-ext}"
 
 
@@ -58,34 +64,60 @@ def _count_new_files(music_dir: Path, since: float) -> int:
     return count
 
 
-def download_spotify(url: str, music_dir: Path, dashboard) -> bool:
+def _build_command(
+    url: str,
+    music_dir: Path,
+    client_id: str | None,
+    client_secret: str | None,
+) -> list[str]:
+    cmd = [
+        "spotdl", "download", url,
+        "--output", f"{music_dir}/{_OUTPUT_TEMPLATE}",
+        "--format", "mp3",
+        "--bitrate", "320k",
+        "--lyrics", "genius",
+        "--generate-lrc",
+        "--overwrite", "skip",
+        # Plain, line-based output instead of the redrawn live progress area.
+        "--simple-tui",
+        # Makes spotdl list the tracks it failed on at the end instead of
+        # letting them disappear with the progress area.
+        "--print-errors",
+    ]
+    if client_id and client_secret:
+        # Own Spotify application credentials. The shared defaults are the
+        # usual reason a large query (an artist discography) fails with 403
+        # or a rate limit while a single track still works.
+        # `--no-cache` is needed too: spotdl otherwise reuses the token
+        # cached from the previous credentials until it expires, so the new
+        # ones would silently have no effect.
+        cmd += [
+            "--client-id", client_id,
+            "--client-secret", client_secret,
+            "--no-cache",
+        ]
+    return cmd
+
+
+def download_spotify(
+    url: str,
+    music_dir: Path,
+    dashboard,
+    client_id: str | None = None,
+    client_secret: str | None = None,
+) -> bool:
     dashboard.log(f"[Spotify] Starting: {url}")
     dashboard.start_file(label="Spotify: preparing...")
 
-    output_template = f"{music_dir}/{_OUTPUT_TEMPLATE}"
-    cmd = [
-        "spotdl", "download", url,
-        "--output", output_template,
-        "--format", "mp3",
-        "--bitrate", "320k",
-        # "synced" is what actually produces timestamped .lrc files;
-        # genius/musixmatch stay as fallbacks for plain embedded lyrics.
-        "--lyrics", "synced", "musixmatch", "genius",
-        "--generate-lrc",
-        "--overwrite", "skip",
-        # Print the reason a song could not be downloaded instead of
-        # failing silently, so the failure log says something useful.
-        "--print-errors",
-        # Plain, line-based output instead of the redrawn live progress area.
-        "--simple-tui",
-    ]
+    cmd = _build_command(url, music_dir, client_id, client_secret)
 
     started = time.time()
     total_tracks = 0
     done_tracks = 0
     first_output_seen = False
-    last_heartbeat = 0.0  # monotonic timestamp of the last heartbeat line
+    last_heartbeat_at = 0.0
     last_seen_on_disk = 0
+    tail: deque[str] = deque(maxlen=_TAIL_LINES)
 
     def _sync_percent() -> None:
         if total_tracks > 0:
@@ -95,6 +127,7 @@ def download_spotify(url: str, music_dir: Path, dashboard) -> bool:
     def on_line(line: str) -> None:
         nonlocal total_tracks, done_tracks, first_output_seen
         first_output_seen = True
+        tail.append(line)
 
         found = _FOUND_RE.search(line)
         if found:
@@ -137,15 +170,16 @@ def download_spotify(url: str, music_dir: Path, dashboard) -> bool:
             dashboard.update_file(percent=min(100, int(percent_match.group(1))))
 
     def on_idle(idle_seconds: float) -> None:
-        nonlocal last_heartbeat, last_seen_on_disk
+        nonlocal last_heartbeat_at, last_seen_on_disk
+        # Throttled against the wall clock, not against `idle_seconds`: the
+        # idle counter restarts whenever the child prints something, so
+        # comparing the two made the heartbeat go permanently silent after
+        # the first long quiet stretch - which is exactly when a long
+        # discography run needs it most.
         now = time.monotonic()
-        # Compared against a real timestamp, not against the idle counter:
-        # the counter restarts from zero every time the child prints
-        # something, which used to silence the heartbeat for good after the
-        # first long quiet stretch.
-        if now - last_heartbeat < _HEARTBEAT_INTERVAL:
+        if now - last_heartbeat_at < _HEARTBEAT_INTERVAL:
             return
-        last_heartbeat = now
+        last_heartbeat_at = now
 
         # spotdl may be silent while it is either resolving the link or
         # actually writing files. Looking at the folder tells the difference.
@@ -170,20 +204,37 @@ def download_spotify(url: str, music_dir: Path, dashboard) -> bool:
                 f"[Spotify] Resolving the link, no output yet ({int(idle_seconds)}s)..."
             )
         else:
-            dashboard.log(
-                f"[Spotify] Working, no new output for {int(idle_seconds)}s "
-                f"and no file written yet..."
-            )
+            dashboard.log(f"[Spotify] Working, no output for {int(idle_seconds)}s...")
 
     returncode = run_streamed(cmd, on_line, on_idle=on_idle, timeout=SUBPROCESS_TIMEOUT_SECONDS)
     dashboard.finish_file()
+
+    def report_tail() -> None:
+        """Writes the last lines spotdl printed into the failure log.
+
+        Without this a failed artist/playlist link left nothing but an exit
+        code, while the actual cause (an HTTP 403 from the Spotify API, a
+        rate limit, a missing dependency) was printed right before it.
+        """
+        for line in list(tail)[-6:]:
+            dashboard.log_error("Spotify", f"spotdl: {line[:300]}")
 
     if returncode == -1:
         dashboard.log_error(
             "Spotify", f"Timed out with no response while processing '{url}'"
         )
+        report_tail()
         return False
     if returncode != 0:
         dashboard.log_error("Spotify", f"spotdl exited with code {returncode} for '{url}'")
+        report_tail()
+        if not client_id or not client_secret:
+            dashboard.log_error(
+                "Spotify",
+                "Large queries such as an artist discography often fail with spotDL's "
+                "shared API credentials. Provide your own with --spotify-client-id / "
+                "--spotify-client-secret, or via the SPOTIFY_CLIENT_ID / "
+                "SPOTIFY_CLIENT_SECRET environment variables.",
+            )
         return False
     return True

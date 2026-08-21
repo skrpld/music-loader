@@ -1,11 +1,19 @@
 """Command-line entry point: argument parsing and the main link-processing loop."""
 import argparse
+import os
+import shlex
 import sys
 from pathlib import Path
 
 from rich.console import Console
 
-from .config import AppConfig, LOGS_DIRNAME
+from . import __version__
+from .config import (
+    AppConfig,
+    LOGS_DIRNAME,
+    SPOTIFY_CLIENT_ID_ENV,
+    SPOTIFY_CLIENT_SECRET_ENV,
+)
 from .deps import check_dependencies
 from .runlog import RunLog
 from .soundcloud import download_soundcloud
@@ -19,6 +27,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         description="Downloads music with metadata from Spotify and SoundCloud, "
                      "fetches synced lyrics, and prepares the library for Symfonium.",
     )
+    parser.add_argument("--version", action="version", version=f"music-loader {__version__}")
     parser.add_argument(
         "source",
         nargs="*",
@@ -38,6 +47,20 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Number of parallel lyrics workers (default: 2).",
     )
     parser.add_argument(
+        "--spotify-client-id",
+        default=None,
+        help=f"Spotify application client id passed to spotdl. Falls back to the "
+             f"{SPOTIFY_CLIENT_ID_ENV} environment variable. Recommended for large "
+             f"queries such as an artist discography, which frequently fail with "
+             f"spotDL's shared default credentials.",
+    )
+    parser.add_argument(
+        "--spotify-client-secret",
+        default=None,
+        help=f"Spotify application client secret passed to spotdl. Falls back to the "
+             f"{SPOTIFY_CLIENT_SECRET_ENV} environment variable.",
+    )
+    parser.add_argument(
         "-o", "--output",
         default=None,
         help="Target Music folder. If omitted, you will be prompted interactively.",
@@ -47,9 +70,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def collect_links(source_args: list[str], console: Console) -> list[str]:
     if not source_args:
-        console.print("[bold]Enter a link, or a path to a links.txt file:[/bold]")
+        console.print("[bold]Enter a link (or several, separated by spaces), "
+                      "or a path to a links.txt file:[/bold]")
         entry = input("> ").strip()
-        source_args = [entry] if entry else []
+        # A pasted line may hold more than one link; a quoted path with
+        # spaces still stays in one piece thanks to shlex.
+        if entry:
+            try:
+                source_args = shlex.split(entry)
+            except ValueError:
+                source_args = [entry]
+        else:
+            source_args = []
 
     links: list[str] = []
     seen: set[str] = set()
@@ -87,6 +119,21 @@ def resolve_output(output_arg: str | None, console: Console) -> str:
     return entry or "./Music"
 
 
+def resolve_spotify_credentials(args: argparse.Namespace) -> tuple[str | None, str | None]:
+    """Command-line values win, the environment is the fallback.
+
+    Both halves are required: spotdl ignores one without the other, so a
+    half-filled pair is treated as no credentials at all.
+    """
+    client_id = args.spotify_client_id or os.environ.get(SPOTIFY_CLIENT_ID_ENV) or None
+    client_secret = (
+        args.spotify_client_secret or os.environ.get(SPOTIFY_CLIENT_SECRET_ENV) or None
+    )
+    if not client_id or not client_secret:
+        return None, None
+    return client_id, client_secret
+
+
 def link_kind(link: str) -> str | None:
     """Returns 'spotify', 'soundcloud', or None for unsupported links."""
     lowered = link.lower()
@@ -105,7 +152,13 @@ def process_links(links: list[str], config: AppConfig, dashboard: Dashboard) -> 
         kind = link_kind(link)
         try:
             if kind == "spotify":
-                ok = download_spotify(link, config.music_dir, dashboard)
+                ok = download_spotify(
+                    link,
+                    config.music_dir,
+                    dashboard,
+                    client_id=config.spotify_client_id,
+                    client_secret=config.spotify_client_secret,
+                )
                 dashboard.record("spotify", ok)
             elif kind == "soundcloud":
                 ok = download_soundcloud(
@@ -189,6 +242,7 @@ def main(argv: list[str] | None = None) -> int:
     config = AppConfig.from_output_dir(Path(output))
     config.soundcloud_postprocess_workers = max(1, args.soundcloud_workers)
     config.lyrics_workers = max(1, args.lyrics_workers)
+    config.spotify_client_id, config.spotify_client_secret = resolve_spotify_credentials(args)
     try:
         config.ensure_dirs()
     except OSError as exc:

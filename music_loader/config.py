@@ -48,6 +48,13 @@ STALE_STAGING_SECONDS = 24 * 60 * 60
 # still easy to find (`ls -a`).
 LOGS_DIRNAME = ".music-loader-logs"
 
+# Environment variables checked when no Spotify credentials are passed on the
+# command line. spotDL ships shared default credentials that are frequently
+# rate limited or rejected on large queries (an artist discography), so own
+# application credentials are the reliable path for those.
+SPOTIFY_CLIENT_ID_ENV = "SPOTIFY_CLIENT_ID"
+SPOTIFY_CLIENT_SECRET_ENV = "SPOTIFY_CLIENT_SECRET"
+
 # Long-running external commands (spotdl/yt-dlp) are killed if they produce
 # no output *and* don't exit within this many seconds. Set generously high
 # because a single link can be an entire artist discography (hundreds of
@@ -62,6 +69,8 @@ class AppConfig:
     soundcloud_dir: Path
     soundcloud_postprocess_workers: int = 4
     lyrics_workers: int = 2
+    spotify_client_id: str | None = None
+    spotify_client_secret: str | None = None
 
     @classmethod
     def from_output_dir(cls, output_dir: Path) -> "AppConfig":
