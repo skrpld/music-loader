@@ -566,79 +566,87 @@ def _postprocess_track(
         _remove_quietly(raw_path)
         return True, existing, True
 
+    track_id = str(info.get("id") or "")
     output_path = _allocate_output(soundcloud_dir, info)
-    work_dir = soundcloud_dir / STAGING_DIRNAME / str(info["id"])
-    work_dir.mkdir(parents=True, exist_ok=True)
-    cover = _download_thumbnail(info, work_dir)
-    tmp_output = output_path.with_name(output_path.name + ".part")
-
-    artist = _clean_metadata(
-        info.get("uploader") or info.get("artist") or info.get("creator"),
-        "Unknown Artist",
-    )
-    title = _clean_metadata(info.get("title"), "Unknown Title")
-    album = _track_album(info, title)
-    webpage_url = _clean_metadata(info.get("webpage_url"))
-    description = _clean_metadata(info.get("description"))
-
-    cmd = [
-        "ffmpeg", "-y", "-loglevel", "error",
-        "-i", str(raw_path),
-    ]
-    if cover is not None:
-        cmd += ["-i", str(cover), "-map", "0:a:0", "-map", "1:v:0",
-                "-c:v", "mjpeg", "-disposition:v:0", "attached_pic"]
-    else:
-        cmd += ["-map", "0:a:0"]
-    cmd += [
-        "-map_metadata", "-1",
-        "-c:a", "libmp3lame", "-q:a", "0", "-id3v2_version", "3",
-        "-metadata", f"title={title}",
-        "-metadata", f"artist={artist}",
-        "-metadata", f"album={album}",
-        "-metadata", f"album_artist={artist}",
-        "-metadata", f"comment={webpage_url}",
-    ]
-    if description:
-        cmd += ["-metadata", f"description={description}"]
-    # The temporary file ends in ".part", from which ffmpeg cannot infer the
-    # container - without this it refuses to start ("unable to find a suitable
-    # output format"), which failed every freshly downloaded track.
-    cmd += ["-f", "mp3", str(tmp_output)]
-
+    # Every exit path below has to hand the reserved name back: a failed
+    # conversion used to leave it reserved for the rest of the run, so a
+    # retry of the same track (or another track with the same title) was
+    # pushed to a "[id]"/"(2)" file name for no reason.
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=SUBPROCESS_TIMEOUT_SECONDS,
+        work_dir = soundcloud_dir / STAGING_DIRNAME / (track_id or "unknown")
+        work_dir.mkdir(parents=True, exist_ok=True)
+        cover = _download_thumbnail(info, work_dir)
+        tmp_output = output_path.with_name(output_path.name + ".part")
+
+        artist = _clean_metadata(
+            info.get("uploader") or info.get("artist") or info.get("creator"),
+            "Unknown Artist",
         )
-        if result.returncode != 0 or not tmp_output.exists():
-            message = (result.stderr or result.stdout or "ffmpeg failed").strip()
-            dashboard.log_error(
-                "SoundCloud", f"Post-processing failed for '{title}': {message[:500]}"
+        title = _clean_metadata(info.get("title"), "Unknown Title")
+        album = _track_album(info, title)
+        webpage_url = _clean_metadata(info.get("webpage_url"))
+        description = _clean_metadata(info.get("description"))
+
+        cmd = [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-i", str(raw_path),
+        ]
+        if cover is not None:
+            cmd += ["-i", str(cover), "-map", "0:a:0", "-map", "1:v:0",
+                    "-c:v", "mjpeg", "-disposition:v:0", "attached_pic"]
+        else:
+            cmd += ["-map", "0:a:0"]
+        cmd += [
+            "-map_metadata", "-1",
+            "-c:a", "libmp3lame", "-q:a", "0", "-id3v2_version", "3",
+            "-metadata", f"title={title}",
+            "-metadata", f"artist={artist}",
+            "-metadata", f"album={album}",
+            "-metadata", f"album_artist={artist}",
+            "-metadata", f"comment={webpage_url}",
+        ]
+        if description:
+            cmd += ["-metadata", f"description={description}"]
+        # The temporary file ends in ".part", from which ffmpeg cannot infer
+        # the container - without this it refuses to start ("unable to find a
+        # suitable output format"), which failed every freshly downloaded
+        # track.
+        cmd += ["-f", "mp3", str(tmp_output)]
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=SUBPROCESS_TIMEOUT_SECONDS,
             )
+            if result.returncode != 0 or not tmp_output.exists():
+                message = (result.stderr or result.stdout or "ffmpeg failed").strip()
+                dashboard.log_error(
+                    "SoundCloud", f"Post-processing failed for '{title}': {message[:500]}"
+                )
+                _remove_quietly(tmp_output)
+                _remove_quietly(output_path)
+                return False, None, False
+            tmp_output.replace(output_path)
+        except (OSError, subprocess.SubprocessError) as exc:
+            dashboard.log_error("SoundCloud", f"Post-processing failed for '{title}': {exc}")
             _remove_quietly(tmp_output)
             _remove_quietly(output_path)
             return False, None, False
-        tmp_output.replace(output_path)
-    except (OSError, subprocess.SubprocessError) as exc:
-        dashboard.log_error("SoundCloud", f"Post-processing failed for '{title}': {exc}")
-        _remove_quietly(tmp_output)
-        _remove_quietly(output_path)
-        return False, None, False
+        finally:
+            _remove_quietly(raw_path)
+            try:
+                for child in work_dir.iterdir():
+                    child.unlink(missing_ok=True)
+                work_dir.rmdir()
+            except OSError:
+                pass
     finally:
-        _remove_quietly(raw_path)
-        try:
-            for child in work_dir.iterdir():
-                child.unlink(missing_ok=True)
-            work_dir.rmdir()
-        except OSError:
-            pass
+        _release_output(output_path)
 
-    _release_output(output_path)
     index.add(info, output_path)
-    archive.add(str(info.get("id") or ""))
+    archive.add(track_id)
     return True, output_path, False
 
 
