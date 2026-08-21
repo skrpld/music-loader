@@ -86,42 +86,59 @@ music-loader links.txt -o /path/to/Music \
 
 Defaults: 4 post-processing workers, 2 lyrics workers.
 
-## Child process output
+## Spotify API credentials
 
-Both spotdl and yt-dlp are Python programs. When their standard output is a
-pipe rather than a terminal, CPython block-buffers it, so their messages only
-arrive in multi-kilobyte chunks — which during a long download looks exactly
-like a hang. Children are therefore started with unbuffered output
-(`PYTHONUNBUFFERED`) and with stdin closed, so an unexpected interactive prompt
-can never block a run forever.
+spotDL ships shared default Spotify application credentials. They are fine for
+a single track or a small album, but a large query — most notably an entire
+artist discography — issues far more API calls and regularly ends in an HTTP
+403 or a rate limit, so the link fails as a whole.
 
-Child output is consumed by a dedicated reader thread, so a burst of lines is
-never left sitting in a buffer waiting for the next readiness event. The
-subprocess timeout is an *idle* timeout: a job is killed only if it neither
-prints anything nor exits.
+Create an application at <https://developer.spotify.com/dashboard> and pass its
+credentials:
+
+```bash
+music-loader "https://open.spotify.com/artist/..." -o /path/to/Music \
+  --spotify-client-id YOUR_ID \
+  --spotify-client-secret YOUR_SECRET
+```
+
+The `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` environment variables are
+used when the flags are omitted. Both halves are required; a half-filled pair
+is treated as no credentials at all. When credentials are supplied, spotdl is
+run with `--no-cache` as well, because it otherwise keeps using the token
+cached from the previous credentials until that token expires.
+
+Whenever spotdl exits with an error, the last lines it printed are written to
+the failure log, so the actual cause (403, rate limit, missing dependency) is
+visible instead of only an exit code.
+
+## Spotify output template
+
+Files are named with spotDL's own template variables:
+
+```
+{artist} - {album}/{track-number} - {title}.{output-ext}
+```
+
+The extension variable is `{output-ext}`. Any other name is not a template
+variable, so spotDL writes it into the file name verbatim — files end up called
+`01 - Title.{ext}`, which no player recognizes, the library scan cannot see,
+and every later run downloads again because the expected `.mp3` never appears.
 
 ## Spotify progress
 
 spotDL's default interface redraws a live progress area instead of printing
 plain lines, so from the outside a run can look completely silent for minutes
-while tracks are already being written to disk. `--simple-tui` and an explicit
-`--log-level INFO` are therefore passed to spotdl: it emits one line per event,
-which the parser turns into track counters and the overall progress bar.
-
-Every line spotdl prints is forwarded to the Activity panel, including the ones
-the parser does not recognize. Showing only recognized lines meant that an
-unexpected spotdl version, a credentials problem or a "no results" message was
-swallowed silently and the run simply looked frozen.
+while tracks are already being written to disk. `--simple-tui` is therefore
+passed to spotdl: it emits one line per event, which the parser turns into
+track counters and the overall progress bar.
 
 As a second safety net, whenever spotdl stays quiet the target folder is
 checked for audio files created since the run started, so the dashboard shows
 real progress ("N file(s) written so far") instead of claiming there is no
-output.
-
-A link that finishes with exit code 0 but yields no tracks at all is reported
-as a failure, not as success: that combination means spotdl could not resolve
-the link (wrong link type for the installed version, Spotify API/token issue),
-and silently counting it as "ok" hid the fact that no music arrived.
+output. That heartbeat is throttled against the wall clock, so it keeps
+reporting during a long discography run instead of going silent after the first
+quiet stretch.
 
 ## SoundCloud album tags
 
@@ -165,7 +182,9 @@ downloads.
 Conversion writes to a temporary `.part` file and the target container is
 passed to ffmpeg explicitly (`-f mp3`), because ffmpeg cannot infer a format
 from the `.part` extension. Output names are reserved in memory while a worker
-converts, so two tracks with the same title cannot overwrite each other.
+converts, so two tracks with the same title cannot overwrite each other; a
+reservation is always released afterwards, including when the conversion fails,
+so a retry keeps the plain file name instead of drifting to `<title> [id].mp3`.
 
 A hidden `.sc_index.json` in the SoundCloud directory maps the SoundCloud track
 ID to the actual local file. A legacy compatibility scan of embedded
@@ -215,6 +234,11 @@ SoundCloud progress and speed (yt-dlp) are parsed from the standard output
 format `[download] 45.2% of 3.45MiB at 1.23MiB/s ETA 00:02`, which is stable.
 Spotify progress is derived from spotdl's simple-TUI lines (found / downloaded /
 skipped) plus the file-count fallback described above.
+
+Child output is consumed by a dedicated reader thread, so a burst of lines is
+never left sitting in a buffer waiting for the next readiness event. The
+subprocess timeout is an *idle* timeout: a job is killed only if it neither
+prints anything nor exits.
 
 ## Output
 
