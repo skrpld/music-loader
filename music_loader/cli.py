@@ -41,6 +41,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         prog="music-loader",
         description="Downloads music with metadata from Spotify and SoundCloud, "
                      "fetches verified lyrics, and prepares the library for Symfonium.",
+        epilog="Server mode for the Android app: music-loader serve -o <Music folder> "
+               "(see music-loader serve --help).",
     )
     parser.add_argument("--version", action="version", version=f"music-loader {__version__}")
     parser.add_argument(
@@ -267,8 +269,13 @@ def print_summary(console: Console, dashboard: Dashboard) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(argv if argv is not None else sys.argv[1:])
+    if argv[:1] == ["serve"]:
+        from .server import main as serve_main
+        return serve_main(argv[1:])
+
     console = Console()
-    args = parse_args(argv if argv is not None else sys.argv[1:])
+    args = parse_args(argv)
 
     if not check_dependencies(console):
         return 1

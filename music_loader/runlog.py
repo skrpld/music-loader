@@ -16,6 +16,11 @@ from pathlib import Path
 _SECRET_RE = re.compile(r"(/s-|secret_token=)[A-Za-z0-9]+")
 
 
+def redact_secrets(text: str) -> str:
+    """Masks private SoundCloud tokens anywhere in a free-form message."""
+    return _SECRET_RE.sub(r"\1***", str(text))
+
+
 class RunLog:
     """Append-only failure log for a single run of music-loader."""
 
@@ -30,7 +35,7 @@ class RunLog:
         """Appends one failure line. `source` is a short tag such as
         'Spotify', 'SoundCloud', or 'Lyrics'."""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        message = _SECRET_RE.sub(r"\1***", str(message))
+        message = redact_secrets(message)
         line = f"[{timestamp}] [{source}] {message}\n"
         # Called from several worker threads at once, so the write is
         # serialized. Opened/closed per call (not kept open) so the file is

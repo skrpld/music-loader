@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Navigation -->
+    <string name="nav_download">Загрузка</string>
+    <string name="nav_jobs">Задания</string>
+    <string name="nav_settings">Настройки</string>
+
+    <!-- Connection -->
+    <string name="connection_connecting">Подключение…</string>
+    <string name="connection_online">Сервер на связи</string>
+    <string name="connection_busy">Идёт загрузка</string>
+    <string name="connection_offline">Нет связи с сервером</string>
+    <string name="connection_offline_body">Проверьте, что music-loader serve запущен и доступен с этого устройства.</string>
+    <string name="connection_not_configured">Сервер не настроен</string>
+    <string name="connection_not_configured_body">Укажите адрес и токен, которые выводит music-loader serve.</string>
+    <string name="connection_unauthorized">Неверный токен</string>
+    <string name="connection_unauthorized_body">Сервер отклонил токен. Скопируйте его заново из вывода сервера.</string>
+
+    <!-- Common actions -->
+    <string name="action_configure">Настроить</string>
+    <string name="action_open_settings">Настройки</string>
+    <string name="action_retry">Повторить</string>
+    <string name="action_open">Открыть</string>
+    <string name="action_paste">Вставить</string>
+    <string name="action_clear">Очистить</string>
+    <string name="action_copy">Копировать</string>
+    <string name="action_back">Назад</string>
+    <string name="action_add_links">Добавить ссылки</string>
+    <string name="action_cancel_job">Отменить</string>
+    <string name="action_delete_job">Удалить</string>
+    <string name="action_keep">Оставить</string>
+    <string name="action_test">Проверить</string>
+    <string name="action_save">Сохранить</string>
+    <string name="action_saved">Сохранено</string>
+    <string name="action_show_token">Показать токен</string>
+    <string name="action_hide_token">Скрыть токен</string>
+    <string name="action_failed">Не удалось выполнить действие: %1$s</string>
+
+    <!-- Download -->
+    <string name="links_title">Ссылки</string>
+    <string name="links_label">Ссылки Spotify или SoundCloud</string>
+    <string name="links_placeholder">https://open.spotify.com/album/…\nhttps://soundcloud.com/…</string>
+    <string name="links_spotify_count">Spotify: %1$d</string>
+    <string name="links_soundcloud_count">SoundCloud: %1$d</string>
+    <string name="links_unknown_count">Не распознано: %1$d</string>
+    <string name="lyrics_title">Тексты песен</string>
+    <string name="lyrics_strict">Строгий</string>
+    <string name="lyrics_loose">Мягкий</string>
+    <string name="lyrics_off">Выкл.</string>
+    <string name="lyrics_strict_description">Только точное совпадение исполнителя, названия, версии и длительности (±2 с). Лучше без текста, чем с текстом другой песни.</string>
+    <string name="lyrics_loose_description">Нечёткое совпадение исполнителя и названия, расхождение длительности до 10 с. Если тайминги могут не совпасть, сохраняется только текст.</string>
+    <string name="lyrics_off_description">Тексты не ищутся.</string>
+    <string name="options_title">Параметры</string>
+    <string name="option_recheck">Перепроверить библиотеку</string>
+    <string name="option_recheck_description">Применить текущие правила к уже скачанным трекам: теги, папки, битые файлы, тексты.</string>
+    <string name="option_reposts">Репосты SoundCloud</string>
+    <string name="option_likes">Лайки SoundCloud</string>
+    <string name="option_profile_only">Только для ссылок на профиль</string>
+    <string name="download_submit">Добавить в очередь</string>
+    <string name="download_submitted">Задание добавлено в очередь</string>
+    <string name="download_submitted_rejected">Задание добавлено; не распознано: %1$d</string>
+    <string name="download_failed">Не удалось добавить ссылки: %1$s</string>
+
+    <!-- Jobs -->
+    <string name="jobs_idle">Ничего не выполняется</string>
+    <string name="jobs_counts">Выполняется: %1$d · в очереди: %2$d</string>
+    <string name="jobs_queued">В очереди</string>
+    <string name="jobs_finished">Завершённые</string>
+    <string name="jobs_empty_title">Заданий пока нет</string>
+    <string name="jobs_empty_body">Добавьте ссылки Spotify или SoundCloud и следите за загрузкой здесь.</string>
+    <string name="jobs_select_hint">Выберите задание, чтобы увидеть подробности</string>
+    <string name="job_untitled">Задание</string>
+    <string name="job_details">Задание</string>
+    <string name="job_not_found">Задания больше нет на сервере</string>
+    <string name="job_link_title">%1$s · %2$s</string>
+    <plurals name="job_more_links">
+        <item quantity="one">%1$s и ещё %2$d ссылка</item>
+        <item quantity="few">%1$s и ещё %2$d ссылки</item>
+        <item quantity="many">%1$s и ещё %2$d ссылок</item>
+        <item quantity="other">%1$s и ещё %2$d ссылки</item>
+    </plurals>
+    <string name="job_created">Создано</string>
+    <string name="job_started">Запущено</string>
+    <string name="job_finished">Завершено</string>
+    <string name="job_duration">Длительность</string>
+    <string name="job_options">Параметры</string>
+    <string name="job_option_lyrics">Тексты: %1$s</string>
+    <string name="job_links_count">Ссылки (%1$d)</string>
+    <string name="job_rejected">Не распознаны</string>
+    <string name="job_errors_count">Ошибки (%1$d)</string>
+    <string name="job_activity">Журнал</string>
+    <string name="job_runlog">Журнал ошибок на сервере</string>
+    <string name="job_failed_links">Ссылок с ошибками</string>
+    <string name="kind_track">Трек</string>
+    <string name="kind_album">Альбом</string>
+    <string name="kind_playlist">Плейлист</string>
+    <string name="kind_artist">Исполнитель</string>
+    <string name="kind_set">Сет</string>
+    <string name="kind_profile">Профиль</string>
+    <string name="kind_section">Раздел профиля</string>
+    <string name="kind_link">Ссылка</string>
+    <string name="status_queued">В очереди</string>
+    <string name="status_running">Загрузка</string>
+    <string name="status_cancelling">Отмена…</string>
+    <string name="status_completed">Готово</string>
+    <string name="status_completed_with_errors">Готово, есть ошибки</string>
+    <string name="status_cancelled">Отменено</string>
+    <string name="status_failed">Сбой</string>
+    <string name="percent">%1$d%%</string>
+    <string name="progress_links">Ссылки: %1$d из %2$d</string>
+    <string name="progress_tracks">Треки: %1$d из %2$d</string>
+    <string name="progress_tracks_resolving">Поиск треков…</string>
+    <string name="stat_downloaded">Загружено</string>
+    <string name="stat_skipped">Уже были</string>
+    <string name="stat_failed">Ошибки</string>
+    <string name="stat_downloaded_count">Загружено: %1$d</string>
+    <string name="stat_skipped_count">Уже были: %1$d</string>
+    <string name="stat_failed_count">Ошибки: %1$d</string>
+    <string name="service_summary">новых %1$d · уже были %2$d · ошибок %3$d</string>
+    <string name="lyrics_summary">найдено %1$d · не найдено %2$d · пропущено %3$d</string>
+    <string name="cancel_dialog_title">Отменить задание?</string>
+    <string name="cancel_dialog_running">Загрузки остановятся, недокачанные файлы будут удалены. Уже добавленные в библиотеку треки останутся.</string>
+    <string name="cancel_dialog_queued">Задание будет убрано из очереди.</string>
+    <string name="delete_dialog_title">Удалить задание?</string>
+    <string name="delete_dialog_body">Удаляется только запись в списке; скачанная музыка остаётся в библиотеке.</string>
+
+    <!-- Settings -->
+    <string name="settings_server">Сервер</string>
+    <string name="settings_server_url">Адрес сервера</string>
+    <string name="settings_server_url_placeholder">http://192.168.1.10:8765</string>
+    <string name="settings_server_url_hint">Адрес, который music-loader serve выводит при запуске</string>
+    <string name="settings_server_url_invalid">Это не http(s)-адрес</string>
+    <string name="settings_token">Токен</string>
+    <string name="settings_token_hint">Выводится при запуске рядом с адресом</string>
+    <string name="settings_token_invalid">Не меньше 16 символов: буквы, цифры и ._~+/=-</string>
+    <string name="settings_cleartext_warning">Без HTTPS токен передаётся без шифрования. Используйте домашнюю сеть или VPN (Tailscale, WireGuard).</string>
+    <string name="settings_testing">Проверка подключения…</string>
+    <string name="settings_test_ok">Подключено: music-loader %1$s</string>
+    <string name="settings_test_library">Библиотека: %1$s</string>
+    <string name="settings_test_failed">Сервер недоступен</string>
+    <string name="settings_appearance">Оформление</string>
+    <string name="settings_theme">Тема</string>
+    <string name="theme_system">Системная</string>
+    <string name="theme_light">Светлая</string>
+    <string name="theme_dark">Тёмная</string>
+    <string name="settings_dynamic_color">Динамические цвета</string>
+    <string name="settings_dynamic_color_hint">Цвета из обоев (Material You)</string>
+    <string name="settings_dynamic_color_unavailable">Доступно на Android 12 и новее</string>
+    <string name="settings_about">О приложении</string>
+    <string name="settings_version">Версия %1$s</string>
+    <string name="settings_server_howto">Запустите сервер на компьютере с библиотекой</string>
+    <string name="settings_server_command">music-loader serve -o /путь/к/Music</string>
+</resources>
