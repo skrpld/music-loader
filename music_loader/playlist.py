@@ -1,8 +1,8 @@
 """Maintains .m3u8 playlists for downloaded SoundCloud tracks.
 
 Two kinds of playlist are written:
-- the rolling "new tracks" playlist containing everything in the SoundCloud
-  folder (PLAYLIST_FILENAME);
+- the rolling playlist containing everything in the SoundCloud folder and its
+  album sub-folders (PLAYLIST_FILENAME);
 - one playlist per SoundCloud playlist/album link, named after the source
   playlist and keeping its original track order.
 """
@@ -20,13 +20,26 @@ def safe_playlist_name(name: str) -> str:
     return cleaned[:120] or "SoundCloud playlist"
 
 
+def _library_files(soundcloud_dir: Path) -> list[str]:
+    """Every audio file below the SoundCloud folder (album sub-folders
+    included, hidden staging folders excluded), as relative paths."""
+    entries: list[str] = []
+    for path in soundcloud_dir.rglob("*"):
+        try:
+            relative = path.relative_to(soundcloud_dir)
+        except ValueError:
+            continue
+        if any(part.startswith(".") for part in relative.parts):
+            continue
+        if path.suffix.lower() in AUDIO_EXTENSIONS and path.is_file():
+            entries.append(relative.as_posix())
+    return sorted(entries, key=str.casefold)
+
+
 def update_soundcloud_playlist(soundcloud_dir: Path, dashboard) -> int:
     playlist_path = soundcloud_dir / PLAYLIST_FILENAME
     try:
-        audio_files = sorted(
-            f.name for f in soundcloud_dir.iterdir()
-            if f.is_file() and f.suffix.lower() in AUDIO_EXTENSIONS
-        )
+        audio_files = _library_files(soundcloud_dir)
     except OSError as exc:
         dashboard.log_error("Playlist", f"Could not list '{soundcloud_dir}': {exc}")
         return 0

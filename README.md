@@ -1,13 +1,14 @@
 # Music Loader
 
 Downloads music with full metadata from Spotify (via spotDL) and SoundCloud
-(via yt-dlp), looks up synced lyrics (.lrc), embeds thumbnails and prepares the
-library for Symfonium. Progress, speed and statistics are shown in a live
-terminal interface (based on `rich`).
+(via yt-dlp), looks up **verified** lyrics, and prepares the library for
+Symfonium. Progress, speed and statistics are shown in a live terminal
+interface (based on `rich`).
 
 ## Quick start
 
-**Requirements:** Python 3.10+, ffmpeg, spotdl, yt-dlp
+**Requirements:** Python 3.10+, ffmpeg. spotDL, yt-dlp (with `curl-cffi`),
+mutagen and beautifulsoup4 are installed as dependencies.
 
 ```bash
 pip install -e .
@@ -28,7 +29,7 @@ brew install ffmpeg
 # Single link
 music-loader "https://open.spotify.com/album/..." -o /path/to/Music
 
-# From file (one link per line)
+# From file (one link per line, "#" starts a comment)
 music-loader links.txt -o /path/to/Music
 
 # Several sources at once
@@ -44,213 +45,264 @@ Without installing the package:
 python3 -m music_loader links.txt -o ./Music
 ```
 
+## Options
+
+| Option | Default | Meaning |
+|---|---|---|
+| `-o, --output` | asked | Target Music folder |
+| `--no-lyrics` | off | Do not look up lyrics |
+| `--lyrics-loose` | off | Loose lyrics matching (see [Lyrics](#lyrics)); default is strict |
+| `--lyrics-workers N` | 2 | Parallel lyrics lookups |
+| `--recheck` | off | Check already downloaded tracks against the current rules again |
+| `--soundcloud-reposts` | off | Profile link: also download the profile's reposts |
+| `--soundcloud-likes` | off | Profile link: also download the profile's likes |
+| `--soundcloud-download-workers N` | 2 | Parallel SoundCloud downloads |
+| `--soundcloud-workers N` | 4 | Parallel SoundCloud conversion/tagging workers |
+| `--spotify-threads N` | 4 | Parallel spotdl downloads |
+| `--spotify-client-id`, `--spotify-client-secret` | none | Optional own Spotify app credentials |
+
+Only real Spotify (`open.spotify.com/...`, `spotify:...`) and SoundCloud
+(`soundcloud.com`, `m.`, `on.soundcloud.com`, `snd.sc`, API) links are
+accepted; anything else is reported and skipped.
+
 ## Project layout
 
 ```
 music-loader/
-├── pyproject.toml          # dependencies and entry point
+├── pyproject.toml            # dependencies and entry point
 ├── README.md
-└── music_loader/           # package source
-    ├── __main__.py         # python -m music_loader
-    ├── cli.py              # command-line arguments, main loop
-    ├── config.py           # paths and constants
-    ├── deps.py             # ffmpeg / spotdl / yt-dlp checks
-    ├── process.py          # subprocess execution with streamed output parsing
-    ├── spotify.py          # Spotify download logic
-    ├── soundcloud.py       # SoundCloud download logic
-    ├── lyrics.py           # .lrc lyrics lookup
-    ├── playlist.py         # SoundCloud .m3u8 playlist updates
-    ├── runlog.py           # persistent per-run failure log
-    ├── text_utils.py       # track title cleanup, lyrics query building
-    └── ui.py               # live dashboard (rich): progress bars, log, statistics
+└── music_loader/
+    ├── __main__.py           # python -m music_loader
+    ├── cli.py                # command-line arguments, main loop
+    ├── config.py             # paths and constants
+    ├── deps.py               # ffmpeg / spotdl / yt-dlp checks
+    ├── links.py              # link validation and classification
+    ├── process.py            # subprocess execution with streamed output parsing
+    ├── spotify.py            # Spotify: resolve, check, download, verify
+    ├── spotify_index.py      # Spotify URL -> files (finds moved/duplicate files)
+    ├── soundcloud.py         # SoundCloud: discovery, parallel pipeline, recheck
+    ├── soundcloud_meta.py    # SoundCloud tags, album context, folders, covers
+    ├── soundcloud_index.py   # SoundCloud id -> file index, archive
+    ├── text_utils.py         # title parsing, normalization, version markers
+    ├── artists.py            # canonical artist spelling across the library
+    ├── lyrics.py             # verified lyrics (LRCLIB, Musixmatch, Genius)
+    ├── tags.py               # ID3 helpers (mutagen)
+    ├── paths.py              # safe file names, moving files with their .lrc
+    ├── net.py                # small HTTP helper
+    ├── playlist.py           # .m3u8 playlists for SoundCloud
+    ├── runlog.py             # persistent per-run failure log
+    └── ui.py                 # live dashboard
 ```
 
-## Features
+## Library layout
 
-- **Spotify** – albums, playlists, artists (via spotDL, MP3 320 kbps, Genius lyrics)
-- **SoundCloud** – single tracks, playlists and whole profiles (via yt-dlp)
-- **Synced lyrics** (.lrc) – Musixmatch, NetEase, Lrclib, Genius
-- **Metadata** – artist, real album (or `<song> - Single`), duration, track artwork
-- **Playlists** – a SoundCloud playlist link produces a matching .m3u8
-- **Live dashboard** – progress bars, activity log, link/track statistics
-- **Duplicate detection** – persistent ID index prevents re-downloads
-- **Failure logging** – errors saved to `.music-loader-logs/`
-
-## Parallel workers
-
-```bash
-music-loader links.txt -o /path/to/Music \
-  --soundcloud-workers 4 \
-  --lyrics-workers 2
-```
-
-Defaults: 4 post-processing workers, 2 lyrics workers.
-
-## Spotify API credentials
-
-spotDL ships shared default Spotify application credentials. They are fine for
-a single track or a small album, but a large query — most notably an entire
-artist discography — issues far more API calls and regularly ends in an HTTP
-403 or a rate limit, so the link fails as a whole.
-
-Create an application at <https://developer.spotify.com/dashboard> and pass its
-credentials:
-
-```bash
-music-loader "https://open.spotify.com/artist/..." -o /path/to/Music \
-  --spotify-client-id YOUR_ID \
-  --spotify-client-secret YOUR_SECRET
-```
-
-The `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` environment variables are
-used when the flags are omitted. Both halves are required; a half-filled pair
-is treated as no credentials at all. When credentials are supplied, spotdl is
-run with `--no-cache` as well, because it otherwise keeps using the token
-cached from the previous credentials until that token expires.
-
-Whenever spotdl exits with an error, the last lines it printed are written to
-the failure log, so the actual cause (403, rate limit, missing dependency) is
-visible instead of only an exit code.
-
-## Spotify output template
-
-Files are named with spotDL's own template variables:
-
-```
-{artist} - {album}/{track-number} - {title}.{output-ext}
-```
-
-The extension variable is `{output-ext}`. Any other name is not a template
-variable, so spotDL writes it into the file name verbatim — files end up called
-`01 - Title.{ext}`, which no player recognizes, the library scan cannot see,
-and every later run downloads again because the expected `.mp3` never appears.
-
-## Spotify progress
-
-spotDL's default interface redraws a live progress area instead of printing
-plain lines, so from the outside a run can look completely silent for minutes
-while tracks are already being written to disk. `--simple-tui` is therefore
-passed to spotdl: it emits one line per event, which the parser turns into
-track counters and the overall progress bar.
-
-As a second safety net, whenever spotdl stays quiet the target folder is
-checked for audio files created since the run started, so the dashboard shows
-real progress ("N file(s) written so far") instead of claiming there is no
-output. That heartbeat is throttled against the wall clock, so it keeps
-reporting during a long discography run instead of going silent after the first
-quiet stretch.
-
-## SoundCloud album tags
-
-The album tag comes from the track itself when SoundCloud provides one, and
-from the source set when the link is an album/EP. A standalone upload gets its
-own album named after the song (`<song> - Single`) instead of being lumped into
-one shared fake "SoundCloud" album.
-
-## Artwork
-
-Only real track artwork is embedded. yt-dlp reports the uploader's profile
-picture as a thumbnail for tracks that have no cover of their own, which
-produced covers unrelated to the song; those avatar URLs are filtered out and
-such tracks are simply left without an embedded cover.
-
-## Playlists
-
-Two kinds of `.m3u8` are written into the SoundCloud folder:
-
-- `SoundCloud_New.m3u8` – everything currently in the folder;
-- one playlist per playlist/album link, named after the source playlist
-  (`<uploader> - <playlist>.m3u8`) and keeping its original track order.
-  Entries are relative paths, so the folder can be copied to a phone as is.
-  Already-downloaded tracks are included too, so re-running a link rebuilds the
-  full playlist.
-
-## SoundCloud pipeline and duplicate detection
-
-Track discovery uses a flat playlist listing (`--flat-playlist`), so a large
-playlist or a whole user profile resolves with a single cheap request instead
-of a per-track metadata lookup. The full metadata needed for tagging (title,
-uploader, thumbnail, description) is printed by yt-dlp while the track is being
-downloaded, so nothing is resolved twice. While resolving, the progress line
-shows the elapsed time so a slow link never looks frozen.
-
-Downloads use a producer/worker pipeline: yt-dlp downloads only the source
-audio, then a configurable pool performs MP3 conversion, metadata and thumbnail
-embedding. Lyrics are queued independently and never block subsequent audio
-downloads.
-
-Conversion writes to a temporary `.part` file and the target container is
-passed to ffmpeg explicitly (`-f mp3`), because ffmpeg cannot infer a format
-from the `.part` extension. Output names are reserved in memory while a worker
-converts, so two tracks with the same title cannot overwrite each other; a
-reservation is always released afterwards, including when the conversion fails,
-so a retry keeps the plain file name instead of drifting to `<title> [id].mp3`.
-
-A hidden `.sc_index.json` in the SoundCloud directory maps the SoundCloud track
-ID to the actual local file. A legacy compatibility scan of embedded
-artist/title/duration metadata recognizes files created before the index
-existed; that scan is expensive, so it runs lazily — only when an ID lookup
-misses — at most once per run, shared across all links, and outside the index
-lock so post-processing workers are not blocked behind it. Index writes are
-coalesced (at most one full rewrite every few seconds, plus a final flush)
-instead of rewriting the whole file after every track. Recognized legacy files
-are promoted into the exact ID mapping, and `.sc_archive.txt` is updated only
-after a successful post-processing step.
-
-A download counts as failed based on yt-dlp's exit code and the resulting file,
-not on the presence of `ERROR:` lines — yt-dlp routinely prints errors it then
-recovers from (a format that returns 403, a retried fragment).
-
-Interrupted runs can leave partial files in the hidden `.sc_downloads` staging
-folder; leftovers older than 24 hours are removed automatically at the start of
-the next run.
-
-## Lyrics search
-
-SoundCloud naming is inconsistent: the uploader is often a label or a repost
-channel rather than the artist, and the real artist is part of the title
-("Artist - Song (Official Video) [Free DL] feat. Someone"). A single query
-built from uploader + raw title therefore misses very often.
-
-Instead the title is split into parts — artist part, song name, `feat.` /
-`prod.` tails, promotional brackets — and several progressively looser queries
-are tried in order, stopping at the first provider hit:
-
-1. artist from the title + song name
-2. artist from the title + song name without the `feat.` tail
-3. uploader + song name
-4. song name alone
-
-Tags read back from the downloaded file are preferred over platform metadata as
-the input for that split. If every variant finds nothing, the result is
-remembered in a hidden `.sc_lyrics_attempts.json` in the SoundCloud directory
-and the same track is not searched again for 7 days. Once lyrics are found and
-saved as a `.lrc` file, that file's presence alone is enough to skip the track
-in future runs.
-
-## Note on progress parsing
-
-SoundCloud progress and speed (yt-dlp) are parsed from the standard output
-format `[download] 45.2% of 3.45MiB at 1.23MiB/s ETA 00:02`, which is stable.
-Spotify progress is derived from spotdl's simple-TUI lines (found / downloaded /
-skipped) plus the file-count fallback described above.
-
-Child output is consumed by a dedicated reader thread, so a burst of lines is
-never left sitting in a buffer waiting for the next readiness event. The
-subprocess timeout is an *idle* timeout: a job is killed only if it neither
-prints anything nor exits.
-
-## Output
+Both services use the same layout: one folder per album, singles included.
 
 ```
 Music/
-├── Spotify downloads (organized by artist/album)
+├── <album artist> - <album>/<NN> - <title>.mp3          # Spotify
 ├── SoundCloud/
-│   ├── track files
-│   ├── SoundCloud_New.m3u8 (all tracks in the folder)
-│   ├── <uploader> - <playlist>.m3u8 (one per playlist link)
-│   ├── .sc_index.json (dedup index)
-│   └── .sc_lyrics_attempts.json (lyrics retry cooldown)
-└── .music-loader-logs/
-    └── failures-YYYYMMDD-HHMMSS.log
+│   ├── <album artist> - <album>/<NN> - <title>.mp3      # SoundCloud album/EP track
+│   ├── <artist> - <song> - Single/01 - <song>.mp3        # standalone SoundCloud upload
+│   ├── SoundCloud_New.m3u8          (all SoundCloud tracks)
+│   ├── <uploader> - <playlist>.m3u8 (one per playlist link, original order)
+│   ├── .sc_index.json               (SoundCloud id -> file)
+│   └── .sc_lyrics_attempts.json     (lyrics retry cooldown)
+├── .music-loader-artists.json       (canonical artist spelling)
+├── .spotify_index.json              (Spotify URL -> file cache)
+├── .spotify_lyrics_attempts.json
+└── .music-loader-logs/failures-YYYYMMDD-HHMMSS.log
 ```
+
+The album artist decides the folder - the artist the album belongs to, not
+the first artist of a track - so an album whose tracks start with different
+artists stays together. Lyrics (`.lrc`) sit next to the audio file.
+
+Artist photos are never downloaded: only album/track artwork is embedded.
+
+## Metadata
+
+### Spotify
+
+Tags come from Spotify through spotDL: artists, album artist, album, track
+and disc numbers, date, genre, ISRC, album cover. Several artists are stored
+as `A/B` (ID3v2.3).
+
+### SoundCloud
+
+SoundCloud has no structured credits for most uploads; they are written into
+the title. Examples from the DOOM RUSHAZ collective and how they are tagged:
+
+| Title on SoundCloud (uploader) | Artist tag | Title tag |
+|---|---|---|
+| `TARABANDZ + platov + WHITENER - under heaven [prod. haru matsui]` (DOOM RUSHAZ) | TARABANDZ/platov/WHITENER | under heaven |
+| `WHITENER, platov - heroin chic (feat aquakey) hexd` | WHITENER/platov/aquakey | heroin chic (feat. aquakey) hexd |
+| `sip doomstation ft. benjamingotbenz, haru matsui, sg, platov` (DOOM RUSHAZ) | DOOM RUSHAZ/benjamingotbenz/… | sip doomstation (feat. benjamingotbenz, haru matsui, sg, platov) |
+| `haru matsui - godline (prod. hm9600) *music video in description*` | haru matsui | godline |
+| `09. Pitstop W Aquakey & Platov` (benjamingotbenz) | benjamingotbenz/Aquakey/Platov | Pitstop (feat. Aquakey, Platov) |
+| `Right Now! - Outro` (benjamingotbenz) | benjamingotbenz | Right Now! - Outro |
+
+Rules:
+
+- **Artist**: SoundCloud's own artist field (set for label releases) →
+  `Artist - Song` from the title → the uploader. Featured artists follow the
+  main artists, as on Spotify. A right-hand side that is only a suffix
+  ("Outro", "Remix", "Pt. 2") is not split off. Ambiguous credits - a bare
+  `W` ("Pitstop W Aquakey & Platov"), guests appended with `+`/`x` to a title
+  without an artist part ("35 hp + хестон + platov") - count as featured
+  artists only when every name is already known (from Spotify, an account
+  name or another title); otherwise the title is kept as written.
+- **Title**: promotional noise (`[Free DL]`, `(Official Video)`,
+  `*music video in description*`), producer credits and a leading `09.` are
+  removed; `(feat. …)` is normalized; version markers (`(Sped Up)`, `hexd`,
+  `(Remix)`) stay.
+- **Album**: the album/EP/single the track belongs to - with its owner as
+  album artist and the position as track number. A track from a link that
+  does not say it (a single track, a playlist, likes, reposts) is looked up
+  on SoundCloud. Everything else is its own single, `<song> - Single`.
+  A regular playlist never becomes an album.
+- **Date, genre, cover**: release (or upload) date, genre, the track's
+  artwork or else the album's - never the uploader's avatar. Covers are
+  downscaled to 1200 px.
+- **Canonical spelling**: one artist is written one way everywhere
+  (`BENJAMINGOTBENZ` → `benjamingotbenz`). Spotify spellings win, then
+  SoundCloud account names, then names from titles; decorations such as
+  `✦ platov ✦` are dropped.
+- The SoundCloud id is stored in the file (`TXXX:SOUNDCLOUD_ID`), and the page
+  URL without a private link's secret token.
+
+## Lyrics
+
+Lyrics are looked up by default in **strict** mode; nothing is better than
+another song's lyrics.
+
+Strict (default) - a candidate from LRCLIB, Musixmatch or Genius is accepted
+only when:
+
+- its artist is one of the track's artists;
+- its title is the same after normalization (case, punctuation, feat parts,
+  promo noise and remaster notes do not count) **and** it has the same
+  version markers - a sped-up, slowed, remixed or live upload never gets the
+  original's lyrics;
+- for synced lyrics, its length is within **2 s** of the file - otherwise the
+  timestamps belong to a different cut;
+- Genius has no length, so its (plain) text needs an exact artist + title
+  match.
+
+Loose (`--lyrics-loose`): fuzzy artist and title similarity, up to 10 s
+length difference; versions may differ, but then - or whenever the length
+differs by more than 2 s - only plain text is saved, never misaligned
+timestamps.
+
+Instrumentals, DJ sets, mixes and beats are skipped. Synced lyrics are saved
+as `<track>.lrc` and their text is embedded (USLT); plain lyrics are
+embedded only. A track whose search found nothing is retried after 7 days.
+A provider that keeps failing - or Musixmatch asking for a captcha - is
+switched off for the rest of the run instead of stalling it.
+
+spotDL's own lyrics (Genius at 55 % similarity plus an unverified `.lrc`
+search) are disabled; Spotify tracks go through the same verified lookup.
+
+## Checks and `--recheck`
+
+Every new file is checked before it counts as downloaded:
+
+- SoundCloud: the converted file's length must match SoundCloud's (±3 s /
+  3 %). A 30-second Go+ preview or a cut-off download fails the track instead
+  of being filed as complete. Go+-only tracks are reported as such.
+- SoundCloud: a partial file left by an interrupted run is never reused.
+- Spotify: spotDL converts straight into the final file and tags it last; a
+  file without spotDL's URL tag is an interrupted download and is downloaded
+  again (it used to be "skipped" forever). Interrupting a run removes such
+  files right away.
+- Spotify: every song is checked on disk after the run, so the counters show
+  what really happened (spotdl exits with 0 even when tracks failed).
+
+`--recheck` applies the current rules to tracks that are already in the
+library - useful after updating music-loader:
+
+- SoundCloud: metadata is fetched again; tags, folder and file name are
+  rewritten (files from older versions move into album folders, with their
+  `.lrc`); a file whose length does not match is downloaded again.
+- Spotify: tags are refreshed from Spotify (`--overwrite metadata`) and
+  duplicate copies of a track under other paths are removed.
+- Lyrics are searched again with the current mode (existing ones are
+  replaced; the 7-day cooldown is ignored).
+
+Without `--recheck`, a Spotify track that exists under an older folder layout
+is moved to its current path (with its `.lrc`) instead of being downloaded a
+second time.
+
+## SoundCloud links
+
+| Link | Downloads |
+|---|---|
+| track | that track |
+| set (`/sets/...`) | its tracks; album/EP/single sets also give album, album artist, track numbers |
+| profile (`soundcloud.com/<user>`) | the artist's own albums and tracks; reposts with `--soundcloud-reposts`, likes with `--soundcloud-likes` |
+| profile page (`/tracks`, `/albums`, `/sets`, `/likes`, `/reposts`) | exactly that page |
+
+Sets inside a listing (an album in the likes) are expanded - previously only
+their first track was kept.
+
+SoundCloud allows roughly 600 API requests per 10 minutes. When it answers
+"429 Too Many Requests", all downloads pause (30 s, doubling up to 5 min) and
+the track is retried.
+
+Profile, likes and reposts listings need yt-dlp's browser impersonation
+(`curl-cffi`), otherwise SoundCloud answers with HTTP 403.
+
+## Spotify
+
+A link is processed in two spotdl runs: `spotdl save` resolves it (an album,
+a playlist, a whole discography) and reports where every song goes;
+`spotdl download` then downloads that saved list without a second round of
+Spotify API calls. Before the download the library is checked (unfinished
+files, files under an older layout), after it every song is verified.
+
+Credentials are optional. spotDL 4.5+ uses its built-in client and needs
+none. Own application credentials
+(<https://developer.spotify.com/dashboard>) switch spotdl to the official
+Web API:
+
+```bash
+export SPOTIFY_CLIENT_ID=...
+export SPOTIFY_CLIENT_SECRET=...
+music-loader "https://open.spotify.com/artist/..." -o /path/to/Music
+```
+
+`--spotify-client-id` / `--spotify-client-secret` work as well, but
+command-line arguments are visible to every user of the machine in the
+process list; the environment variables are the safer channel. The secret
+is passed to spotdl through its environment, never on its command line.
+
+## Parallel work
+
+- SoundCloud: `--soundcloud-download-workers` downloads run in parallel; a
+  pool of `--soundcloud-workers` converts, tags and validates; lyrics run in
+  their own pool. The hand-over is bounded, so only a few unconverted
+  downloads wait on disk. File names are reserved while a worker writes, so
+  two tracks with the same name never overwrite each other.
+- Spotify: spotdl downloads `--spotify-threads` songs at a time; lyrics run
+  afterwards in `--lyrics-workers` threads.
+- Ctrl+C stops every child process (yt-dlp, spotdl) and worker, removes
+  partial files and keeps the index consistent.
+
+## Security notes
+
+- Links are validated; other sites and option-like lines are refused, and
+  URLs reach yt-dlp after `--`.
+- Track ids are validated before they are used in file names.
+- Tools are run from the Python environment music-loader is installed in,
+  not from whatever `yt-dlp` comes first in `PATH`.
+- Covers are fetched over http(s) only, with a size limit.
+- Private SoundCloud links: the secret token is not written into tags,
+  playlists or the failure log.
+- All child output is decoded as UTF-8 (a Cyrillic title no longer turns into
+  garbage on Windows), and remote text is escaped before it reaches the
+  terminal UI.
+
+## Failure log
+
+Every failure is written to `.music-loader-logs/failures-<timestamp>.log` as
+it happens, so a long batch can be reviewed afterwards.
