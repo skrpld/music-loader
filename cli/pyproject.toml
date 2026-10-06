@@ -1,0 +1,61 @@
+[project]
+name = "music-loader"
+# Single source of truth: music_loader/__init__.py. A release tag cli-vX.Y.Z
+# must match it (checked in .github/workflows/cli.yml).
+dynamic = ["version"]
+description = "Downloads music with metadata from Spotify and SoundCloud, fetches verified lyrics, and prepares the library for Symfonium."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+# A copy of the repository's LICENSE: a package can only ship files from its
+# own directory.
+license-files = ["LICENSE"]
+authors = [{ name = "skrpld" }]
+keywords = ["spotify", "soundcloud", "spotdl", "yt-dlp", "lyrics", "music", "symfonium"]
+classifiers = [
+    "Environment :: Console",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio",
+]
+dependencies = [
+    "spotdl>=4.2.0",
+    # curl-cffi: SoundCloud answers profile/likes/reposts listings with HTTP
+    # 403 unless yt-dlp can impersonate a browser.
+    "yt-dlp[default,curl-cffi]>=2026.2.21",
+    "rich>=13.7.0",
+    "mutagen>=1.47.0",
+    "beautifulsoup4>=4.12.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.urls]
+Homepage = "https://github.com/skrpld/music-loader"
+Issues = "https://github.com/skrpld/music-loader/issues"
+
+[project.scripts]
+music-loader = "music_loader.cli:main"
+
+[build-system]
+# 77: SPDX license expressions (PEP 639).
+requires = ["setuptools>=77.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+version = { attr = "music_loader.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["music_loader*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+# Real errors only (undefined names, unused imports, syntax); style is left
+# to the existing code.
+select = ["F", "E9"]

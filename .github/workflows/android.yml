@@ -1,10 +1,14 @@
-name: Android APK
+name: Android
 
 on:
   push:
     # Listing tags without branches would turn off branch builds.
     branches:
       - "**"
+    # android-v1.2.0 -> GitHub release "Android 1.2.0" with the APK,
+    # versionName 1.2.0. Path filters are not applied to tag pushes.
+    tags:
+      - "android-v*"
     paths:
       - "android/**"
       - ".github/workflows/android.yml"
@@ -12,9 +16,6 @@ on:
     paths:
       - "android/**"
       - ".github/workflows/android.yml"
-  # Every published GitHub release gets the APK attached.
-  release:
-    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -22,7 +23,7 @@ permissions:
 
 concurrency:
   group: android-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   build:
@@ -34,6 +35,7 @@ jobs:
         working-directory: android
     outputs:
       apk: ${{ steps.apk.outputs.name }}
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v5
 
@@ -45,8 +47,25 @@ jobs:
       # Caches Gradle and validates the wrapper jar.
       - uses: gradle/actions/setup-gradle@v4
 
-      # A signed release APK needs four repository secrets (see README); without them
-      # (forks, first setup) the debug APK is built instead.
+      # A tag android-v1.2.0 (or android-v1.2.0-rc.1) becomes versionName
+      # 1.2.0; otherwise appVersionName from gradle.properties is used.
+      - name: Version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/android-v* ]]; then
+            version="${GITHUB_REF_NAME#android-v}"
+            if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+              echo "::error::Tag $GITHUB_REF_NAME is not android-vMAJOR.MINOR.PATCH[-suffix]."
+              exit 1
+            fi
+          else
+            version=$(sed -n 's/^appVersionName=//p' gradle.properties)
+          fi
+          echo "VERSION_NAME=$version" >> "$GITHUB_ENV"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # A signed release APK needs four repository secrets (see android/README.md);
+      # without them (forks, first setup) the debug APK is built instead.
       - name: Prepare signing
         id: signing
         env:
@@ -56,24 +75,13 @@ jobs:
             echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
             echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
             echo "variant=release" >> "$GITHUB_OUTPUT"
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "::warning::No signing secrets: the release gets a debug APK, which cannot be installed over another build."
+            echo "variant=debug" >> "$GITHUB_OUTPUT"
           else
             echo "::notice::No signing secrets found, building the debug APK."
             echo "variant=debug" >> "$GITHUB_OUTPUT"
           fi
-
-      # A release "v1.2.0" or "android-v1.2.0" becomes versionName 1.2.0;
-      # otherwise appVersionName from gradle.properties is used.
-      - name: Version
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: |
-          if [ -n "$RELEASE_TAG" ]; then
-            version="${RELEASE_TAG#android-}"
-            version="${version#v}"
-          else
-            version=$(sed -n 's/^appVersionName=//p' gradle.properties)
-          fi
-          echo "VERSION_NAME=$version" >> "$GITHUB_ENV"
 
       # The release build (R8, lint) is always compiled, so a broken release
       # build shows up even before signing is set up.
@@ -96,32 +104,46 @@ jobs:
         env:
           VARIANT: ${{ steps.signing.outputs.variant }}
         run: |
-          name="music-loader-${VERSION_NAME}-${GITHUB_RUN_NUMBER}-${VARIANT}"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            name="music-loader-${VERSION_NAME}"
+          else
+            name="music-loader-${VERSION_NAME}-${GITHUB_RUN_NUMBER}"
+          fi
+          [ "$VARIANT" = release ] || name="${name}-debug"
           mkdir -p dist
           cp "app/build/outputs/apk/${VARIANT}/app-${VARIANT}.apk" "dist/${name}.apk"
+          (cd dist && sha256sum -- "${name}.apk" > "${name}.apk.sha256")
+          rm -f "$RUNNER_TEMP/release.keystore"
           echo "name=${name}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.apk.outputs.name }}
-          path: android/dist/*.apk
+          path: android/dist/*
           if-no-files-found: error
 
   release:
-    name: Attach to release
-    if: github.event_name == 'release'
+    name: GitHub release
+    if: startsWith(github.ref, 'refs/tags/android-v')
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
+      # Full history: release notes start at the previous android-v* tag.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
       - uses: actions/download-artifact@v4
         with:
           name: ${{ needs.build.outputs.apk }}
           path: dist
 
-      - name: Upload APK
+      - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$RELEASE_TAG" dist/*.apk --clobber --repo "$GITHUB_REPOSITORY"
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: bash .github/scripts/publish-release.sh "$TAG" "Android $VERSION" "android-v*" dist/*
