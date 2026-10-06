@@ -3,7 +3,8 @@
 Downloads music with full metadata from Spotify (via spotDL) and SoundCloud
 (via yt-dlp), looks up **verified** lyrics, and files everything into a
 library ready for Symfonium. Progress is shown in a live terminal dashboard;
-`music-loader serve` exposes the same engine to the Android app.
+`music-loader serve` exposes the same engine to the Android app, which also
+embeds this package to download on the phone itself.
 
 Project overview: <https://github.com/skrpld/music-loader>.
 

@@ -229,5 +229,7 @@ cli/music_loader/
 ├── ui.py                 # live dashboard
 ├── server.py             # server mode: HTTP API, job queue, event stream
 ├── worker.py             # runs one server job in its own process
-└── events.py             # progress as JSON events (server mode)
+├── events.py             # progress as JSON events (server mode)
+├── inprocess.py          # spotdl / yt-dlp inside the interpreter (Android)
+└── android.py            # entry points of the Android app's phone mode
 ```

@@ -51,3 +51,8 @@ process list; prefer the environment variables.
   the server sits behind a TLS proxy.
 - `allowBackup="false"` and data extraction rules keep the token on the
   device.
+- Phone mode: the app's own server listens on `127.0.0.1` only, with a random
+  token per start that never leaves the app process.
+- Phone mode needs "All files access" (Android 11+) to write tracks, `.lrc`
+  lyrics, playlists and index files into the music folder; the downloader
+  only writes below the folder chosen in Settings.

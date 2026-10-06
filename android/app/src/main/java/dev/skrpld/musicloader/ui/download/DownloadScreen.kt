@@ -206,7 +206,7 @@ fun DownloadScreen(
                 onClick = viewModel::submit,
                 shapes = ButtonDefaults.shapes(),
                 enabled = viewModel.scan.links.isNotEmpty() && !viewModel.submitting &&
-                    connection != Connection.NotConfigured,
+                    connection != Connection.NotConfigured && connection != Connection.NeedsStorageAccess,
                 contentPadding = ButtonDefaults.contentPaddingFor(ButtonDefaults.MediumContainerHeight),
                 modifier = contentModifier
                     .padding(top = 8.dp, bottom = 24.dp)
@@ -238,9 +238,15 @@ fun DownloadScreen(
 private fun connectionSubtitle(connection: Connection): String = stringResource(
     when (connection) {
         Connection.NotConfigured -> R.string.connection_not_configured
+        Connection.NeedsStorageAccess -> R.string.settings_storage_needed
         Connection.Connecting -> R.string.connection_connecting
-        is Connection.Offline -> R.string.connection_offline
-        is Connection.Online -> if (connection.state.busy) R.string.connection_busy else R.string.connection_online
+        Connection.Starting -> R.string.connection_starting
+        is Connection.Offline -> if (connection.local) R.string.connection_local_failed else R.string.connection_offline
+        is Connection.Online -> when {
+            connection.state.busy -> R.string.connection_busy
+            connection.local -> R.string.connection_local_ready
+            else -> R.string.connection_online
+        }
     },
 )
 
