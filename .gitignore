@@ -1,18 +1,27 @@
-# Virtual environment
-.venv/
+# Virtual environments
+.venv*/
+venv/
 
 # Python cache
 __pycache__/
 *.py[cod]
 
-# Build artifacts
+# Build artifacts and tool caches
 build/
 dist/
 *.egg-info/
+.pytest_cache/
+.ruff_cache/
+*.apk
+*.aab
 
 # Environment variables / secrets
 .env
 .env.*
+*.jks
+*.keystore
+keystore.properties
+server-token
 
 # IDE
 .vscode/
