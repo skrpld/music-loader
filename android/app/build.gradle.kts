@@ -20,7 +20,9 @@ android {
         // 37 adds local network protection; the app talks to a server in the local network.
         targetSdk = 36
         versionCode = providers.environmentVariable("GITHUB_RUN_NUMBER").orNull?.toIntOrNull() ?: 1
-        versionName = "1.0.0"
+        versionName = providers.environmentVariable("VERSION_NAME")
+            .orElse(providers.gradleProperty("appVersionName"))
+            .get()
     }
 
     signingConfigs {

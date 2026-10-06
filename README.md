@@ -176,8 +176,10 @@ English and Russian. Android 8.0 or later.
 
 [`.github/workflows/android.yml`](.github/workflows/android.yml) builds the
 app on every push that touches `android/`; the APK is attached to the run as
-an artifact (Actions → run → Artifacts). A tag `android-v<version>` also
-publishes it as a GitHub release.
+an artifact (Actions → run → Artifacts). Publishing a GitHub release also
+builds the APK and attaches it to the release; the tag sets the app version
+(`v1.2.0` or `android-v1.2.0` → 1.2.0, otherwise `appVersionName` in
+`android/gradle.properties`).
 
 Without signing secrets the workflow builds the debug APK. A debug key is
 generated on every run, so each build has a different signature and Android
