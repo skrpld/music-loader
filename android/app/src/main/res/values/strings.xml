@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name" translatable="false">Music Loader</string>
+
+    <!-- Navigation -->
+    <string name="nav_download">Download</string>
+    <string name="nav_jobs">Jobs</string>
+    <string name="nav_settings">Settings</string>
+
+    <!-- Connection -->
+    <string name="connection_connecting">Connecting…</string>
+    <string name="connection_online">Server connected</string>
+    <string name="connection_busy">Downloading</string>
+    <string name="connection_offline">No connection to the server</string>
+    <string name="connection_offline_body">Check that music-loader serve is running and reachable from this device.</string>
+    <string name="connection_not_configured">Server not set up</string>
+    <string name="connection_not_configured_body">Enter the address and token printed by music-loader serve.</string>
+    <string name="connection_unauthorized">Wrong token</string>
+    <string name="connection_unauthorized_body">The server rejected the token. Copy it again from the server output.</string>
+
+    <!-- Common actions -->
+    <string name="action_configure">Set up</string>
+    <string name="action_open_settings">Settings</string>
+    <string name="action_retry">Retry</string>
+    <string name="action_open">Open</string>
+    <string name="action_paste">Paste</string>
+    <string name="action_clear">Clear</string>
+    <string name="action_copy">Copy</string>
+    <string name="action_back">Back</string>
+    <string name="action_add_links">Add links</string>
+    <string name="action_cancel_job">Cancel job</string>
+    <string name="action_delete_job">Remove</string>
+    <string name="action_keep">Keep</string>
+    <string name="action_test">Test</string>
+    <string name="action_save">Save</string>
+    <string name="action_saved">Saved</string>
+    <string name="action_show_token">Show token</string>
+    <string name="action_hide_token">Hide token</string>
+    <string name="action_failed">Could not complete the action: %1$s</string>
+
+    <!-- Download -->
+    <string name="links_title">Links</string>
+    <string name="links_label">Spotify or SoundCloud links</string>
+    <string name="links_placeholder">https://open.spotify.com/album/…\nhttps://soundcloud.com/…</string>
+    <string name="links_spotify_count">Spotify: %1$d</string>
+    <string name="links_soundcloud_count">SoundCloud: %1$d</string>
+    <string name="links_unknown_count">Not recognized: %1$d</string>
+    <string name="lyrics_title">Lyrics</string>
+    <string name="lyrics_strict">Strict</string>
+    <string name="lyrics_loose">Loose</string>
+    <string name="lyrics_off">Off</string>
+    <string name="lyrics_strict_description">Only an exact match of artist, title, version and length (±2 s). Nothing is better than the wrong song\'s lyrics.</string>
+    <string name="lyrics_loose_description">Fuzzy artist and title match, up to 10 s length difference. When the timing may not fit, only plain text is saved.</string>
+    <string name="lyrics_off_description">Lyrics are not looked up.</string>
+    <string name="options_title">Options</string>
+    <string name="option_recheck">Recheck the library</string>
+    <string name="option_recheck_description">Apply the current rules to tracks that are already downloaded: tags, folders, broken files, lyrics.</string>
+    <string name="option_reposts">SoundCloud reposts</string>
+    <string name="option_likes">SoundCloud likes</string>
+    <string name="option_profile_only">For profile links only</string>
+    <string name="download_submit">Add to queue</string>
+    <string name="download_submitted">Added to the queue</string>
+    <string name="download_submitted_rejected">Added to the queue; not recognized: %1$d</string>
+    <string name="download_failed">Could not add the links: %1$s</string>
+
+    <!-- Jobs -->
+    <string name="jobs_idle">Nothing is running</string>
+    <string name="jobs_counts">Running: %1$d · queued: %2$d</string>
+    <string name="jobs_queued">Queued</string>
+    <string name="jobs_finished">Finished</string>
+    <string name="jobs_empty_title">No jobs yet</string>
+    <string name="jobs_empty_body">Add Spotify or SoundCloud links and follow the download here.</string>
+    <string name="jobs_select_hint">Select a job to see its details</string>
+    <string name="job_untitled">Job</string>
+    <string name="job_details">Job details</string>
+    <string name="job_not_found">The job is no longer on the server</string>
+    <string name="job_link_title">%1$s · %2$s</string>
+    <plurals name="job_more_links">
+        <item quantity="one">%1$s and %2$d more link</item>
+        <item quantity="other">%1$s and %2$d more links</item>
+    </plurals>
+    <string name="job_created">Created</string>
+    <string name="job_started">Started</string>
+    <string name="job_finished">Finished</string>
+    <string name="job_duration">Duration</string>
+    <string name="job_options">Options</string>
+    <string name="job_option_lyrics">Lyrics: %1$s</string>
+    <string name="job_links_count">Links (%1$d)</string>
+    <string name="job_rejected">Not recognized</string>
+    <string name="job_errors_count">Errors (%1$d)</string>
+    <string name="job_activity">Activity</string>
+    <string name="job_runlog">Failure log on the server</string>
+    <string name="job_failed_links">Failed links</string>
+    <string name="kind_track">Track</string>
+    <string name="kind_album">Album</string>
+    <string name="kind_playlist">Playlist</string>
+    <string name="kind_artist">Artist</string>
+    <string name="kind_set">Set</string>
+    <string name="kind_profile">Profile</string>
+    <string name="kind_section">Profile page</string>
+    <string name="kind_link">Link</string>
+    <string name="status_queued">Queued</string>
+    <string name="status_running">Downloading</string>
+    <string name="status_cancelling">Cancelling…</string>
+    <string name="status_completed">Done</string>
+    <string name="status_completed_with_errors">Done with errors</string>
+    <string name="status_cancelled">Cancelled</string>
+    <string name="status_failed">Failed</string>
+    <string name="percent">%1$d%%</string>
+    <string name="progress_links">Links: %1$d of %2$d</string>
+    <string name="progress_tracks">Tracks: %1$d of %2$d</string>
+    <string name="progress_tracks_resolving">Looking for tracks…</string>
+    <string name="stat_downloaded">Downloaded</string>
+    <string name="stat_skipped">Already had</string>
+    <string name="stat_failed">Failed</string>
+    <string name="stat_downloaded_count">Downloaded: %1$d</string>
+    <string name="stat_skipped_count">Already had: %1$d</string>
+    <string name="stat_failed_count">Failed: %1$d</string>
+    <string name="service_summary">%1$d new · %2$d already had · %3$d failed</string>
+    <string name="lyrics_summary">%1$d found · %2$d not found · %3$d skipped</string>
+    <string name="cancel_dialog_title">Cancel the job?</string>
+    <string name="cancel_dialog_running">Downloads stop and unfinished files are removed. Tracks that are already in the library stay.</string>
+    <string name="cancel_dialog_queued">The job is removed from the queue.</string>
+    <string name="delete_dialog_title">Remove the job?</string>
+    <string name="delete_dialog_body">Only the entry in the list is removed; the downloaded music stays in the library.</string>
+
+    <!-- Settings -->
+    <string name="settings_server">Server</string>
+    <string name="settings_server_url">Server address</string>
+    <string name="settings_server_url_placeholder">http://192.168.1.10:8765</string>
+    <string name="settings_server_url_hint">The address music-loader serve prints at startup</string>
+    <string name="settings_server_url_invalid">Not a valid http(s) address</string>
+    <string name="settings_token">Token</string>
+    <string name="settings_token_hint">Printed at startup next to the address</string>
+    <string name="settings_token_invalid">At least 16 characters: letters, digits and ._~+/=-</string>
+    <string name="settings_cleartext_warning">Without HTTPS the token travels unencrypted. Use it in your home network or over a VPN (Tailscale, WireGuard).</string>
+    <string name="settings_testing">Checking the connection…</string>
+    <string name="settings_test_ok">Connected: music-loader %1$s</string>
+    <string name="settings_test_library">Library: %1$s</string>
+    <string name="settings_test_failed">Could not reach the server</string>
+    <string name="settings_appearance">Appearance</string>
+    <string name="settings_theme">Theme</string>
+    <string name="theme_system">System</string>
+    <string name="theme_light">Light</string>
+    <string name="theme_dark">Dark</string>
+    <string name="settings_dynamic_color">Dynamic colors</string>
+    <string name="settings_dynamic_color_hint">Colors from your wallpaper (Material You)</string>
+    <string name="settings_dynamic_color_unavailable">Available on Android 12 and later</string>
+    <string name="settings_about">About</string>
+    <string name="settings_version">Version %1$s</string>
+    <string name="settings_server_howto">Start the server on the computer with the library</string>
+    <string name="settings_server_command">music-loader serve -o /path/to/Music</string>
+</resources>

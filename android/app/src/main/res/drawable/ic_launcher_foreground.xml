@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Material Symbols Rounded "music_note" and "download" (Apache License 2.0). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.05"
+        android:scaleY="0.05"
+        android:translateX="26"
+        android:translateY="27">
+        <group android:translateY="960">
+            <path
+                android:fillColor="#FFFFFFFF"
+                android:pathData="M286.5-163.5Q243-207 243-270t43.5-106.5Q330-420 393-420q28 0 50.5 8t39.5 22v-420q0-13 8.5-21.5T513-840h174q13 0 21.5 8.5T717-810v75q0 13-8.5 21.5T687-705H543v435q0 63-43.5 106.5T393-120q-63 0-106.5-43.5Z" />
+        </group>
+    </group>
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M67,69m-12,0a12,12 0,1 1,24 0a12,12 0,1 1,-24 0" />
+    <group
+        android:scaleX="0.0175"
+        android:scaleY="0.0175"
+        android:translateX="58.6"
+        android:translateY="60.6">
+        <group android:translateY="960">
+            <path
+                android:fillColor="@color/ic_launcher_background"
+                android:pathData="M469-327q-5-2-10-7L308-485q-9-9.27-8.5-21.64.5-12.36 9.11-21.36 9.39-9 21.89-9t21.5 9l98 99v-341q0-12.75 8.68-21.38 8.67-8.62 21.5-8.62 12.82 0 21.32 8.62 8.5 8.63 8.5 21.38v341l99-99q8.8-9 20.9-8.5 12.1.5 21.49 9.5 8.61 9 8.61 21.5t-9 21.5L501-334q-5 5-10.13 7-5.14 2-11 2-5.87 0-10.87-2ZM220-160q-24 0-42-18t-18-42v-113q0-12.75 8.68-21.38 8.67-8.62 21.5-8.62 12.82 0 21.32 8.62 8.5 8.63 8.5 21.38v113h520v-113q0-12.75 8.68-21.38 8.67-8.62 21.5-8.62 12.82 0 21.32 8.62 8.5 8.63 8.5 21.38v113q0 24-18 42t-42 18H220Z" />
+        </group>
+    </group>
+</vector>
