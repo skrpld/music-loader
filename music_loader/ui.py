@@ -1,17 +1,18 @@
 """Live terminal dashboard built on `rich`: overall stats, a link-queue
-progress bar, a track-level progress bar, a per-file progress bar
-(percent/speed/ETA when available), and a scrolling panel showing what is
-happening right now.
+progress bar, a track-level progress bar, one progress row per active
+download (percent/speed/ETA when available), and a scrolling panel showing
+what is happening right now.
 
 Two levels of counting are tracked on purpose:
 - "links" - how many URLs from the input were processed (an entire album,
   playlist, or artist discography counts as ONE link).
 - "tracks" - how many individual songs inside those links were found and
-  processed (downloaded / already had it / failed). This is what answers
-  "how many tracks are there in total" and "how many are actually done",
-  which a link-only counter can't.
+  processed (downloaded / already had it / failed).
 
-Every public method is safe to call from the worker threads.
+Every public method is safe to call from the worker threads. Every text that
+comes from outside (track titles, tool output, paths) is escaped before it
+reaches rich: a title such as "Song [prod. x]" used to vanish from the log,
+and one containing "[/...]" crashed the whole display.
 """
 from collections import deque
 from dataclasses import dataclass
@@ -20,9 +21,11 @@ import threading
 
 from rich.console import Console, Group
 from rich.live import Live
+from rich.markup import escape
 from rich.panel import Panel
-from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskID, TaskProgressColumn, TextColumn
 from rich.table import Table
+from rich.text import Text
 
 from .runlog import RunLog
 
@@ -37,6 +40,7 @@ class Stats:
     soundcloud_fail: int = 0
     lyrics_ok: int = 0
     lyrics_fail: int = 0
+    lyrics_skipped: int = 0
 
     # Track-level counters. "total" accumulates as it's discovered (a link
     # can be an album/playlist/discography with many tracks inside it), so
@@ -66,7 +70,7 @@ class Dashboard:
         self.output_dir = output_dir
         self.stats = Stats()
         self.runlog = runlog
-        self._log: deque[str] = deque(maxlen=_LOG_LINES)
+        self._log: deque[Text] = deque(maxlen=_LOG_LINES)
         self._lock = threading.RLock()
         self._started = False
 
@@ -88,18 +92,18 @@ class Dashboard:
         )
         self._tracks_task = self.tracks_progress.add_task("tracks", total=1)
 
+        # One row per slot: the Spotify run uses slot 0, parallel SoundCloud
+        # downloads use one slot per download worker.
         self.file_progress = Progress(
             SpinnerColumn(),
-            TextColumn("{task.fields[label]}", justify="left"),
+            TextColumn("{task.fields[label]}", justify="left", markup=False),
             BarColumn(),
             TaskProgressColumn(),
-            TextColumn("{task.fields[speed]}"),
-            TextColumn("{task.fields[eta]}"),
+            TextColumn("{task.fields[speed]}", markup=False),
+            TextColumn("{task.fields[eta]}", markup=False),
             console=console,
         )
-        self._file_task = self.file_progress.add_task(
-            "file", total=100, label="Idle", speed="", eta="", visible=False
-        )
+        self._file_tasks: dict[int, TaskID] = {}
 
         self._live = Live(self._render(), console=console, refresh_per_second=8)
 
@@ -118,14 +122,16 @@ class Dashboard:
         routine/informational events. For failures, prefer `log_error` so
         the failure also survives in the run's log file."""
         with self._lock:
-            self._log.append(message)
+            self._log.append(Text(str(message)))
         self._refresh()
 
     def log_error(self, source: str, message: str) -> None:
         """Records a failed operation: shows it in the Activity panel AND
         appends it to the persistent run log file (if one is configured),
         so it isn't lost once it scrolls off screen or the run ends."""
-        self.log(f"[{source}][!] {message}")
+        with self._lock:
+            self._log.append(Text(f"[{source}][!] {message}", style="red"))
+        self._refresh()
         if self.runlog is not None:
             self.runlog.record(source, message)
 
@@ -142,13 +148,20 @@ class Dashboard:
             return
         self._bump(f"{kind}_tracks_total", count)
 
-    def record_track(self, kind: str, status: str) -> None:
-        """Records the outcome of a single track."""
-        self._bump(f"{kind}_tracks_{status}", 1)
+    def record_track(self, kind: str, status: str, amount: int = 1) -> None:
+        """Records the outcome of tracks; a negative amount corrects an
+        earlier live estimate once the exact result is known."""
+        if amount:
+            self._bump(f"{kind}_tracks_{status}", amount)
 
     def record_lyrics(self, found: bool) -> None:
         """Records one lyrics lookup result (found / not found)."""
         self._bump("lyrics_ok" if found else "lyrics_fail", 1)
+
+    def record_lyrics_skipped(self) -> None:
+        """A track that is deliberately left without lyrics (instrumental,
+        a variant in strict mode, a recent failed search)."""
+        self._bump("lyrics_skipped", 1)
 
     def record(self, kind: str, ok: bool) -> None:
         """Records the outcome of a whole link."""
@@ -158,22 +171,32 @@ class Dashboard:
         with self._lock:
             if not hasattr(self.stats, attr):
                 # An unknown counter name must never crash a worker thread.
-                self._log.append(f"[UI][!] Unknown counter '{attr}'")
+                self._log.append(Text(f"[UI][!] Unknown counter '{attr}'"))
             else:
-                setattr(self.stats, attr, getattr(self.stats, attr) + amount)
+                setattr(self.stats, attr, max(0, getattr(self.stats, attr) + amount))
         self._refresh()
 
-    def start_file(self, label: str) -> None:
+    def _file_task(self, slot: int) -> TaskID:
+        task = self._file_tasks.get(slot)
+        if task is None:
+            task = self.file_progress.add_task(
+                f"file-{slot}", total=100, label="Idle", speed="", eta="", visible=False
+            )
+            self._file_tasks[slot] = task
+        return task
+
+    def start_file(self, label: str, slot: int = 0) -> None:
         with self._lock:
-            self.file_progress.reset(self._file_task)
+            task = self._file_task(slot)
+            self.file_progress.reset(task)
             self.file_progress.update(
-                self._file_task, total=100, completed=0, label=label,
+                task, total=100, completed=0, label=label,
                 speed="", eta="", visible=True,
             )
         self._refresh()
 
     def update_file(self, percent: float | None = None, label: str | None = None,
-                    speed: str | None = None, eta: str | None = None) -> None:
+                    speed: str | None = None, eta: str | None = None, slot: int = 0) -> None:
         fields = {}
         if label is not None:
             fields["label"] = label
@@ -184,12 +207,18 @@ class Dashboard:
         if percent is not None:
             fields["completed"] = percent
         with self._lock:
-            self.file_progress.update(self._file_task, **fields)
+            task = self._file_task(slot)
+            self.file_progress.update(task, visible=True, **fields)
         self._refresh()
 
-    def finish_file(self) -> None:
+    def finish_file(self, slot: int | None = 0) -> None:
+        """Hides one progress row, or all of them when `slot` is None."""
         with self._lock:
-            self.file_progress.update(self._file_task, visible=False)
+            slots = list(self._file_tasks) if slot is None else [slot]
+            for item in slots:
+                task = self._file_tasks.get(item)
+                if task is not None:
+                    self.file_progress.update(task, visible=False)
         self._refresh()
 
     # -- rendering ------------------------------------------------------------
@@ -206,10 +235,10 @@ class Dashboard:
         table = Table.grid(padding=(0, 2))
         table.add_column(justify="right", style="bold")
         table.add_column()
-        table.add_row("Source:", self.source_label)
-        table.add_row("Destination:", self.output_dir)
+        table.add_row("Source:", escape(self.source_label))
+        table.add_row("Destination:", escape(self.output_dir))
         if self.runlog is not None:
-            table.add_row("Failure log:", f"[dim]{self.runlog.path}[/dim]")
+            table.add_row("Failure log:", f"[dim]{escape(str(self.runlog.path))}[/dim]")
         table.add_row(
             "Spotify links:",
             f"[green]{s.spotify_ok} ok[/green] / [red]{s.spotify_fail} failed[/red]",
@@ -230,7 +259,8 @@ class Dashboard:
         )
         table.add_row(
             "Lyrics:",
-            f"[green]{s.lyrics_ok} found[/green] / [yellow]{s.lyrics_fail} missing[/yellow]",
+            f"[green]{s.lyrics_ok} found[/green] / [yellow]{s.lyrics_fail} not found[/yellow]"
+            f" / [dim]{s.lyrics_skipped} skipped[/dim]",
         )
         return table
 
@@ -247,7 +277,7 @@ class Dashboard:
 
     def _render(self) -> Group:
         self._sync_tracks_progress()
-        log_text = "\n".join(self._log) or "..."
+        log_text = Text("\n").join(self._log) if self._log else Text("...")
         return Group(
             Panel(self._stats_table(), title="Music Loader", border_style="blue"),
             self.queue_progress,

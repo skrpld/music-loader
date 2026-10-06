@@ -33,4 +33,7 @@ Music/
 .sc_index.json
 .sc_downloads/
 .sc_lyrics_attempts.json
+.spotify_lyrics_attempts.json
+.spotify_index.json
+.music-loader-artists.json
 .music-loader-logs/

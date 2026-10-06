@@ -6,9 +6,14 @@ run finishes. This module writes every failure to a plain-text file as it
 happens, so nothing is lost — the file can be checked (or grepped) after a
 long batch run to see exactly what needs retrying.
 """
+import re
 import threading
 from datetime import datetime
 from pathlib import Path
+
+# Private SoundCloud links carry a secret token ("/s-AbC123",
+# "secret_token=..."); the log file must not keep it.
+_SECRET_RE = re.compile(r"(/s-|secret_token=)[A-Za-z0-9]+")
 
 
 class RunLog:
@@ -25,6 +30,7 @@ class RunLog:
         """Appends one failure line. `source` is a short tag such as
         'Spotify', 'SoundCloud', or 'Lyrics'."""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        message = _SECRET_RE.sub(r"\1***", str(message))
         line = f"[{timestamp}] [{source}] {message}\n"
         # Called from several worker threads at once, so the write is
         # serialized. Opened/closed per call (not kept open) so the file is
