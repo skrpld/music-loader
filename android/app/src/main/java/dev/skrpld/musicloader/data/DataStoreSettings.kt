@@ -23,6 +23,10 @@ class DataStoreSettings(context: Context) : SettingsStore {
         .catch { error -> if (error is IOException) emit(emptyPreferences()) else throw error }
         .map { prefs ->
             AppSettings(
+                // Installs from before the phone mode keep using their server.
+                mode = DownloadMode.entries.firstOrNull { it.name == prefs[MODE] }
+                    ?: if (prefs[SERVER_URL].isNullOrEmpty()) DownloadMode.Phone else DownloadMode.Server,
+                musicDir = prefs[MUSIC_DIR].orEmpty(),
                 serverUrl = prefs[SERVER_URL].orEmpty(),
                 token = prefs[TOKEN].orEmpty(),
                 themeMode = ThemeMode.entries.firstOrNull { it.name == prefs[THEME_MODE] } ?: ThemeMode.System,
@@ -34,6 +38,14 @@ class DataStoreSettings(context: Context) : SettingsStore {
                 ),
             )
         }
+
+    override suspend fun setMode(mode: DownloadMode) {
+        store.edit { it[MODE] = mode.name }
+    }
+
+    override suspend fun setMusicDir(path: String) {
+        store.edit { it[MUSIC_DIR] = path }
+    }
 
     override suspend fun setServer(url: String, token: String) {
         store.edit {
@@ -59,6 +71,8 @@ class DataStoreSettings(context: Context) : SettingsStore {
     }
 
     private companion object {
+        val MODE = stringPreferencesKey("mode")
+        val MUSIC_DIR = stringPreferencesKey("music_dir")
         val SERVER_URL = stringPreferencesKey("server_url")
         val TOKEN = stringPreferencesKey("token")
         val THEME_MODE = stringPreferencesKey("theme_mode")

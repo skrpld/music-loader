@@ -9,12 +9,15 @@ on:
     # versionName 1.2.0. Path filters are not applied to tag pushes.
     tags:
       - "android-v*"
+    # The app embeds the music_loader package from cli/.
     paths:
       - "android/**"
+      - "cli/music_loader/**"
       - ".github/workflows/android.yml"
   pull_request:
     paths:
       - "android/**"
+      - "cli/music_loader/**"
       - ".github/workflows/android.yml"
   workflow_dispatch:
 
@@ -29,7 +32,7 @@ jobs:
   build:
     name: Build APK
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: android
@@ -43,6 +46,12 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
+
+      # Chaquopy installs the app's Python packages and compiles them with the
+      # same Python version the app embeds.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
 
       # Caches Gradle and validates the wrapper jar.
       - uses: gradle/actions/setup-gradle@v4

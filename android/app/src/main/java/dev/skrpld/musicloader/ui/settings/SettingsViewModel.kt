@@ -7,6 +7,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.skrpld.musicloader.data.ApiException
 import dev.skrpld.musicloader.data.AppSettings
+import dev.skrpld.musicloader.data.DownloadMode
+import dev.skrpld.musicloader.data.LocalBackend
 import dev.skrpld.musicloader.data.ServerConfig
 import dev.skrpld.musicloader.data.ServerInfo
 import dev.skrpld.musicloader.data.ServerRepository
@@ -34,6 +36,7 @@ sealed interface ConnectionTest {
 class SettingsViewModel(
     private val repository: ServerRepository,
     private val settingsStore: SettingsStore,
+    private val local: LocalBackend,
 ) : ViewModel() {
     val settings: StateFlow<AppSettings?> =
         settingsStore.settings.stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -45,6 +48,14 @@ class SettingsViewModel(
     var test by mutableStateOf<ConnectionTest>(ConnectionTest.Idle)
         private set
 
+    /** Phone mode: the folder being edited; empty means [defaultMusicDir]. */
+    var musicDirInput by mutableStateOf("")
+        private set
+    var storageGranted by mutableStateOf(local.hasStorageAccess())
+        private set
+
+    val defaultMusicDir: String get() = local.defaultMusicDir
+
     private var testJob: Job? = null
 
     init {
@@ -53,7 +64,44 @@ class SettingsViewModel(
             // Keep anything typed while the settings were loading.
             if (urlInput.isEmpty()) urlInput = stored.serverUrl
             if (tokenInput.isEmpty()) tokenInput = stored.token
+            if (musicDirInput.isEmpty()) musicDirInput = stored.musicDir
         }
+    }
+
+    fun setMode(mode: DownloadMode) {
+        viewModelScope.launch { settingsStore.setMode(mode) }
+    }
+
+    /** Called when the app returns from the permission screens. */
+    fun refreshStorageAccess() {
+        val granted = local.hasStorageAccess()
+        if (granted != storageGranted) {
+            storageGranted = granted
+            repository.retryNow()
+        }
+    }
+
+    fun updateMusicDir(value: String) {
+        musicDirInput = value
+    }
+
+    /** An absolute folder path, or empty for the default. */
+    val musicDirValid: Boolean
+        get() = musicDirInput.isBlank() || musicDirInput.trim().startsWith("/")
+
+    fun isMusicDirSaved(current: AppSettings?): Boolean =
+        current != null && current.musicDir == musicDirInput.trim().trimEnd('/')
+
+    fun saveMusicDir() {
+        if (!musicDirValid) return
+        val path = musicDirInput.trim().trimEnd('/')
+        musicDirInput = path
+        viewModelScope.launch { settingsStore.setMusicDir(path) }
+    }
+
+    fun pickMusicDir(path: String) {
+        musicDirInput = path
+        saveMusicDir()
     }
 
     val normalizedUrl: String? get() = ServerUrls.normalize(urlInput)

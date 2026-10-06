@@ -15,6 +15,11 @@
     <string name="connection_not_configured_body">Укажите адрес и токен, которые выводит music-loader serve.</string>
     <string name="connection_unauthorized">Неверный токен</string>
     <string name="connection_unauthorized_body">Сервер отклонил токен. Скопируйте его заново из вывода сервера.</string>
+    <string name="connection_starting">Загрузчик запускается…</string>
+    <string name="connection_starting_body">Первый запуск после установки или обновления распаковывает ffmpeg и занимает до минуты.</string>
+    <string name="connection_local_ready">Готово к загрузке</string>
+    <string name="connection_local_failed">Загрузчик не запустился</string>
+    <string name="connection_local_failed_body">Закройте приложение и откройте снова. Если ошибка повторяется, переустановите его.</string>
 
     <!-- Common actions -->
     <string name="action_configure">Настроить</string>
@@ -35,6 +40,8 @@
     <string name="action_show_token">Показать токен</string>
     <string name="action_hide_token">Скрыть токен</string>
     <string name="action_failed">Не удалось выполнить действие: %1$s</string>
+    <string name="action_allow">Разрешить</string>
+    <string name="action_choose_folder">Выбрать папку</string>
 
     <!-- Download -->
     <string name="links_title">Ссылки</string>
@@ -89,7 +96,7 @@
     <string name="job_rejected">Не распознаны</string>
     <string name="job_errors_count">Ошибки (%1$d)</string>
     <string name="job_activity">Журнал</string>
-    <string name="job_runlog">Журнал ошибок на сервере</string>
+    <string name="job_runlog">Журнал ошибок</string>
     <string name="job_failed_links">Ссылок с ошибками</string>
     <string name="kind_track">Трек</string>
     <string name="kind_album">Альбом</string>
@@ -125,6 +132,19 @@
     <string name="delete_dialog_body">Удаляется только запись в списке; скачанная музыка остаётся в библиотеке.</string>
 
     <!-- Settings -->
+    <string name="settings_mode">Куда скачивать</string>
+    <string name="mode_phone">Этот телефон</string>
+    <string name="mode_server">Сервер</string>
+    <string name="settings_mode_phone_description">Приложение само скачивает, конвертирует и подписывает музыку и сохраняет её в папку ниже. Не отключайте интернет, пока очередь не закончится.</string>
+    <string name="settings_mode_server_description">Компьютер с music-loader serve скачивает в свою библиотеку, а приложение ставит ссылки в очередь и показывает ход загрузки.</string>
+    <string name="settings_phone">Библиотека на телефоне</string>
+    <string name="settings_storage_granted">Доступ к папке с музыкой разрешён</string>
+    <string name="settings_storage_needed">Нужен доступ к хранилищу</string>
+    <string name="settings_storage_needed_body">Треки, тексты (.lrc) и плейлисты сохраняются файлами: разрешите приложению управлять файлами.</string>
+    <string name="settings_music_dir">Папка с музыкой</string>
+    <string name="settings_music_dir_hint">Пусто: %1$s</string>
+    <string name="settings_music_dir_invalid">Полный путь, начинающийся с /</string>
+    <string name="settings_music_dir_unsupported">Эта папка не в памяти телефона, выберите другую</string>
     <string name="settings_server">Сервер</string>
     <string name="settings_server_url">Адрес сервера</string>
     <string name="settings_server_url_placeholder">http://192.168.1.10:8765</string>
@@ -150,4 +170,9 @@
     <string name="settings_version">Версия %1$s</string>
     <string name="settings_server_howto">Запустите сервер на компьютере с библиотекой</string>
     <string name="settings_server_command">music-loader serve -o /путь/к/Music</string>
+
+    <!-- Notifications -->
+    <string name="notification_channel_downloads">Загрузки</string>
+    <string name="notification_downloading">Загрузка музыки</string>
+    <string name="notification_queued">В очереди: %1$d</string>
 </resources>

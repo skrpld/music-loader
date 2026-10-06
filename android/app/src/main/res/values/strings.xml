@@ -17,6 +17,11 @@
     <string name="connection_not_configured_body">Enter the address and token printed by music-loader serve.</string>
     <string name="connection_unauthorized">Wrong token</string>
     <string name="connection_unauthorized_body">The server rejected the token. Copy it again from the server output.</string>
+    <string name="connection_starting">Starting the downloader…</string>
+    <string name="connection_starting_body">The first start after installing or updating unpacks ffmpeg and takes up to a minute.</string>
+    <string name="connection_local_ready">Ready to download</string>
+    <string name="connection_local_failed">The downloader did not start</string>
+    <string name="connection_local_failed_body">Close the app and open it again. If this keeps happening, reinstall it.</string>
 
     <!-- Common actions -->
     <string name="action_configure">Set up</string>
@@ -37,6 +42,8 @@
     <string name="action_show_token">Show token</string>
     <string name="action_hide_token">Hide token</string>
     <string name="action_failed">Could not complete the action: %1$s</string>
+    <string name="action_allow">Allow</string>
+    <string name="action_choose_folder">Choose folder</string>
 
     <!-- Download -->
     <string name="links_title">Links</string>
@@ -89,7 +96,7 @@
     <string name="job_rejected">Not recognized</string>
     <string name="job_errors_count">Errors (%1$d)</string>
     <string name="job_activity">Activity</string>
-    <string name="job_runlog">Failure log on the server</string>
+    <string name="job_runlog">Failure log</string>
     <string name="job_failed_links">Failed links</string>
     <string name="kind_track">Track</string>
     <string name="kind_album">Album</string>
@@ -125,6 +132,19 @@
     <string name="delete_dialog_body">Only the entry in the list is removed; the downloaded music stays in the library.</string>
 
     <!-- Settings -->
+    <string name="settings_mode">Where to download</string>
+    <string name="mode_phone">This phone</string>
+    <string name="mode_server">Server</string>
+    <string name="settings_mode_phone_description">The app downloads, converts and tags the music itself and saves it to the folder below. Keep the phone online until the queue is done.</string>
+    <string name="settings_mode_server_description">A computer running music-loader serve downloads into its own library; the app queues links and follows the progress.</string>
+    <string name="settings_phone">Library on this phone</string>
+    <string name="settings_storage_granted">Access to the music folder is allowed</string>
+    <string name="settings_storage_needed">Storage access needed</string>
+    <string name="settings_storage_needed_body">Tracks, lyrics (.lrc) and playlists are saved as files: allow the app to manage files.</string>
+    <string name="settings_music_dir">Music folder</string>
+    <string name="settings_music_dir_hint">Empty: %1$s</string>
+    <string name="settings_music_dir_invalid">A full path that starts with /</string>
+    <string name="settings_music_dir_unsupported">This folder is not on the phone\'s storage; choose another one</string>
     <string name="settings_server">Server</string>
     <string name="settings_server_url">Server address</string>
     <string name="settings_server_url_placeholder">http://192.168.1.10:8765</string>
@@ -150,4 +170,9 @@
     <string name="settings_version">Version %1$s</string>
     <string name="settings_server_howto">Start the server on the computer with the library</string>
     <string name="settings_server_command">music-loader serve -o /path/to/Music</string>
+
+    <!-- Notifications -->
+    <string name="notification_channel_downloads">Downloads</string>
+    <string name="notification_downloading">Downloading music</string>
+    <string name="notification_queued">Queued: %1$d</string>
 </resources>

@@ -61,7 +61,7 @@ from .lyrics import LyricsRequest, LyricsService, get_attempts
 from .net import http_get
 from .paths import move_with_sidecars, prune_empty_dirs, remove_with_sidecars
 from .playlist import update_soundcloud_playlist, write_named_playlist
-from .process import run_captured, run_streamed, tool_command
+from .process import run_captured, run_streamed, tool_command, wait_future
 from .soundcloud_index import SoundCloudArchive, get_index
 from .soundcloud_meta import AlbumContext, SoundCloudApi, TrackMeta, build_meta, context_from_set
 from .tags import audio_duration, read_tags, write_tags
@@ -972,7 +972,7 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
     try:
         dl_futures = [dl_pool.submit(track_task, job) for job in jobs]
         for future in dl_futures:
-            future.result()
+            wait_future(future)
         # Conversion jobs may still be queued after the last download.
         while True:
             with ctx.lock:
@@ -980,7 +980,7 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
             if not pending:
                 break
             for future in pending:
-                future.result()
+                wait_future(future)
         while True:
             with ctx.lock:
                 pending = [future for future in lyrics_futures if not future.done()]
@@ -988,7 +988,7 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
                 break
             for future in pending:
                 try:
-                    future.result()
+                    wait_future(future)
                 except Exception as exc:
                     dashboard.log_error("Lyrics", f"Lyrics worker failed: {exc}")
     except BaseException:

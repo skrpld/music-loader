@@ -1,4 +1,5 @@
 """Helpers for running external commands with live output handling."""
+import concurrent.futures
 import importlib.util
 import os
 import queue
@@ -8,6 +9,8 @@ import sys
 import threading
 import time
 from typing import Callable, Optional
+
+from . import inprocess
 
 LineHandler = Callable[[str], None]
 IdleHandler = Callable[[float], None]
@@ -33,12 +36,48 @@ def module_available(module: str) -> bool:
 
 
 def tool_command(name: str) -> list[str] | None:
-    """Command prefix for an external tool, or None when it is not installed."""
+    """Command prefix for an external tool, or None when it is not installed.
+
+    Without a Python executable to start (Android) the Python tools run
+    inside this interpreter; see inprocess.py."""
     module = _PYTHON_TOOLS.get(name)
     if module and module_available(module):
+        if inprocess.ENABLED:
+            return [inprocess.MARK, module]
         return [sys.executable, "-m", module]
     path = shutil.which(name)
     return [path] if path else None
+
+
+def wait_future(future: concurrent.futures.Future):
+    """`future.result()` that a KeyboardInterrupt can break into.
+
+    A blocking wait outside the main thread holds an interrupt back until the
+    future is done; an in-process job (Android) runs in such a thread and is
+    cancelled with a KeyboardInterrupt raised in it."""
+    while True:
+        try:
+            return future.result(timeout=0.5)
+        except concurrent.futures.TimeoutError:
+            if future.done():
+                raise
+
+
+def runs_in_this_python(cmd: list[str]) -> bool:
+    """True when `cmd` (from tool_command) is the Python package installed
+    next to music-loader, run as a child process or in-process."""
+    return cmd[:2] == [sys.executable, "-m"] or cmd[:1] == [inprocess.MARK]
+
+
+# yt-dlp needs a JavaScript runtime for YouTube's challenges; where neither
+# Deno nor Node is installed (Android) the embedding app names one, e.g.
+# "quickjs:/path/to/qjs".
+JS_RUNTIME_ENV = "MUSIC_LOADER_JS_RUNTIME"
+
+
+def ytdlp_extra_args() -> list[str]:
+    runtime = os.environ.get(JS_RUNTIME_ENV, "").strip()
+    return ["--js-runtimes", runtime] if runtime else []
 
 
 def child_env(extra: Optional[dict[str, str]] = None) -> dict[str, str]:
@@ -87,6 +126,9 @@ def run_captured(
     env: Optional[dict[str, str]] = None,
 ) -> tuple[int, str, str]:
     """Runs a command and returns ``(returncode, stdout, stderr)``."""
+    module = inprocess.command_module(cmd)
+    if module is not None:
+        return inprocess.run_captured(module, cmd[2:], timeout)
     try:
         process = subprocess.run(
             cmd,
@@ -140,6 +182,10 @@ def run_streamed(
     including when the caller is interrupted (Ctrl+C), so no orphaned
     yt-dlp/spotdl processes keep downloading in the background.
     """
+    module = inprocess.command_module(cmd)
+    if module is not None:
+        return inprocess.run_streamed(module, cmd[2:], on_line, on_idle, idle_interval,
+                                      timeout, should_abort)
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -167,37 +213,11 @@ def run_streamed(
     thread = threading.Thread(target=reader, name="proc-reader", daemon=True)
     thread.start()
 
-    last_output = time.monotonic()
-    last_idle_report = last_output
-    poll = min(idle_interval, 0.5) if should_abort is not None else idle_interval
-
     try:
-        while True:
-            if should_abort is not None and should_abort():
-                _terminate(process)
-                return -2
-            now = time.monotonic()
-            if now - last_output > timeout:
-                _terminate(process)
-                return -1
-
-            try:
-                raw_line = lines.get(timeout=poll)
-            except queue.Empty:
-                now = time.monotonic()
-                if on_idle is not None and now - last_idle_report >= idle_interval:
-                    last_idle_report = now
-                    on_idle(now - last_output)
-                continue
-
-            if raw_line is None:
-                break
-
-            last_output = last_idle_report = time.monotonic()
-            stripped = raw_line.strip()
-            if stripped:
-                on_line(stripped)
-
+        result = pump_lines(lines, on_line, on_idle, idle_interval, timeout, should_abort)
+        if result is not None:
+            _terminate(process)
+            return result
         process.wait(timeout=60)
     except subprocess.TimeoutExpired:
         _terminate(process)
@@ -215,3 +235,47 @@ def run_streamed(
         thread.join(timeout=5)
 
     return process.returncode
+
+
+def pump_lines(
+    lines: "queue.Queue[Optional[str]]",
+    on_line: LineHandler,
+    on_idle: Optional[IdleHandler],
+    idle_interval: float,
+    timeout: float,
+    should_abort: Optional[AbortCheck],
+) -> Optional[int]:
+    """Forwards lines from `lines` until a None marks the end of the output.
+
+    Returns None when the output ended, -2 when `should_abort` asked to stop
+    and -1 after `timeout` seconds without output; stopping the producer is
+    up to the caller."""
+    last_output = time.monotonic()
+    last_idle_report = last_output
+    # Short waits: a KeyboardInterrupt raised in this thread from outside (an
+    # in-process job being cancelled) only lands between them.
+    poll = min(idle_interval, 0.5)
+
+    while True:
+        if should_abort is not None and should_abort():
+            return -2
+        now = time.monotonic()
+        if now - last_output > timeout:
+            return -1
+
+        try:
+            raw_line = lines.get(timeout=poll)
+        except queue.Empty:
+            now = time.monotonic()
+            if on_idle is not None and now - last_idle_report >= idle_interval:
+                last_idle_report = now
+                on_idle(now - last_output)
+            continue
+
+        if raw_line is None:
+            return None
+
+        last_output = last_idle_report = time.monotonic()
+        stripped = raw_line.strip()
+        if stripped:
+            on_line(stripped)

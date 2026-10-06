@@ -144,6 +144,20 @@ fun ConnectionBanner(
             body = null,
             leading = { LoadingIndicator(modifier = Modifier.size(40.dp)) },
         )
+        Connection.Starting -> BannerCard(
+            modifier = modifier,
+            title = stringResource(R.string.connection_starting),
+            body = stringResource(R.string.connection_starting_body),
+            leading = { LoadingIndicator(modifier = Modifier.size(40.dp)) },
+        )
+        Connection.NeedsStorageAccess -> BannerCard(
+            modifier = modifier,
+            title = stringResource(R.string.settings_storage_needed),
+            body = stringResource(R.string.settings_storage_needed_body),
+            leading = { BannerIcon(R.drawable.ic_folder) },
+            actionLabel = stringResource(R.string.action_open_settings),
+            onAction = onOpenSettings,
+        )
         Connection.NotConfigured -> BannerCard(
             modifier = modifier,
             title = stringResource(R.string.connection_not_configured),
@@ -165,8 +179,12 @@ fun ConnectionBanner(
         } else {
             BannerCard(
                 modifier = modifier,
-                title = stringResource(R.string.connection_offline),
-                body = connection.message ?: stringResource(R.string.connection_offline_body),
+                title = stringResource(
+                    if (connection.local) R.string.connection_local_failed else R.string.connection_offline,
+                ),
+                body = connection.message ?: stringResource(
+                    if (connection.local) R.string.connection_local_failed_body else R.string.connection_offline_body,
+                ),
                 leading = { BannerIcon(R.drawable.ic_cloud_off) },
                 actionLabel = stringResource(R.string.action_retry),
                 onAction = onRetry,

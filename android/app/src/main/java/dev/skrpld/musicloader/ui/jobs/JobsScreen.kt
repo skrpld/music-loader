@@ -72,7 +72,8 @@ fun JobsScreen(
         },
     ) { padding ->
         when {
-            state == null && connection == Connection.Connecting -> CenteredLoading(Modifier.padding(padding))
+            state == null && (connection == Connection.Connecting || connection == Connection.Starting) ->
+                CenteredLoading(Modifier.padding(padding))
             state == null -> Column(Modifier.padding(padding).padding(16.dp)) {
                 ConnectionBanner(connection = connection, onRetry = onRetry, onOpenSettings = onOpenSettings)
             }

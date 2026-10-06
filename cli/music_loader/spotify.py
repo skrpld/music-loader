@@ -40,6 +40,7 @@ from __future__ import annotations
 import importlib.metadata
 import json
 import re
+import shlex
 import shutil
 import sys
 import tempfile
@@ -61,7 +62,14 @@ from .config import (
 from .links import Link
 from .lyrics import LyricsRequest, LyricsService, get_attempts
 from .paths import move_with_sidecars, prune_empty_dirs, remove_with_sidecars
-from .process import run_captured, run_streamed, tool_command
+from .process import (
+    run_captured,
+    run_streamed,
+    runs_in_this_python,
+    tool_command,
+    wait_future,
+    ytdlp_extra_args,
+)
 from .spotify_index import get_library
 from .tags import audio_duration, read_woas
 
@@ -110,7 +118,7 @@ class _Song:
 
 
 def spotdl_version(spotdl: list[str]) -> tuple[int, int, int] | None:
-    if spotdl[:2] == [sys.executable, "-m"]:
+    if runs_in_this_python(spotdl):
         try:
             match = _VERSION_RE.search(importlib.metadata.version("spotdl"))
         except importlib.metadata.PackageNotFoundError:
@@ -135,8 +143,9 @@ def _credential_args(config: AppConfig, version: tuple[int, int, int] | None, sp
     if spotdl[:2] == [sys.executable, "-m"]:
         env[_SECRET_ENV] = config.spotify_client_secret
     else:
-        # A spotdl outside this Python environment cannot use the bootstrap.
-        args += ["--client-secret", config.spotify_client_secret]
+        # A spotdl outside this Python environment cannot use the bootstrap;
+        # an in-process run has no command line others could read.
+        args +=["--client-secret", config.spotify_client_secret]
     if version is not None and version >= (4, 5, 0):
         # Since 4.5 spotdl ignores credentials unless told to use the
         # official Web API (older versions do not know the option).
@@ -293,6 +302,9 @@ def download_spotify(
         "--lyrics",
         "--simple-tui", "--threads", str(max(1, config.spotify_threads)),
     ] + cred_args
+    extra = ytdlp_extra_args()
+    if extra:
+        common += ["--yt-dlp-args", shlex.join(extra)]
 
     work_dir = Path(tempfile.mkdtemp(prefix="music-loader-spotify-"))
     save_file = work_dir / "query.spotdl"
@@ -473,12 +485,20 @@ def _lyrics(songs: list[_Song], config: AppConfig, dashboard, service: LyricsSer
     if not requests:
         return
     dashboard.start_file(label="Spotify: lyrics...")
-    with ThreadPoolExecutor(max_workers=max(1, config.lyrics_workers), thread_name_prefix="sp-lyrics") as pool:
+    pool = ThreadPoolExecutor(max_workers=max(1, config.lyrics_workers), thread_name_prefix="sp-lyrics")
+    aborted = False
+    try:
         for future in [pool.submit(service.process, request, attempts, dashboard) for request in requests]:
             try:
-                future.result()
+                wait_future(future)
             except Exception as exc:
                 dashboard.log_error("Lyrics", f"Lyrics worker failed: {exc}")
+    except BaseException:
+        # Ctrl+C: the lookups still queued are dropped, not waited for.
+        aborted = True
+        raise
+    finally:
+        pool.shutdown(wait=True, cancel_futures=aborted)
 
 
 def _refusal_hint(refused: bool, config: AppConfig, dashboard) -> None:

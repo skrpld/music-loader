@@ -11,8 +11,9 @@ and **SoundCloud** links - ready for a player such as
 Paste an album, playlist, artist, profile or single track, and Music Loader
 downloads it, writes full metadata and cover art, files it into one folder per
 album, and adds **verified** lyrics (synced `.lrc` when the timing provably
-fits). Run it from the terminal, or as a small server on the machine that holds
-your library and queue downloads from your phone with the Android app.
+fits). Run it from the terminal, let the Android app download straight to the
+phone, or run it as a small server on the machine that holds your library and
+queue downloads from the phone.
 
 ## Features
 
@@ -31,8 +32,9 @@ your library and queue downloads from your phone with the Android app.
   `--recheck` brings old downloads up to the current rules.
 - **Live terminal dashboard** with speed, ETA and statistics; a persistent
   failure log per run.
-- **Server mode + Android app** (Material 3 Expressive): queue links from the
-  phone, share links straight from the Spotify/SoundCloud apps, follow progress
+- **Android app** (Material 3 Expressive): downloads straight to the phone -
+  the same Python code runs inside the app - or drives a computer in server
+  mode; share links straight from the Spotify/SoundCloud apps, follow progress
   live.
 
 ## Components
@@ -40,7 +42,7 @@ your library and queue downloads from your phone with the Android app.
 | Directory | What | Docs |
 |---|---|---|
 | [`cli/`](cli) | Python package `music-loader`: command-line tool and HTTP server | [cli/README.md](cli/README.md) |
-| [`android/`](android) | Android client for the server (Kotlin, Jetpack Compose) | [android/README.md](android/README.md) |
+| [`android/`](android) | Android app (Kotlin, Jetpack Compose) with the package embedded | [android/README.md](android/README.md) |
 | [`docs/`](docs) | Behaviour in depth, server API, releasing, security | see below |
 
 ## Quick start
@@ -63,14 +65,17 @@ music-loader links.txt "https://soundcloud.com/..." -o ~/Music   # file: one lin
 music-loader                                                       # interactive
 ```
 
-Use it from the phone:
+On the phone: install the APK from the latest
+[`android-v*` release](https://github.com/skrpld/music-loader/releases), allow
+storage access when asked and paste links - the music lands in the phone's
+`Music` folder. To download on a computer instead:
 
 ```bash
 music-loader serve -o ~/Music     # prints the server address and an access token
 ```
 
-Install the APK from the latest [`android-v*` release](https://github.com/skrpld/music-loader/releases),
-open **Settings → Server**, enter the address and token, **Test → Save**.
+and in the app choose **Settings → Where to download → Server**, enter the
+address and token, **Test → Save**.
 
 All options: [cli/README.md](cli/README.md).
 
@@ -81,6 +86,8 @@ All options: [cli/README.md](cli/README.md).
   specifics.
 - [Server mode and API](docs/server.md) - `music-loader serve`, tokens,
   deployment, HTTP API.
+- [Android app](android/README.md) - the phone mode, permissions, limits,
+  building.
 - [Releasing](docs/releasing.md) - tags, versions, CI workflows, Android
   signing secrets.
 - [Security](docs/security.md) - what is protected and how secrets are
@@ -94,7 +101,7 @@ music-loader/
 │   ├── pyproject.toml
 │   ├── music_loader/
 │   └── tests/
-├── android/                     # Android app (Gradle project)
+├── android/                     # Android app (Gradle project, embeds cli/music_loader)
 ├── docs/                        # detailed documentation
 └── .github/
     ├── workflows/cli.yml        # tests, wheel; release on cli-v* tags
@@ -111,7 +118,7 @@ python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
 ruff check . && pytest
 
-# Android (JDK 17+, Android SDK)
+# Android (JDK 17+, Android SDK, Python 3.13 in PATH)
 cd android
 ./gradlew assembleDebug
 ```

@@ -30,6 +30,7 @@ import argparse
 import hmac
 import json
 import os
+import queue
 import re
 import secrets
 import signal
@@ -167,12 +168,19 @@ class QueueFull(Exception):
 
 
 class JobManager:
-    """Job queue and the single runner thread that executes it."""
+    """Job queue and the single runner thread that executes it.
 
-    def __init__(self, music_dir: Path, worker_options: dict[str, Any], console: Console):
+    Each job normally runs in a worker process (worker.py). With
+    `in_process` (Android: there is no Python executable to start) it runs in
+    a thread of this process instead, and cancelling raises KeyboardInterrupt
+    in that thread - the same cleanup the worker's SIGINT triggers."""
+
+    def __init__(self, music_dir: Path, worker_options: dict[str, Any], console: Console,
+                 in_process: bool = False):
         self.music_dir = music_dir
         self.worker_options = worker_options
         self.console = console
+        self.in_process = in_process
         self.revision = 0
         self.closed = False
         self._cond = threading.Condition()
@@ -180,6 +188,8 @@ class JobManager:
         self._pending: deque[str] = deque()
         self._running: Optional[Job] = None
         self._process: Optional[subprocess.Popen] = None
+        self._job_thread: Optional[threading.Thread] = None
+        self._give_up_at: Optional[float] = None
         self._thread = threading.Thread(target=self._run_loop, name="job-runner", daemon=True)
 
     def start(self) -> None:
@@ -319,6 +329,8 @@ class JobManager:
                 job.finished_at = _now_ms()
                 self._running = None
                 self._process = None
+                self._job_thread = None
+                self._give_up_at = None
                 self._trim_history()
                 self._changed()
             style = {"completed": "green", "cancelled": "yellow"}.get(status, "red")
@@ -334,6 +346,8 @@ class JobManager:
             **job.options,
             **self.worker_options,
         }
+        if self.in_process:
+            return self._execute_in_process(job, spec)
         env = os.environ.copy()
         env["PYTHONUTF8"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
@@ -385,18 +399,9 @@ class JobManager:
         finished: Optional[dict[str, Any]] = None
         assert process.stdout is not None
         for raw in process.stdout:
-            try:
-                event = json.loads(raw)
-            except ValueError:
-                continue
-            if not isinstance(event, dict):
-                continue
-            with self._cond:
-                if event.get("type") == "finished":
-                    finished = event
-                else:
-                    self._apply(job, event)
-                    self._changed()
+            event = self._event(job, raw)
+            if event is not None:
+                finished = event
         code = process.wait()
         drainer.join(timeout=5)
 
@@ -406,6 +411,84 @@ class JobManager:
             return "cancelled", None
         detail = stderr_tail[-1] if stderr_tail else ""
         return "failed", f"Worker exited with code {code}" + (f": {detail}" if detail else "")
+
+    def _event(self, job: Job, raw: str) -> Optional[dict[str, Any]]:
+        """Applies one event line of a job; returns it when it is the final one."""
+        try:
+            event = json.loads(raw)
+        except ValueError:
+            return None
+        if not isinstance(event, dict):
+            return None
+        if event.get("type") == "finished":
+            return event
+        with self._cond:
+            # A job given up on after a cancel may still be unwinding.
+            if self._running is job:
+                self._apply(job, event)
+                self._changed()
+        return None
+
+    def _execute_in_process(self, job: Job, spec: dict[str, Any]) -> tuple[str, Optional[str]]:
+        from . import inprocess, worker
+        from .events import EventDashboard
+
+        inprocess.install()
+        _reset_run_caches()
+        # The job thread only queues its event lines; this thread applies
+        # them, so a KeyboardInterrupt raised in the job thread can never land
+        # while it holds the manager's lock.
+        lines: "queue.SimpleQueue[str]" = queue.SimpleQueue()
+
+        class _Stream:
+            def write(self, text: str) -> int:
+                lines.put(text)
+                return len(text)
+
+            def flush(self) -> None:
+                pass
+
+        events = EventDashboard(_Stream())
+
+        def run() -> None:
+            try:
+                worker.run(spec, events)
+            except KeyboardInterrupt:
+                events.emit({"type": "finished", "status": "cancelled", "message": None})
+            except BaseException as exc:
+                events.emit({"type": "finished", "status": "failed",
+                             "message": f"{type(exc).__name__}: {exc}"})
+
+        thread = threading.Thread(target=run, name=f"job-{job.id}", daemon=True)
+        with self._cond:
+            self._job_thread = thread
+            thread.start()
+            if job.cancel_requested:
+                self._interrupt()
+
+        finished: Optional[dict[str, Any]] = None
+        while True:
+            try:
+                text = lines.get(timeout=0.5)
+            except queue.Empty:
+                if not thread.is_alive():
+                    break
+                with self._cond:
+                    give_up = self._give_up_at is not None and time.monotonic() > self._give_up_at
+                if give_up:
+                    self.console.print(f"[red]Job {job.id} did not stop in time and was left behind[/red]")
+                    break
+                continue
+            for raw in text.splitlines():
+                event = self._event(job, raw)
+                if event is not None and finished is None:
+                    finished = event
+
+        if finished is not None and finished.get("status") in _FINISHED:
+            return finished["status"], _text(finished.get("message")) or None
+        if job.cancel_requested:
+            return "cancelled", None
+        return "failed", "The job ended without a result"
 
     @staticmethod
     def _apply(job: Job, event: dict[str, Any]) -> None:
@@ -447,6 +530,15 @@ class JobManager:
 
     def _interrupt(self) -> None:
         """Asks the running worker to stop (caller holds the lock)."""
+        if self.in_process:
+            thread = self._job_thread
+            if thread is not None and thread.is_alive():
+                from .inprocess import raise_in
+
+                raise_in(thread, KeyboardInterrupt)
+                if self._give_up_at is None:
+                    self._give_up_at = time.monotonic() + _CANCEL_GRACE_SECONDS
+            return
         process = self._process
         if process is None or process.poll() is not None:
             return
@@ -460,6 +552,20 @@ class JobManager:
         timer = threading.Timer(_CANCEL_GRACE_SECONDS, _kill_tree, args=(process,))
         timer.daemon = True
         timer.start()
+
+
+def _reset_run_caches() -> None:
+    """Library indexes and registries are cached for the run of one worker
+    process; an in-process job starts from the files on disk just the same."""
+    from . import artists, lyrics, soundcloud_index, spotify_index
+
+    with artists._REGISTRIES_LOCK:
+        artists._REGISTRIES.clear()
+    with lyrics._ATTEMPTS_LOCK:
+        lyrics._ATTEMPTS.clear()
+    with soundcloud_index._INDEX_CACHE_LOCK:
+        soundcloud_index._INDEX_CACHE.clear()
+    spotify_index._LIBRARIES.clear()
 
 
 def _kill_tree(process: subprocess.Popen) -> None:

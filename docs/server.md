@@ -15,7 +15,7 @@ Server address: http://192.168.1.10:8765
 Token: <generated token> (~/.config/music-loader/server-token)
 ```
 
-Enter both in the app: **Settings → Server → Test → Save**.
+Enter both in the app: **Settings → Where to download → Server**, then **Test → Save**.
 
 ## Options
 

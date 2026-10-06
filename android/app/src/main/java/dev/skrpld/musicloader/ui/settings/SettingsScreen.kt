@@ -1,5 +1,8 @@
 package dev.skrpld.musicloader.ui.settings
 
+import android.content.ActivityNotFoundException
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -42,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -51,11 +55,15 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.skrpld.musicloader.R
 import dev.skrpld.musicloader.data.AppSettings
+import dev.skrpld.musicloader.data.DownloadMode
 import dev.skrpld.musicloader.data.ServerUrls
 import dev.skrpld.musicloader.data.ThemeMode
+import dev.skrpld.musicloader.engine.StorageAccess
 import dev.skrpld.musicloader.ui.components.SectionHeader
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -89,8 +97,30 @@ fun SettingsScreen(
         ) {
             val contentModifier = Modifier.widthIn(max = 640.dp).fillMaxWidth()
             Column(modifier = contentModifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                SectionHeader(stringResource(R.string.settings_server))
-                ServerCard(viewModel, settings)
+                val mode = settings?.mode ?: DownloadMode.Phone
+                SectionHeader(stringResource(R.string.settings_mode))
+                ModeSelector(selected = mode, onSelect = viewModel::setMode)
+                Text(
+                    text = stringResource(
+                        when (mode) {
+                            DownloadMode.Phone -> R.string.settings_mode_phone_description
+                            DownloadMode.Server -> R.string.settings_mode_server_description
+                        },
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                )
+                when (mode) {
+                    DownloadMode.Phone -> {
+                        SectionHeader(stringResource(R.string.settings_phone))
+                        PhoneCard(viewModel, settings)
+                    }
+                    DownloadMode.Server -> {
+                        SectionHeader(stringResource(R.string.settings_server))
+                        ServerCard(viewModel, settings)
+                    }
+                }
                 SectionHeader(stringResource(R.string.settings_appearance))
                 Text(
                     text = stringResource(R.string.settings_theme),
@@ -108,7 +138,149 @@ fun SettingsScreen(
                     onCheckedChange = viewModel::setDynamicColor,
                 )
                 SectionHeader(stringResource(R.string.settings_about))
-                AboutItems(appVersion)
+                AboutItems(appVersion, showServerHowto = mode == DownloadMode.Server)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun ModeSelector(selected: DownloadMode, onSelect: (DownloadMode) -> Unit) {
+    val modes = DownloadMode.entries
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
+    ) {
+        modes.forEachIndexed { index, mode ->
+            val (label, icon) = when (mode) {
+                DownloadMode.Phone -> R.string.mode_phone to R.drawable.ic_library_music
+                DownloadMode.Server -> R.string.mode_server to R.drawable.ic_dns
+            }
+            ToggleButton(
+                checked = selected == mode,
+                onCheckedChange = { onSelect(mode) },
+                modifier = Modifier
+                    .weight(1f)
+                    .semantics { role = Role.RadioButton },
+                icon = { Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(18.dp)) },
+                shapes = when (index) {
+                    0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                    modes.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                    else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                },
+            ) {
+                Text(text = stringResource(label), maxLines = 1)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun PhoneCard(viewModel: SettingsViewModel, settings: AppSettings?) {
+    val context = LocalContext.current
+    var pickFailed by rememberSaveable { mutableStateOf(false) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refreshStorageAccess() }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        viewModel.refreshStorageAccess()
+    }
+    val settingsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        viewModel.refreshStorageAccess()
+    }
+    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val path = StorageAccess.pathOf(uri)
+        pickFailed = path == null
+        if (path != null) viewModel.pickMusicDir(path)
+    }
+
+    Card(
+        shape = MaterialTheme.shapes.extraLarge,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (viewModel.storageGranted) {
+                ResultRow(
+                    icon = R.drawable.ic_check_circle,
+                    tint = MaterialTheme.colorScheme.primary,
+                    title = stringResource(R.string.settings_storage_granted),
+                    body = null,
+                )
+            } else {
+                ResultRow(
+                    icon = R.drawable.ic_warning,
+                    tint = MaterialTheme.colorScheme.error,
+                    title = stringResource(R.string.settings_storage_needed),
+                    body = stringResource(R.string.settings_storage_needed_body),
+                )
+                Button(
+                    onClick = {
+                        if (StorageAccess.usesPermission) {
+                            permissionLauncher.launch(StorageAccess.PERMISSION)
+                        } else {
+                            val intents = StorageAccess.settingsIntents(context)
+                            try {
+                                settingsLauncher.launch(intents[0])
+                            } catch (e: ActivityNotFoundException) {
+                                settingsLauncher.launch(intents[1])
+                            }
+                        }
+                    },
+                    shapes = ButtonDefaults.shapes(),
+                    modifier = Modifier.align(Alignment.End),
+                ) {
+                    Text(stringResource(R.string.action_allow))
+                }
+            }
+            val folderError = !viewModel.musicDirValid
+            OutlinedTextField(
+                value = viewModel.musicDirInput,
+                onValueChange = {
+                    pickFailed = false
+                    viewModel.updateMusicDir(it)
+                },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text(stringResource(R.string.settings_music_dir)) },
+                placeholder = { Text(viewModel.defaultMusicDir) },
+                leadingIcon = { Icon(painterResource(R.drawable.ic_folder), contentDescription = null) },
+                trailingIcon = {
+                    IconButton(onClick = { folderPicker.launch(null) }) {
+                        Icon(
+                            painterResource(R.drawable.ic_library_music),
+                            contentDescription = stringResource(R.string.action_choose_folder),
+                        )
+                    }
+                },
+                supportingText = {
+                    Text(
+                        when {
+                            pickFailed -> stringResource(R.string.settings_music_dir_unsupported)
+                            folderError -> stringResource(R.string.settings_music_dir_invalid)
+                            else -> stringResource(R.string.settings_music_dir_hint, viewModel.defaultMusicDir)
+                        },
+                    )
+                },
+                isError = folderError || pickFailed,
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, autoCorrectEnabled = false),
+                shape = MaterialTheme.shapes.large,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+            ) {
+                OutlinedButton(onClick = { folderPicker.launch(null) }, shapes = ButtonDefaults.shapes()) {
+                    Text(stringResource(R.string.action_choose_folder))
+                }
+                val saved = viewModel.isMusicDirSaved(settings)
+                Button(
+                    onClick = viewModel::saveMusicDir,
+                    shapes = ButtonDefaults.shapes(),
+                    enabled = !folderError && !saved,
+                ) {
+                    Text(stringResource(if (saved) R.string.action_saved else R.string.action_save))
+                }
             }
         }
     }
@@ -314,17 +486,19 @@ private fun DynamicColorItem(checked: Boolean, available: Boolean, onCheckedChan
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun AboutItems(appVersion: String) {
+private fun AboutItems(appVersion: String, showServerHowto: Boolean) {
+    val count = if (showServerHowto) 2 else 1
     Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
         SegmentedListItem(
-            shapes = ListItemDefaults.segmentedShapes(index = 0, count = 2),
+            shapes = ListItemDefaults.segmentedShapes(index = 0, count = count),
             leadingContent = { Icon(painterResource(R.drawable.ic_info), contentDescription = null) },
             supportingContent = { Text(stringResource(R.string.settings_version, appVersion)) },
         ) {
             Text(stringResource(R.string.app_name))
         }
+        if (!showServerHowto) return@Column
         SegmentedListItem(
-            shapes = ListItemDefaults.segmentedShapes(index = 1, count = 2),
+            shapes = ListItemDefaults.segmentedShapes(index = 1, count = count),
             leadingContent = { Icon(painterResource(R.drawable.ic_dns), contentDescription = null) },
             supportingContent = { Text(stringResource(R.string.settings_server_command)) },
         ) {

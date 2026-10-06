@@ -9,6 +9,7 @@ import dev.skrpld.musicloader.data.DataStoreSettings
 import dev.skrpld.musicloader.data.MusicLoaderApi
 import dev.skrpld.musicloader.data.ServerRepository
 import dev.skrpld.musicloader.data.SettingsStore
+import dev.skrpld.musicloader.engine.LocalEngine
 import dev.skrpld.musicloader.ui.MainViewModel
 import dev.skrpld.musicloader.ui.download.DownloadViewModel
 import dev.skrpld.musicloader.ui.jobs.JobsViewModel
@@ -23,7 +24,7 @@ class MusicLoaderApplication : Application() {
     val container: AppContainer by lazy { AppContainer(this) }
 }
 
-/** Manual dependency wiring: one settings store, HTTP client and repository per process. */
+/** Manual dependency wiring: one settings store, HTTP client, downloader and repository per process. */
 class AppContainer(context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -35,12 +36,14 @@ class AppContainer(context: Context) {
 
     val settings: SettingsStore = DataStoreSettings(context)
 
-    val repository = ServerRepository(settings, MusicLoaderApi(httpClient), scope)
+    val localEngine = LocalEngine(context)
+
+    val repository = ServerRepository(settings, MusicLoaderApi(httpClient), localEngine, scope)
 
     val viewModelFactory: ViewModelProvider.Factory = viewModelFactory {
         initializer { MainViewModel(repository, settings) }
         initializer { DownloadViewModel(repository, settings) }
         initializer { JobsViewModel(repository) }
-        initializer { SettingsViewModel(repository, settings) }
+        initializer { SettingsViewModel(repository, settings, localEngine) }
     }
 }

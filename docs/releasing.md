@@ -74,7 +74,8 @@ lost key means users have to uninstall the app before the next update.
 ## Branch and pull request builds
 
 The same workflows run on every push and pull request that touches their
-component (`cli/**` or `android/**`). Their output is attached to the run as
+component (`cli/**`; `android/**` or `cli/music_loader/**`, which the app
+embeds). Their output is attached to the run as
 an artifact (**Actions → run → Artifacts**) and is not published.
 
 ## Re-running a release
