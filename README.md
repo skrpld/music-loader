@@ -2,6 +2,7 @@
 
 [![CLI](https://github.com/skrpld/music-loader/actions/workflows/cli.yml/badge.svg)](https://github.com/skrpld/music-loader/actions/workflows/cli.yml)
 [![Android](https://github.com/skrpld/music-loader/actions/workflows/android.yml/badge.svg)](https://github.com/skrpld/music-loader/actions/workflows/android.yml)
+[![License](https://img.shields.io/github/license/skrpld/music-loader)](LICENSE)
 
 Music Loader builds a clean, well-tagged local music library from **Spotify**
 and **SoundCloud** links - ready for a player such as
@@ -114,6 +115,10 @@ ruff check . && pytest
 cd android
 ./gradlew assembleDebug
 ```
+
+## License
+
+[Apache License 2.0](LICENSE).
 
 ## Disclaimer
 

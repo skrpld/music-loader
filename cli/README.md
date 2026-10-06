@@ -128,3 +128,7 @@ pytest
 
 The version lives in `music_loader/__init__.py`; releases are cut by pushing
 a `cli-v<version>` tag ([docs/releasing.md](https://github.com/skrpld/music-loader/blob/main/docs/releasing.md)).
+
+## License
+
+Apache License 2.0.

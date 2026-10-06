@@ -6,6 +6,10 @@ dynamic = ["version"]
 description = "Downloads music with metadata from Spotify and SoundCloud, fetches verified lyrics, and prepares the library for Symfonium."
 readme = "README.md"
 requires-python = ">=3.10"
+license = "Apache-2.0"
+# A copy of the repository's LICENSE: a package can only ship files from its
+# own directory.
+license-files = ["LICENSE"]
 authors = [{ name = "skrpld" }]
 keywords = ["spotify", "soundcloud", "spotdl", "yt-dlp", "lyrics", "music", "symfonium"]
 classifiers = [
@@ -35,7 +39,8 @@ Issues = "https://github.com/skrpld/music-loader/issues"
 music-loader = "music_loader.cli:main"
 
 [build-system]
-requires = ["setuptools>=68.0"]
+# 77: SPDX license expressions (PEP 639).
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.dynamic]

@@ -52,7 +52,9 @@ jobs:
         run: python -m pip install -e ".[dev]"
 
       - name: Lint
-        run: ruff check .
+        run: |
+          ruff check .
+          cmp LICENSE ../LICENSE || { echo "::error::cli/LICENSE must be a copy of LICENSE"; exit 1; }
 
       - name: Test
         run: pytest -q
