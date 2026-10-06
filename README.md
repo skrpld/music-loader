@@ -3,7 +3,8 @@
 Downloads music with full metadata from Spotify (via spotDL) and SoundCloud
 (via yt-dlp), looks up **verified** lyrics, and prepares the library for
 Symfonium. Progress, speed and statistics are shown in a live terminal
-interface (based on `rich`).
+interface (based on `rich`), or - in [server mode](#server-mode-and-android-app) -
+in the Android app.
 
 ## Quick start
 
@@ -71,6 +72,8 @@ accepted; anything else is reported and skipped.
 music-loader/
 ├── pyproject.toml            # dependencies and entry point
 ├── README.md
+├── android/                  # Android client (Kotlin, Jetpack Compose, Material 3 Expressive)
+├── .github/workflows/        # android.yml: builds the APK
 └── music_loader/
     ├── __main__.py           # python -m music_loader
     ├── cli.py                # command-line arguments, main loop
@@ -91,7 +94,114 @@ music-loader/
     ├── net.py                # small HTTP helper
     ├── playlist.py           # .m3u8 playlists for SoundCloud
     ├── runlog.py             # persistent per-run failure log
-    └── ui.py                 # live dashboard
+    ├── ui.py                 # live dashboard
+    ├── server.py             # server mode: HTTP API, job queue, event stream
+    ├── worker.py             # runs one server job in its own process
+    └── events.py             # progress as JSON events (server mode)
+```
+
+## Server mode and Android app
+
+`music-loader serve` runs music-loader on the machine that holds the library;
+the Android app in [`android/`](android) queues links and follows the
+downloads from the phone.
+
+```bash
+music-loader serve -o /path/to/Music
+```
+
+At startup the server prints its address and an access token:
+
+```
+Server address: http://192.168.1.10:8765
+Token: 8Qm3VYk1x5rW0bH2tN6pL9sA4cE7uJ0d
+```
+
+Enter both in the app (Settings → Server → Test → Save).
+
+| Option | Default | Meaning |
+|---|---|---|
+| `-o, --output` | required | Target Music folder |
+| `--host` | `0.0.0.0` | Address to listen on; `127.0.0.1` behind a reverse proxy |
+| `--port` | 8765 | Port |
+| `--token` | stored token | Access token; prefer `MUSIC_LOADER_TOKEN` |
+| `--new-token` | off | Generate a new stored token |
+| `--spotify-threads`, `--soundcloud-download-workers`, `--soundcloud-workers`, `--lyrics-workers` | as in the CLI | Parallel work for every job |
+
+- **Token**: `--token`, the `MUSIC_LOADER_TOKEN` environment variable, or a
+  token generated on the first start and kept in
+  `~/.config/music-loader/server-token` (`%APPDATA%\music-loader` on
+  Windows). Every request needs it; a wrong token is answered with 401.
+- **Jobs** run one after another, each in its own worker process. Options per
+  job: lyrics mode (strict / loose / off), `--recheck`, SoundCloud reposts and
+  likes. Cancelling a job goes through the same cleanup as Ctrl+C: child
+  processes stop and unfinished files are removed. Stopping the server
+  (Ctrl+C, SIGTERM) cancels the running job the same way.
+- **Transport**: plain HTTP. Use it in the home network or over a VPN
+  (Tailscale, WireGuard), or put an HTTPS reverse proxy in front of it
+  (`--host 127.0.0.1`; the event stream needs response buffering off - the
+  server sends `X-Accel-Buffering: no` for nginx).
+- Spotify credentials are read from `SPOTIFY_CLIENT_ID` /
+  `SPOTIFY_CLIENT_SECRET` as in the CLI.
+
+API (JSON, `Authorization: Bearer <token>`):
+
+| Request | Meaning |
+|---|---|
+| `GET /api/v1/info` | version, library folder, queue state |
+| `GET /api/v1/jobs` | all jobs, newest first |
+| `POST /api/v1/jobs` | queue links: `{"links": [...], "options": {"lyrics": "strict", "recheck": false, "soundcloud_reposts": false, "soundcloud_likes": false}}` |
+| `GET /api/v1/jobs/<id>` | one job with its log, errors and active downloads |
+| `POST /api/v1/jobs/<id>/cancel` | cancel a queued or running job |
+| `DELETE /api/v1/jobs/<id>` | remove a finished job from the list |
+| `GET /api/v1/events` | Server-Sent Events: a `state` event after every change |
+
+### Android app
+
+Kotlin and Jetpack Compose with Material 3 Expressive: dynamic colors from the
+wallpaper (Android 12+), light / dark / system theme, expressive motion,
+wavy progress indicators, and an adaptive layout - bottom bar on phones,
+navigation rail and list + details side by side on tablets and foldables.
+English and Russian. Android 8.0 or later.
+
+- **Download**: paste links (or share them from the Spotify / SoundCloud app
+  into Music Loader), choose the lyrics mode and options, add to the queue.
+- **Jobs**: the running job live - links and tracks progress, active
+  downloads with speed and ETA, counters - plus the queue and finished jobs
+  with their errors and activity log; cancel and remove.
+- **Settings**: server address and token with a connection test, theme,
+  dynamic colors.
+
+#### Getting the APK
+
+[`.github/workflows/android.yml`](.github/workflows/android.yml) builds the
+app on every push that touches `android/`; the APK is attached to the run as
+an artifact (Actions → run → Artifacts). A tag `android-v<version>` also
+publishes it as a GitHub release.
+
+Without signing secrets the workflow builds the debug APK. A debug key is
+generated on every run, so each build has a different signature and Android
+refuses to update over the previous one. For installable updates, sign the
+release build with your own key:
+
+```bash
+keytool -genkeypair -v -keystore music-loader.jks -alias music-loader \
+  -keyalg RSA -keysize 4096 -validity 10000
+base64 -w0 music-loader.jks   # value of ANDROID_KEYSTORE_BASE64
+```
+
+Repository secrets (Settings → Secrets and variables → Actions):
+`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`,
+`ANDROID_KEY_PASSWORD`. Keep the keystore safe: a new key means uninstalling
+the app before the next update.
+
+#### Building locally
+
+JDK 17+ and the Android SDK (or Android Studio):
+
+```bash
+cd android
+./gradlew assembleDebug    # app/build/outputs/apk/debug/app-debug.apk
 ```
 
 ## Library layout
@@ -301,6 +411,10 @@ is passed to spotdl through its environment, never on its command line.
 - All child output is decoded as UTF-8 (a Cyrillic title no longer turns into
   garbage on Windows), and remote text is escaped before it reaches the
   terminal UI.
+- Server mode: every request needs the token (compared in constant time);
+  request bodies are size-limited, links are validated as on the command
+  line, and private SoundCloud tokens stay on the server - API responses and
+  the event stream carry redacted links only.
 
 ## Failure log
 
