@@ -37,8 +37,23 @@ Artist photos are never downloaded: only album/track artwork is embedded.
 ### Spotify
 
 Tags come from Spotify through spotDL: artists, album artist, album, track
-and disc numbers, date, genre, ISRC, album cover. Several artists are stored
-as `A/B` (ID3v2.3).
+and disc numbers, date, genre, ISRC, album cover. spotDL writes ID3v2.3 with
+`A/B`; after each download music-loader rewrites the artist frames, see
+"Several artists" below.
+
+### Several artists
+
+All files are ID3v2.4. A track with several artists has two frames, the same
+way MusicBrainz Picard writes them:
+
+- `TPE1` - one display string, `A, B` (main artists, then featured ones, in
+  the canonical spelling of the artist registry). Players without
+  multi-artist support show it as it is.
+- `TXXX:ARTISTS` - the real list (`A`, `B`). Players that split artists use it.
+
+The album artist (`TPE2`) stays a single name. Reading prefers `ARTISTS`;
+without it, ID3v2.4 values are split on `\0` and `, `, and old ID3v2.3 files
+on `/` - never inside a name the artist registry knows (`AC/DC`).
 
 ### SoundCloud
 
@@ -136,7 +151,8 @@ library - useful after updating music-loader:
 - SoundCloud: metadata is fetched again; tags, folder and file name are
   rewritten (files from older versions move into album folders, with their
   `.lrc`); a file whose length does not match is downloaded again.
-- Spotify: tags are refreshed from Spotify (`--overwrite metadata`) and
+- Spotify: tags are refreshed from Spotify (`--overwrite metadata`), the
+  artist frames are rewritten as `A, B` + `ARTISTS` (ID3v2.4) and
   duplicate copies of a track under other paths are removed.
 - Lyrics are searched again with the current mode (existing ones are
   replaced; the 7-day cooldown is ignored).

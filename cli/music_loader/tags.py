@@ -1,14 +1,19 @@
 """ID3 tag helpers (mutagen), shared by the SoundCloud tagging, the lyrics
 writer and the library checks.
 
-Tags are written as ID3v2.3 with "/" between several artists - the same
-convention spotDL uses for the Spotify part of the library, so the player
-treats both halves alike.
+Tags are written as ID3v2.4. Several artists are stored twice, the way
+MusicBrainz Picard does it: `TPE1` holds one display string ("A, B") that
+every player shows cleanly, and `TXXX:ARTISTS` holds the real list for the
+players that split artists. ID3v2.3 (what spotDL writes) can only glue
+artists together with "/", which turns "AC/DC" into two artists; such files
+are read with a guard for the names the artist registry knows and are
+rewritten by `set_artists` / `--recheck`.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 try:
     from mutagen import File as mutagen_file
@@ -25,6 +30,9 @@ SOUNDCLOUD_ID_DESC = "SOUNDCLOUD_ID"
 # YouTube Music): where it came from, and the page it was taken from.
 SOURCE_DESC = "MUSIC_LOADER_SOURCE"
 SOURCE_URL_DESC = "MUSIC_LOADER_SOURCE_URL"
+ARTISTS_DESC = "ARTISTS"
+ARTIST_SEPARATOR = ", "
+ID3_VERSION = 4
 _LYRICS_FRAMES = ("USLT", "SYLT")
 
 
@@ -41,6 +49,82 @@ class TrackTags:
     url: str = ""             # public page of the track
     soundcloud_id: str = ""
     extra: dict[str, str] = field(default_factory=dict)
+
+
+def clean_artists(artists) -> list[str]:
+    """Non-empty names without repeats (case-insensitive), order kept."""
+    result: list[str] = []
+    seen: set[str] = set()
+    for name in artists or []:
+        name = str(name).strip()
+        if name and name.casefold() not in seen:
+            seen.add(name.casefold())
+            result.append(name)
+    return result
+
+
+def format_artists(artists) -> str:
+    """The display string of the artist frame: "A, B"."""
+    return ARTIST_SEPARATOR.join(clean_artists(artists))
+
+
+def split_artists(value: str, separator: str, is_known: Callable[[str], bool] | None = None) -> list[str]:
+    """Splits `value` on `separator`, but never inside a name that
+    `is_known` recognises ("AC/DC" stays one artist)."""
+    parts = [part.strip() for part in value.split(separator)]
+    if len(parts) < 2 or is_known is None:
+        return [part for part in parts if part]
+    result: list[str] = []
+    index = 0
+    while index < len(parts):
+        for end in range(len(parts), index, -1):
+            joined = separator.join(parts[index:end])
+            if joined and (end - index == 1 or is_known(joined)):
+                result.append(joined)
+                index = end
+                break
+    return [name for name in result if name]
+
+
+def _artist_frames(id3, artists: list[str]) -> None:
+    id3.delall("TPE1")
+    id3.delall(f"TXXX:{ARTISTS_DESC}")
+    id3.add(TPE1(encoding=3, text=[format_artists(artists) or "Unknown Artist"]))
+    if artists:
+        id3.add(TXXX(encoding=3, desc=ARTISTS_DESC, text=list(artists)))
+
+
+def set_artists(path: Path, artists) -> bool:
+    """Rewrites only the artist frames (and saves as ID3v2.4), keeping
+    everything else, cover and lyrics included. False when unreadable or
+    when there is nothing to write."""
+    names = clean_artists(artists)
+    if not MUTAGEN_AVAILABLE or not names:
+        return False
+    try:
+        id3 = ID3(str(path))
+        _artist_frames(id3, names)
+        id3.save(str(path), v2_version=ID3_VERSION)
+    except Exception:
+        return False
+    return True
+
+
+def artists_current(path: Path, artists) -> bool:
+    """True when the file already has exactly this artist list in the
+    ID3v2.4 layout (so a rewrite is not needed)."""
+    names = clean_artists(artists)
+    if not MUTAGEN_AVAILABLE or not names:
+        return True
+    try:
+        id3 = ID3(str(path))
+    except Exception:
+        return False
+    if id3.version[:2] != (2, ID3_VERSION) or "TPE1" not in id3:
+        return False
+    frames = id3.getall(f"TXXX:{ARTISTS_DESC}")
+    listed = [str(item) for item in frames[0].text] if frames else []
+    return listed == names and [str(item) for item in id3["TPE1"].text] == [format_artists(names)]
 
 
 def audio_duration(path: Path) -> float | None:
@@ -74,7 +158,7 @@ def write_tags(path: Path, tags: TrackTags, cover: bytes | None = None) -> None:
             del id3[key]
 
     id3.add(TIT2(encoding=3, text=tags.title))
-    id3.add(TPE1(encoding=3, text=list(tags.artists) or ["Unknown Artist"]))
+    _artist_frames(id3, clean_artists(tags.artists))
     id3.add(TPE2(encoding=3, text=tags.album_artist or (tags.artists[0] if tags.artists else "")))
     id3.add(TALB(encoding=3, text=tags.album))
     total = max(tags.track_total, tags.track_number, 1)
@@ -94,11 +178,14 @@ def write_tags(path: Path, tags: TrackTags, cover: bytes | None = None) -> None:
             id3.add(TXXX(encoding=3, desc=desc, text=value))
     if cover:
         id3.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=cover))
-    id3.save(str(path), v2_version=3, v23_sep="/")
+    id3.save(str(path), v2_version=ID3_VERSION)
 
 
-def read_tags(path: Path) -> dict:
-    """The few fields the library checks need; empty values when unreadable."""
+def read_tags(path: Path, is_known: Callable[[str], bool] | None = None) -> dict:
+    """The few fields the library checks need; empty values when unreadable.
+
+    `is_known` (for example `ArtistRegistry.is_known`) keeps names that
+    contain the separator, like "AC/DC", in one piece."""
     result = {
         "title": "", "artists": [], "album": "", "album_artist": "",
         "url": "", "soundcloud_id": "", "has_lyrics": False,
@@ -115,10 +202,7 @@ def read_tags(path: Path) -> dict:
         return [str(item) for item in frame.text] if frame is not None and hasattr(frame, "text") else []
 
     result["title"] = (text("TIT2") or [""])[0]
-    artists: list[str] = []
-    for value in text("TPE1"):
-        artists.extend(part for part in value.split("/") if part)
-    result["artists"] = artists
+    result["artists"] = _read_artists(id3, text, is_known)
     result["album"] = (text("TALB") or [""])[0]
     result["album_artist"] = (text("TPE2") or [""])[0]
     woas = id3.getall("WOAS")
@@ -130,6 +214,20 @@ def read_tags(path: Path) -> dict:
         str(getattr(frame, "text", "")).strip() for frame in id3.getall("USLT")
     ) or bool(id3.getall("SYLT"))
     return result
+
+
+def _read_artists(id3, text, is_known) -> list[str]:
+    listed = clean_artists(
+        str(item) for frame in id3.getall(f"TXXX:{ARTISTS_DESC}") for item in frame.text
+    )
+    if listed:
+        return listed
+    # ID3v2.4 stores several values in one frame; v2.3 glues them with "/".
+    separator = ARTIST_SEPARATOR if id3.version >= (2, 4, 0) else "/"
+    artists: list[str] = []
+    for value in text("TPE1"):
+        artists.extend(split_artists(value, separator, is_known))
+    return clean_artists(artists)
 
 
 def read_txxx(path: Path, desc: str) -> str:
@@ -164,7 +262,7 @@ def embed_lyrics(path: Path, text: str) -> None:
     for frame in _LYRICS_FRAMES:
         id3.delall(frame)
     id3.add(USLT(encoding=3, lang="XXX", desc="", text=text))
-    id3.save(str(path), v2_version=3, v23_sep="/")
+    id3.save(str(path), v2_version=ID3_VERSION)
 
 
 def remove_lyrics(path: Path) -> bool:
@@ -179,5 +277,5 @@ def remove_lyrics(path: Path) -> bool:
         return False
     for frame in _LYRICS_FRAMES:
         id3.delall(frame)
-    id3.save(str(path), v2_version=3, v23_sep="/")
+    id3.save(str(path), v2_version=ID3_VERSION)
     return True

@@ -73,7 +73,7 @@ from .process import (
     ytdlp_extra_args,
 )
 from .spotify_index import get_library
-from .tags import audio_duration, read_woas
+from .tags import artists_current, audio_duration, read_woas, set_artists
 
 _FOUND_RE = re.compile(r"Found (\d+) songs? in", re.IGNORECASE)
 _STATUS_RE = re.compile(r"^(?P<name>.+): (?P<status>Searching for song|Downloading|Converting|"
@@ -450,7 +450,10 @@ def download_spotify(
         if not ok:
             _refusal_hint(run.refused, config, dashboard)
 
-        # -- 5. lyrics --------------------------------------------------------------------
+        # -- 5. artist tags ---------------------------------------------------------------
+        _tag_artists(songs, existed, config, registry, dashboard)
+
+        # -- 6. lyrics --------------------------------------------------------------------
         if lyrics is not None and config.lyrics_enabled:
             _lyrics(songs, config, dashboard, lyrics)
         return ok
@@ -505,6 +508,29 @@ def _prepare(songs: list[_Song], config: AppConfig, dashboard) -> set[str]:
                     prune_empty_dirs(duplicate.parent, config.music_dir)
                     dashboard.log(f"[Spotify] Removed duplicate copy: {duplicate}")
     return existed
+
+
+def _tag_artists(songs: list[_Song], existed: set[str], config: AppConfig,
+                 registry, dashboard) -> None:
+    """spotDL writes ID3v2.3 with "/" between artists. Rewrites the artist
+    frames of new files (and of every file with --recheck, which migrates an
+    existing library) as "A, B" plus the real list in TXXX:ARTISTS."""
+    changed = 0
+    for song in songs:
+        path = song.path
+        if path is None or not path.exists() or not _is_complete(path, song.url):
+            continue
+        if song.url in existed and not config.recheck:
+            continue
+        names = [registry.canonical(str(name)) for name in song.data.get("artists") or [] if name]
+        if not names or artists_current(path, names):
+            continue
+        if set_artists(path, names):
+            changed += 1
+        else:
+            dashboard.log_error("Spotify", f"Could not write the artist tags of {path.name}")
+    if changed:
+        dashboard.log(f"[Spotify] Artist tags written for {changed} file(s)")
 
 
 def _verify(songs: list[_Song], existed: set[str], run: _Run, dashboard) -> bool:

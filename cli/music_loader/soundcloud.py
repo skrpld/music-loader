@@ -826,11 +826,12 @@ def _retag(job: TrackJob, existing: Path, info: dict[str, Any], ctx: _Context) -
 
 
 # -- lyrics -------------------------------------------------------------------------------------
-def _lyrics_request(path: Path, track_id: str, meta: TrackMeta | None, force: bool) -> LyricsRequest:
+def _lyrics_request(path: Path, track_id: str, meta: TrackMeta | None, force: bool,
+                    is_known=None) -> LyricsRequest:
     if meta is not None:
         main, featured, title, album = meta.main_artists, meta.featured, meta.title, meta.album
     else:
-        tags = read_tags(path)
+        tags = read_tags(path, is_known)
         if tags["soundcloud_id"]:
             artists = tags["artists"]
             main, featured, title, album = artists[:1], artists[1:], tags["title"], tags["album"]
@@ -1018,7 +1019,7 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
             return
 
         def task() -> None:
-            request = _lyrics_request(path, track_id, meta, force)
+            request = _lyrics_request(path, track_id, meta, force, ctx.registry.is_known)
             ctx.lyrics.process(request, ctx.attempts, dashboard, ctx.abort)
 
         with ctx.lock:
