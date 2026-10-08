@@ -115,6 +115,8 @@ fun SettingsScreen(
                     DownloadMode.Phone -> {
                         SectionHeader(stringResource(R.string.settings_phone))
                         PhoneCard(viewModel, settings)
+                        SectionHeader(stringResource(R.string.settings_spotify))
+                        SpotifyCard(viewModel)
                     }
                     DownloadMode.Server -> {
                         SectionHeader(stringResource(R.string.settings_server))
@@ -280,6 +282,91 @@ private fun PhoneCard(viewModel: SettingsViewModel, settings: AppSettings?) {
                     enabled = !folderError && !saved,
                 ) {
                     Text(stringResource(if (saved) R.string.action_saved else R.string.action_save))
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun SpotifyCard(viewModel: SettingsViewModel) {
+    val saved by viewModel.spotifyCredentials.collectAsStateWithLifecycle()
+    var secretVisible by rememberSaveable { mutableStateOf(false) }
+    val isSaved = viewModel.isSpotifySaved(saved)
+    val pairError = !viewModel.spotifyValid
+    Card(
+        shape = MaterialTheme.shapes.extraLarge,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+                text = stringResource(R.string.settings_spotify_description),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedTextField(
+                value = viewModel.spotifyIdInput,
+                onValueChange = viewModel::updateSpotifyId,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text(stringResource(R.string.settings_spotify_client_id)) },
+                singleLine = true,
+                isError = pairError,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false),
+                shape = MaterialTheme.shapes.large,
+            )
+            OutlinedTextField(
+                value = viewModel.spotifySecretInput,
+                onValueChange = viewModel::updateSpotifySecret,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text(stringResource(R.string.settings_spotify_client_secret)) },
+                supportingText = {
+                    Text(
+                        stringResource(
+                            when {
+                                viewModel.spotifySaveFailed -> R.string.settings_spotify_save_failed
+                                pairError -> R.string.settings_spotify_pair_invalid
+                                else -> R.string.settings_spotify_secret_hint
+                            },
+                        ),
+                    )
+                },
+                isError = pairError || viewModel.spotifySaveFailed,
+                singleLine = true,
+                visualTransformation = if (secretVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false),
+                trailingIcon = {
+                    IconButton(onClick = { secretVisible = !secretVisible }) {
+                        Icon(
+                            painter = painterResource(
+                                if (secretVisible) R.drawable.ic_visibility_off else R.drawable.ic_visibility,
+                            ),
+                            contentDescription = stringResource(
+                                if (secretVisible) R.string.action_hide_secret else R.string.action_show_secret,
+                            ),
+                        )
+                    }
+                },
+                shape = MaterialTheme.shapes.large,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+            ) {
+                OutlinedButton(
+                    onClick = viewModel::clearSpotify,
+                    shapes = ButtonDefaults.shapes(),
+                    enabled = saved?.isSet == true || viewModel.spotifyIdInput.isNotBlank() ||
+                        viewModel.spotifySecretInput.isNotBlank(),
+                ) {
+                    Text(stringResource(R.string.action_clear))
+                }
+                Button(
+                    onClick = viewModel::saveSpotify,
+                    shapes = ButtonDefaults.shapes(),
+                    enabled = !pairError && !isSaved,
+                ) {
+                    Text(stringResource(if (isSaved) R.string.action_saved else R.string.action_save))
                 }
             }
         }

@@ -13,6 +13,9 @@ interface LocalBackend {
 
     /** Keeps the app running while the queue is worked off. */
     fun onJobSubmitted()
+
+    /** Hands the Spotify credentials (both empty: none) to the downloader; they apply to the next job. */
+    suspend fun setSpotifyCredentials(clientId: String, clientSecret: String)
 }
 
 class StorageAccessException : IllegalStateException("The app has no access to the music folder")

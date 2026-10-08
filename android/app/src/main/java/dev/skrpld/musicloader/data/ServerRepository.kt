@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
 sealed interface Connection {
@@ -47,6 +48,9 @@ val Connection.serverState: ServerState?
         else -> null
     }
 
+/** Whether the server announced [feature] (see [Features]); an older server announces none. */
+fun Connection.supports(feature: String): Boolean = serverState?.features?.contains(feature) == true
+
 class NotConfiguredException : IllegalStateException("The server is not configured")
 
 /**
@@ -73,6 +77,13 @@ class ServerRepository(
     }
 
     private val retryRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    init {
+        // The phone's downloader uses the Spotify credentials from Settings; a server has its own.
+        scope.launch {
+            settingsStore.spotifyCredentials.collect { local.setSpotifyCredentials(it.clientId, it.clientSecret) }
+        }
+    }
 
     @OptIn(ExperimentalCoroutinesApi::class)
     val connection: StateFlow<Connection> = settingsStore.settings
@@ -159,6 +170,13 @@ class ServerRepository(
     }
 
     suspend fun job(id: String): Job = api.job(server(), id)
+
+    /** Queues a finished job again and returns the new job. */
+    suspend fun retry(id: String, scope: RetryScope): Job {
+        val job = api.retry(server(), id, scope)
+        if (settingsStore.settings.first().mode == DownloadMode.Phone) local.onJobSubmitted()
+        return job
+    }
 
     suspend fun cancel(id: String): Job = api.cancel(server(), id)
 

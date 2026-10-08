@@ -63,8 +63,10 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.skrpld.musicloader.R
 import dev.skrpld.musicloader.data.Connection
+import dev.skrpld.musicloader.data.Features
 import dev.skrpld.musicloader.data.LinkScan
 import dev.skrpld.musicloader.data.LyricsMode
+import dev.skrpld.musicloader.data.supports
 import dev.skrpld.musicloader.ui.components.ConnectionBanner
 import dev.skrpld.musicloader.ui.components.Pill
 import dev.skrpld.musicloader.ui.components.SectionHeader
@@ -198,6 +200,10 @@ fun DownloadScreen(
                     reposts = options.soundcloudReposts,
                     likes = options.soundcloudLikes,
                     fallback = options.soundcloudFallback,
+                    // An older server would ignore the option: do not offer what it cannot do.
+                    showAutoRetry = connection.supports(Features.AutoRetry),
+                    autoRetry = options.autoRetry,
+                    onAutoRetryChange = viewModel::setAutoRetry,
                     onRecheckChange = { viewModel.recheck = it },
                     onRepostsChange = viewModel::setSoundcloudReposts,
                     onLikesChange = viewModel::setSoundcloudLikes,
@@ -361,14 +367,19 @@ private fun OptionsList(
     reposts: Boolean,
     likes: Boolean,
     fallback: Boolean,
+    showAutoRetry: Boolean,
+    autoRetry: Boolean,
+    onAutoRetryChange: (Boolean) -> Unit,
     onRecheckChange: (Boolean) -> Unit,
     onRepostsChange: (Boolean) -> Unit,
     onLikesChange: (Boolean) -> Unit,
     onFallbackChange: (Boolean) -> Unit,
 ) {
+    val count = if (showAutoRetry) 5 else 4
     Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
         OptionItem(
             index = 0,
+            count = count,
             icon = R.drawable.ic_sync,
             title = stringResource(R.string.option_recheck),
             description = stringResource(R.string.option_recheck_description),
@@ -377,6 +388,7 @@ private fun OptionsList(
         )
         OptionItem(
             index = 1,
+            count = count,
             icon = R.drawable.ic_repeat,
             title = stringResource(R.string.option_reposts),
             description = stringResource(R.string.option_profile_only),
@@ -385,6 +397,7 @@ private fun OptionsList(
         )
         OptionItem(
             index = 2,
+            count = count,
             icon = R.drawable.ic_favorite,
             title = stringResource(R.string.option_likes),
             description = stringResource(R.string.option_profile_only),
@@ -393,12 +406,24 @@ private fun OptionsList(
         )
         OptionItem(
             index = 3,
+            count = count,
             icon = R.drawable.ic_library_music,
             title = stringResource(R.string.option_fallback),
             description = stringResource(R.string.option_fallback_description),
             checked = fallback,
             onCheckedChange = onFallbackChange,
         )
+        if (showAutoRetry) {
+            OptionItem(
+                index = 4,
+                count = count,
+                icon = R.drawable.ic_schedule,
+                title = stringResource(R.string.option_auto_retry),
+                description = stringResource(R.string.option_auto_retry_description),
+                checked = autoRetry,
+                onCheckedChange = onAutoRetryChange,
+            )
+        }
     }
 }
 
@@ -406,6 +431,7 @@ private fun OptionsList(
 @Composable
 private fun OptionItem(
     index: Int,
+    count: Int,
     icon: Int,
     title: String,
     description: String,
@@ -415,7 +441,7 @@ private fun OptionItem(
     SegmentedListItem(
         checked = checked,
         onCheckedChange = onCheckedChange,
-        shapes = ListItemDefaults.segmentedShapes(index = index, count = 4),
+        shapes = ListItemDefaults.segmentedShapes(index = index, count = count),
         leadingContent = { Icon(painterResource(icon), contentDescription = null) },
         supportingContent = { Text(description) },
         trailingContent = { Switch(checked = checked, onCheckedChange = null) },

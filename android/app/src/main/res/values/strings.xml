@@ -137,6 +137,27 @@
     <string name="delete_dialog_title">Remove the job?</string>
     <string name="delete_dialog_body">Only the entry in the list is removed; the downloaded music stays in the library.</string>
 
+    <!-- Retrying -->
+    <string name="status_waiting_retry">Waiting to retry</string>
+    <string name="action_retry_failed">Retry failed (%1$d)</string>
+    <string name="action_run_again">Run again</string>
+    <string name="action_cancel_retry">Cancel retry</string>
+    <string name="retry_waiting">Next attempt at %1$s</string>
+    <string name="retry_waiting_attempt">Attempt %1$d of %2$d</string>
+    <string name="retry_waiting_body">The failed tracks are queued again by themselves. This works while the app keeps running; closing it from the recent apps list cancels the wait.</string>
+    <string name="job_failures">Failures</string>
+    <string name="failure_group_title">%1$s (%2$d)</string>
+    <string name="failure_rate_limited">Rate limited</string>
+    <string name="failure_rate_limited_hint">The service refused too many requests. Can be retried.</string>
+    <string name="failure_network">Network problem</string>
+    <string name="failure_network_hint">The connection broke or timed out. Can be retried.</string>
+    <string name="failure_failed">Failed</string>
+    <string name="failure_failed_hint">Could not be downloaded or processed. Retrying is unlikely to help.</string>
+    <string name="failure_unavailable">Unavailable</string>
+    <string name="failure_unavailable_hint">DRM-protected, preview only or blocked. Cannot be downloaded, never retried.</string>
+    <string name="option_auto_retry">Retry automatically</string>
+    <string name="option_auto_retry_description">After a rate limit or network errors, try the failed tracks again by itself: after 15, 30 and 60 minutes (3 attempts at most). Works while the app or the server keeps running.</string>
+
     <!-- Settings -->
     <string name="settings_mode">Where to download</string>
     <string name="mode_phone">This phone</string>
@@ -172,6 +193,15 @@
     <string name="settings_dynamic_color">Dynamic colors</string>
     <string name="settings_dynamic_color_hint">Colors from your wallpaper (Material You)</string>
     <string name="settings_dynamic_color_unavailable">Available on Android 12 and later</string>
+    <string name="settings_spotify">Spotify access</string>
+    <string name="settings_spotify_description">Optional. With your own Spotify application (developer.spotify.com/dashboard) the app uses the official API, which refuses requests far less often than the built-in access. Stored encrypted on this phone, used only in phone mode.</string>
+    <string name="settings_spotify_client_id">Client ID</string>
+    <string name="settings_spotify_client_secret">Client Secret</string>
+    <string name="settings_spotify_secret_hint">Leave both fields empty to use the built-in access</string>
+    <string name="settings_spotify_pair_invalid">Fill in both fields or leave both empty</string>
+    <string name="settings_spotify_save_failed">Could not store the secret securely on this device</string>
+    <string name="action_show_secret">Show secret</string>
+    <string name="action_hide_secret">Hide secret</string>
     <string name="settings_about">About</string>
     <string name="settings_version">Version %1$s</string>
     <string name="settings_server_howto">Start the server on the computer with the library</string>
@@ -181,4 +211,5 @@
     <string name="notification_channel_downloads">Downloads</string>
     <string name="notification_downloading">Downloading music</string>
     <string name="notification_queued">Queued: %1$d</string>
+    <string name="notification_waiting_retry">Waiting to retry failed tracks at %1$s</string>
 </resources>

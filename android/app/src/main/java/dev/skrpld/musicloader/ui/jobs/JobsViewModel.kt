@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import dev.skrpld.musicloader.data.ApiException
 import dev.skrpld.musicloader.data.Connection
 import dev.skrpld.musicloader.data.Job
+import dev.skrpld.musicloader.data.RetryScope
 import dev.skrpld.musicloader.data.ServerRepository
 import dev.skrpld.musicloader.data.serverState
 import kotlin.coroutines.cancellation.CancellationException
@@ -104,6 +105,12 @@ class JobsViewModel(private val repository: ServerRepository) : ViewModel() {
     fun retry() = repository.retryNow()
 
     fun cancel(id: String) = action { repository.cancel(id) }
+
+    /** Queues a finished job again and shows the new job. */
+    fun retryJob(id: String, scope: RetryScope) = action {
+        val created = repository.retry(id, scope)
+        select(created.id)
+    }
 
     fun delete(id: String) = action {
         repository.delete(id)

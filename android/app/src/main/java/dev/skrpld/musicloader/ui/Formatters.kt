@@ -7,9 +7,14 @@ import java.time.format.FormatStyle
 
 private val dateTimeFormat = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT)
 private val clockFormat = DateTimeFormatter.ofPattern("HH:mm:ss")
+private val timeFormat = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)
 
 fun formatDateTime(epochMillis: Long): String =
     dateTimeFormat.format(Instant.ofEpochMilli(epochMillis).atZone(ZoneId.systemDefault()))
+
+/** Time of day in the user's format ("15:45" or "3:45 PM"). */
+fun formatTime(epochMillis: Long): String =
+    timeFormat.format(Instant.ofEpochMilli(epochMillis).atZone(ZoneId.systemDefault()))
 
 fun formatClock(epochMillis: Long): String =
     clockFormat.format(Instant.ofEpochMilli(epochMillis).atZone(ZoneId.systemDefault()))

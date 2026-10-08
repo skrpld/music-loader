@@ -89,6 +89,8 @@ class DownloadViewModel(
 
     fun setSoundcloudFallback(enabled: Boolean) = updateOptions { it.copy(soundcloudFallback = enabled) }
 
+    fun setAutoRetry(enabled: Boolean) = updateOptions { it.copy(autoRetry = enabled) }
+
     private fun updateOptions(change: (JobOptions) -> JobOptions) {
         viewModelScope.launch { settingsStore.setJobOptions(change(options.value)) }
     }

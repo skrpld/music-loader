@@ -17,10 +17,20 @@ Russian. Android 8.0 (API 26) or later, `arm64-v8a`.
   into Music Loader), choose the lyrics mode and options, add to the queue.
 - **Jobs**: the running job live - links and tracks progress, active
   downloads with speed and ETA, counters - plus the queue and finished jobs
-  with their errors and activity log; cancel and remove.
+  with their errors and activity log; cancel and remove. A finished job shows
+  its failures by kind (rate limited, network, failed, unavailable) with
+  **Retry failed (N)** - only the tracks a retry can help - and **Run again**.
+  With the *Retry automatically* option (off by default) the failed tracks are
+  queued again after 15, 30 and 60 minutes; the job shows when the next
+  attempt is due and the wait can be cancelled. The timer lives in the app
+  process: it works while the download service runs and is lost when the app
+  is killed. These actions need `music-loader` 2.2 or later on a server (the
+  app hides them for an older one).
 - **Settings**: where to download (this phone or a server); the phone's music
   folder and storage access, or the server address and token with a
-  connection test; theme, dynamic colors.
+  connection test; optional Spotify Client ID / Secret for the phone mode
+  (official API, fewer 403/429 refusals; stored encrypted with the Android
+  Keystore, never logged or sent anywhere but to Spotify); theme, dynamic colors.
 
 ## Download modes
 

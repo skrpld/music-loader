@@ -22,8 +22,24 @@ data class AppSettings(
         get() = if (serverUrl.isNotBlank() && token.isNotBlank()) ServerConfig(serverUrl, token) else null
 }
 
+/**
+ * Own Spotify application credentials (phone mode): spotDL then uses the official API, which
+ * refuses far less often than the web player. Both values or none. The secret never appears in
+ * [toString], so it cannot end up in a log by accident.
+ */
+data class SpotifyCredentials(val clientId: String = "", val clientSecret: String = "") {
+    val isSet: Boolean get() = clientId.isNotBlank() && clientSecret.isNotBlank()
+
+    override fun toString(): String = "SpotifyCredentials(set=$isSet)"
+}
+
 interface SettingsStore {
     val settings: Flow<AppSettings>
+
+    /** Kept encrypted; read separately from [settings] so the secret is not passed around with it. */
+    val spotifyCredentials: Flow<SpotifyCredentials>
+
+    suspend fun setSpotifyCredentials(credentials: SpotifyCredentials)
 
     suspend fun setMode(mode: DownloadMode)
 
