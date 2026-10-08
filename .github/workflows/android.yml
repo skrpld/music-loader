@@ -145,10 +145,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      # No artifact name: GitHub drops job outputs that contain a secret value
+      # (the APK name includes "music-loader", which can match a secret such as
+      # the key alias), so `needs.build.outputs.apk` can arrive empty. The run
+      # has a single artifact; merge-multiple puts its files directly in dist/.
       - uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.build.outputs.apk }}
           path: dist
+          merge-multiple: true
 
       - name: Publish
         env:
