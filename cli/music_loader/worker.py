@@ -12,6 +12,7 @@ Job spec:
     {"links": ["https://open.spotify.com/album/..."], "output": "/srv/Music",
      "lyrics": "strict" | "loose" | "off", "recheck": false,
      "soundcloud_reposts": false, "soundcloud_likes": false,
+     "soundcloud_fallback": false,
      "spotify_threads": 4, "soundcloud_download_workers": 2,
      "soundcloud_workers": 4, "lyrics_workers": 2}
 
@@ -72,6 +73,7 @@ def build_config(spec: dict[str, Any]) -> AppConfig:
     config.recheck = spec.get("recheck") is True
     config.soundcloud_reposts = spec.get("soundcloud_reposts") is True
     config.soundcloud_likes = spec.get("soundcloud_likes") is True
+    config.soundcloud_fallback = spec.get("soundcloud_fallback") is True
     client_id = os.environ.get(SPOTIFY_CLIENT_ID_ENV) or None
     client_secret = os.environ.get(SPOTIFY_CLIENT_SECRET_ENV) or None
     if client_id and client_secret:

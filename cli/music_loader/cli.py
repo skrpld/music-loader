@@ -97,6 +97,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="For a profile link, also download the profile's likes.",
     )
     soundcloud.add_argument(
+        "--soundcloud-fallback",
+        action="store_true",
+        help="For a track SoundCloud does not give out (DRM-protected, preview only, blocked), "
+             "look for the same track on YouTube Music and take it from there when artist, "
+             "title, version and length all match. It is another recording or master, so it is "
+             "off by default; the file's tags say where it came from.",
+    )
+    soundcloud.add_argument(
         "--soundcloud-download-workers",
         type=_positive_int,
         default=2,
@@ -254,6 +262,8 @@ def print_summary(console: Console, dashboard: Dashboard) -> None:
         f"  -  tracks: [green]{stats.soundcloud_tracks_done} downloaded[/green], "
         f"[cyan]{stats.soundcloud_tracks_skipped} already had[/cyan], "
         f"[red]{stats.soundcloud_tracks_failed} failed[/red]"
+        + (f", [yellow]{stats.soundcloud_tracks_unavailable} unavailable[/yellow]"
+           if stats.soundcloud_tracks_unavailable else "")
     )
     console.print(
         f"Lyrics:     [green]{stats.lyrics_ok} found[/green] / "
@@ -265,6 +275,12 @@ def print_summary(console: Console, dashboard: Dashboard) -> None:
         console.print(
             f"\n[yellow]{dashboard.runlog.count} failed operation(s) logged to:[/yellow] "
             f"{escape(str(dashboard.runlog.path))}"
+        )
+    if dashboard.runlog is not None and dashboard.runlog.unavailable_count:
+        console.print(
+            f"\n[yellow]{dashboard.runlog.unavailable_count} track(s) SoundCloud does not give out "
+            f"(DRM, preview, blocked) - not failures, listed in:[/yellow] "
+            f"{escape(str(dashboard.runlog.unavailable_path))}"
         )
 
 
@@ -308,6 +324,7 @@ def main(argv: list[str] | None = None) -> int:
     config.recheck = args.recheck
     config.soundcloud_reposts = args.soundcloud_reposts
     config.soundcloud_likes = args.soundcloud_likes
+    config.soundcloud_fallback = args.soundcloud_fallback
     try:
         config.ensure_dirs()
     except OSError as exc:

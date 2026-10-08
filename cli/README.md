@@ -78,6 +78,7 @@ skipped.
 | `--recheck` | off | Check already downloaded tracks against the current rules again |
 | `--soundcloud-reposts` | off | Profile link: also download the profile's reposts |
 | `--soundcloud-likes` | off | Profile link: also download the profile's likes |
+| `--soundcloud-fallback` | off | For a track SoundCloud does not give out (DRM, preview only), take the same track from YouTube Music when artist, title, version and length match; the tags say where it came from |
 | `--soundcloud-download-workers N` | 2 | Parallel SoundCloud downloads |
 | `--soundcloud-workers N` | 4 | Parallel SoundCloud conversion/tagging workers |
 | `--spotify-threads N` | 4 | Parallel spotdl downloads |
@@ -112,7 +113,9 @@ Music/
 │   ├── <album artist> - <album>/<NN> - <title>.mp3
 │   ├── <artist> - <song> - Single/01 - <song>.mp3
 │   └── *.m3u8                                              # playlists
-└── .music-loader-logs/failures-YYYYMMDD-HHMMSS.log
+└── .music-loader-logs/
+    ├── failures-YYYYMMDD-HHMMSS.log
+    └── unavailable-YYYYMMDD-HHMMSS.log     # DRM / preview-only tracks that were skipped
 ```
 
 Plus a few hidden index files (`.sc_index.json`, `.spotify_index.json`, ...)

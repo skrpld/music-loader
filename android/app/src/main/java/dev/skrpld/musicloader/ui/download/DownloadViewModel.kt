@@ -87,6 +87,8 @@ class DownloadViewModel(
 
     fun setSoundcloudLikes(enabled: Boolean) = updateOptions { it.copy(soundcloudLikes = enabled) }
 
+    fun setSoundcloudFallback(enabled: Boolean) = updateOptions { it.copy(soundcloudFallback = enabled) }
+
     private fun updateOptions(change: (JobOptions) -> JobOptions) {
         viewModelScope.launch { settingsStore.setJobOptions(change(options.value)) }
     }

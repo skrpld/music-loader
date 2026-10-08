@@ -27,6 +27,7 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TaskID, TaskProgre
 from rich.table import Table
 from rich.text import Text
 
+from .availability import UnavailableTrack
 from .runlog import RunLog
 
 _LOG_LINES = 10
@@ -55,6 +56,9 @@ class Stats:
     soundcloud_tracks_done: int = 0
     soundcloud_tracks_skipped: int = 0
     soundcloud_tracks_failed: int = 0
+    # Skipped because SoundCloud does not give the track out (DRM, preview,
+    # blocked, removed). Not a failure, see availability.py.
+    soundcloud_tracks_unavailable: int = 0
 
 
 class Dashboard:
@@ -154,6 +158,15 @@ class Dashboard:
         if amount:
             self._bump(f"{kind}_tracks_{status}", amount)
 
+    def record_unavailable(self, kind: str, track: UnavailableTrack, note: str = "") -> None:
+        """A track that cannot be downloaded and is skipped: counted apart from
+        failures, explained in the Activity panel and listed in the run's
+        unavailable-tracks file (not in the failure log)."""
+        self.record_track(kind, "unavailable")
+        self.log(f"[{track.source}] {track.message(note)}")
+        if self.runlog is not None:
+            self.runlog.record_unavailable(track)
+
     def record_lyrics(self, found: bool) -> None:
         """Records one lyrics lookup result (found / not found)."""
         self._bump("lyrics_ok" if found else "lyrics_fail", 1)
@@ -223,11 +236,12 @@ class Dashboard:
 
     # -- rendering ------------------------------------------------------------
     @staticmethod
-    def _track_line(done: int, skipped: int, failed: int, total: int) -> str:
-        total = max(total, done + skipped + failed)
+    def _track_line(done: int, skipped: int, failed: int, total: int, unavailable: int = 0) -> str:
+        total = max(total, done + skipped + failed + unavailable)
+        extra = f" / [yellow]{unavailable} unavailable[/yellow]" if unavailable else ""
         return (
             f"[green]{done} downloaded[/green] / [cyan]{skipped} already had[/cyan] / "
-            f"[red]{failed} failed[/red] [dim](of {total} found so far)[/dim]"
+            f"[red]{failed} failed[/red]{extra} [dim](of {total} found so far)[/dim]"
         )
 
     def _stats_table(self) -> Table:
@@ -239,6 +253,8 @@ class Dashboard:
         table.add_row("Destination:", escape(self.output_dir))
         if self.runlog is not None:
             table.add_row("Failure log:", f"[dim]{escape(str(self.runlog.path))}[/dim]")
+            if self.runlog.unavailable_count:
+                table.add_row("Unavailable:", f"[dim]{escape(str(self.runlog.unavailable_path))}[/dim]")
         table.add_row(
             "Spotify links:",
             f"[green]{s.spotify_ok} ok[/green] / [red]{s.spotify_fail} failed[/red]",
@@ -255,7 +271,8 @@ class Dashboard:
         table.add_row(
             "SoundCloud tracks:",
             self._track_line(s.soundcloud_tracks_done, s.soundcloud_tracks_skipped,
-                             s.soundcloud_tracks_failed, s.soundcloud_tracks_total),
+                             s.soundcloud_tracks_failed, s.soundcloud_tracks_total,
+                             s.soundcloud_tracks_unavailable),
         )
         table.add_row(
             "Lyrics:",
@@ -270,7 +287,7 @@ class Dashboard:
         done = (
             s.spotify_tracks_done + s.spotify_tracks_skipped + s.spotify_tracks_failed
             + s.soundcloud_tracks_done + s.soundcloud_tracks_skipped
-            + s.soundcloud_tracks_failed
+            + s.soundcloud_tracks_failed + s.soundcloud_tracks_unavailable
         )
         total = max(total, done)
         self.tracks_progress.update(self._tracks_task, completed=done, total=max(total, 1))

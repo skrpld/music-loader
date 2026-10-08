@@ -64,6 +64,8 @@
     <string name="option_recheck_description">Apply the current rules to tracks that are already downloaded: tags, folders, broken files, lyrics.</string>
     <string name="option_reposts">SoundCloud reposts</string>
     <string name="option_likes">SoundCloud likes</string>
+    <string name="option_fallback">Look for blocked tracks elsewhere</string>
+    <string name="option_fallback_description">For tracks SoundCloud does not give out (DRM, 30-second preview), take the same track from YouTube Music when artist, title, version and length match. A different recording or master; the tags say where it came from.</string>
     <string name="option_profile_only">For profile links only</string>
     <string name="download_submit">Add to queue</string>
     <string name="download_submitted">Added to the queue</string>
@@ -97,6 +99,7 @@
     <string name="job_errors_count">Errors (%1$d)</string>
     <string name="job_activity">Activity</string>
     <string name="job_runlog">Failure log</string>
+    <string name="job_unavailable_log">Unavailable tracks</string>
     <string name="job_failed_links">Failed links</string>
     <string name="kind_track">Track</string>
     <string name="kind_album">Album</string>
@@ -120,10 +123,13 @@
     <string name="stat_downloaded">Downloaded</string>
     <string name="stat_skipped">Already had</string>
     <string name="stat_failed">Failed</string>
+    <string name="stat_unavailable">Unavailable</string>
     <string name="stat_downloaded_count">Downloaded: %1$d</string>
     <string name="stat_skipped_count">Already had: %1$d</string>
     <string name="stat_failed_count">Failed: %1$d</string>
+    <string name="stat_unavailable_count">Unavailable: %1$d</string>
     <string name="service_summary">%1$d new · %2$d already had · %3$d failed</string>
+    <string name="service_summary_unavailable">%1$d new · %2$d already had · %3$d failed · %4$d unavailable</string>
     <string name="lyrics_summary">%1$d found · %2$d not found · %3$d skipped</string>
     <string name="cancel_dialog_title">Cancel the job?</string>
     <string name="cancel_dialog_running">Downloads stop and unfinished files are removed. Tracks that are already in the library stay.</string>

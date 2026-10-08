@@ -35,6 +35,7 @@ class DataStoreSettings(context: Context) : SettingsStore {
                     lyrics = LyricsMode.fromWire(prefs[LYRICS]).wire,
                     soundcloudReposts = prefs[SOUNDCLOUD_REPOSTS] ?: false,
                     soundcloudLikes = prefs[SOUNDCLOUD_LIKES] ?: false,
+                    soundcloudFallback = prefs[SOUNDCLOUD_FALLBACK] ?: false,
                 ),
             )
         }
@@ -67,6 +68,7 @@ class DataStoreSettings(context: Context) : SettingsStore {
             it[LYRICS] = options.lyrics
             it[SOUNDCLOUD_REPOSTS] = options.soundcloudReposts
             it[SOUNDCLOUD_LIKES] = options.soundcloudLikes
+            it[SOUNDCLOUD_FALLBACK] = options.soundcloudFallback
         }
     }
 
@@ -80,5 +82,6 @@ class DataStoreSettings(context: Context) : SettingsStore {
         val LYRICS = stringPreferencesKey("lyrics")
         val SOUNDCLOUD_REPOSTS = booleanPreferencesKey("soundcloud_reposts")
         val SOUNDCLOUD_LIKES = booleanPreferencesKey("soundcloud_likes")
+        val SOUNDCLOUD_FALLBACK = booleanPreferencesKey("soundcloud_fallback")
     }
 }

@@ -21,7 +21,7 @@ def test_job_request_splits_validates_and_deduplicates():
     )
     assert [link.url for link in links] == [SPOTIFY]
     assert rejected == ["junk"]
-    assert options == {"lyrics": "off", "recheck": True, "soundcloud_reposts": False, "soundcloud_likes": False}
+    assert options == {"lyrics": "off", "recheck": True, "soundcloud_reposts": False, "soundcloud_likes": False, "soundcloud_fallback": False}
 
 
 @pytest.mark.parametrize(
@@ -125,3 +125,29 @@ def test_private_tokens_never_reach_the_client(api):
     status, created = api("POST", "/jobs", {"links": ["https://soundcloud.com/a/sets/b?secret_token=s-Hidden"]})
     assert status == 201
     assert "s-Hidden" not in json.dumps(created)
+
+
+# -- SoundCloud fallback option ---------------------------------------------------
+def test_fallback_option_is_off_by_default_and_must_be_a_boolean():
+    _, options, _ = server._parse_job_request({"links": [SPOTIFY], "options": {"soundcloud_fallback": True}})
+    assert options["soundcloud_fallback"] is True
+    with pytest.raises(server._RequestError):
+        server._parse_job_request({"links": [SPOTIFY], "options": {"soundcloud_fallback": "yes"}})
+
+
+def test_worker_reads_the_fallback_option(tmp_path):
+    from music_loader import worker
+
+    assert worker.build_config({"output": str(tmp_path)}).soundcloud_fallback is False
+    assert worker.build_config({"output": str(tmp_path), "soundcloud_fallback": True}).soundcloud_fallback is True
+    assert worker.build_config({"output": str(tmp_path), "soundcloud_fallback": "yes"}).soundcloud_fallback is False
+
+
+def test_job_reports_the_unavailable_tracks_file():
+    job = server.Job(id="1", links=[], options={}, rejected=[])
+    server.JobManager._apply(job, {"type": "stats", "stats": {"soundcloud_tracks_unavailable": 3}})
+    server.JobManager._apply(job, {"type": "unavailable_log", "path": "/m/.music-loader-logs/unavailable-1.log"})
+    detail = job.detail()
+    assert detail["stats"]["soundcloud_tracks_unavailable"] == 3
+    assert detail["unavailable_log"] == "/m/.music-loader-logs/unavailable-1.log"
+    assert job.error_count == 0

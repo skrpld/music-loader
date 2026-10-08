@@ -21,7 +21,9 @@ Music/
 ├── .music-loader-artists.json       (canonical artist spelling)
 ├── .spotify_index.json              (Spotify URL -> file cache)
 ├── .spotify_lyrics_attempts.json
-└── .music-loader-logs/failures-YYYYMMDD-HHMMSS.log
+└── .music-loader-logs/
+    ├── failures-YYYYMMDD-HHMMSS.log     (what went wrong)
+    └── unavailable-YYYYMMDD-HHMMSS.log  (tracks SoundCloud does not give out)
 ```
 
 The album artist decides the folder - the artist the album belongs to, not
@@ -119,7 +121,7 @@ Every new file is checked before it counts as downloaded:
 
 - SoundCloud: the converted file's length must match SoundCloud's (±3 s /
   3 %). A 30-second Go+ preview or a cut-off download fails the track instead
-  of being filed as complete. Go+-only tracks are reported as such.
+  of being filed as complete.
 - SoundCloud: a partial file left by an interrupted run is never reused.
 - Spotify: spotDL converts straight into the final file and tags it last; a
   file without spotDL's URL tag is an interrupted download and is downloaded
@@ -228,6 +230,55 @@ is passed to spotdl through its environment, never on its command line.
 Every failure is written to `.music-loader-logs/failures-<timestamp>.log` as
 it happens, so a long batch can be reviewed afterwards.
 
+## Unavailable tracks (DRM, previews)
+
+A track ends as one of: downloaded, already had, **failed**, or
+**unavailable**. They are different things (`availability.py`):
+
+- *unavailable* - the track cannot be downloaded and trying again will not
+  help: it is only served **DRM-protected** (label and distributor uploads;
+  yt-dlp's text "This video is DRM protected" says "video" for every kind of
+  media), only as a 30-second **Go+ preview**, **blocked** (region, rights
+  holder) or **removed**. It is skipped, counted separately and does **not**
+  make the job fail: a run where only such tracks were skipped completes.
+- *failed* - anything else that went wrong; it counts as a failure.
+- *rate_limited* and *network* - transient causes. They are reported like
+  failures today; they exist as categories (`FailureCategory.retryable`) so
+  that a retry can pick exactly these and never an unavailable track.
+
+Music Loader does not decrypt DRM and does not try to get around it. SoundCloud
+serves such tracks only as `ctr-encrypted-hls` / `cbc-encrypted-hls` streams;
+yt-dlp ignores those and the track is left out.
+
+Detection costs no download: SoundCloud's track JSON (`media.transcodings`,
+`policy`) is asked for 50 tracks per request after the link is resolved
+(tracks already in the library are left out), so a 229-track album needs
+about five requests of SoundCloud's budget of ~600 per 10 minutes. A track is
+unavailable when `policy` is `BLOCK` or `SNIP`, when every stream is encrypted,
+or when the only plain streams are previews; encrypted and plain streams
+together are fine (the plain one is downloaded), and so is a track with an
+offered original download. If that request fails, the same verdict is made
+from yt-dlp's error after the attempt.
+
+Each skipped track is explained in the activity list (`'<title>' by <artist>:
+DRM-protected on SoundCloud, can't be downloaded, skipped`), counted in the
+summary / the app's job screen and written - artist, title, reason, link - to
+`.music-loader-logs/unavailable-<timestamp>.log`, so the tracks can be found
+elsewhere. This file is separate from the failure log.
+
+### `--soundcloud-fallback` (off by default)
+
+With `--soundcloud-fallback` (a switch in the app) an unavailable track is
+searched on **YouTube Music** instead of only being skipped. It is another
+recording or master from another source, so a result is used only when all of
+this agrees: the title (without "feat." and promo noise), the version
+("Sped Up", "Remix", "Live" ... on both sides or neither), at least one main
+artist, and the length within 3 s of SoundCloud's. The first five search results
+are checked, one by one. Nothing matches - the track stays unavailable. The
+finished file is checked against SoundCloud's length like any other, is tagged
+and filed from SoundCloud's metadata, and carries `MUSIC_LOADER_SOURCE` and
+`MUSIC_LOADER_SOURCE_URL` tags saying where the audio came from.
+
 ## Code map
 
 ```
@@ -251,7 +302,9 @@ cli/music_loader/
 ├── paths.py              # safe file names, moving files with their .lrc
 ├── net.py                # small HTTP helper
 ├── playlist.py           # .m3u8 playlists for SoundCloud
-├── runlog.py             # persistent per-run failure log
+├── runlog.py             # persistent per-run failure log and unavailable-tracks list
+├── availability.py       # failure categories, DRM / preview / blocked detection
+├── fallback.py           # opt-in: verified YouTube Music match for unavailable tracks
 ├── ui.py                 # live dashboard
 ├── server.py             # server mode: HTTP API, job queue, event stream
 ├── worker.py             # runs one server job in its own process

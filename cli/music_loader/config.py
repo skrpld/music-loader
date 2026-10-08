@@ -63,6 +63,12 @@ STALE_STAGING_SECONDS = 24 * 60 * 60
 DURATION_TOLERANCE_SECONDS = 3.0
 DURATION_TOLERANCE_RATIO = 0.03
 
+# The fallback to another source takes a track only when its length is this
+# close to SoundCloud's (a different edit or master is off by more).
+FALLBACK_DURATION_TOLERANCE_SECONDS = 3.0
+# How many search results of the fallback are looked at, best first.
+FALLBACK_MAX_CANDIDATES = 5
+
 # Embedded covers are downscaled to at most this size; SoundCloud "original"
 # artwork can be several thousand pixels and megabytes per file.
 COVER_MAX_SIZE = 1200
@@ -106,6 +112,10 @@ class AppConfig:
     recheck: bool = False
     soundcloud_reposts: bool = False
     soundcloud_likes: bool = False
+    # Opt-in: a track SoundCloud does not give out (DRM, preview, blocked) is
+    # looked up on YouTube Music and taken from there when artist, title,
+    # version and length all match.
+    soundcloud_fallback: bool = False
 
     @classmethod
     def from_output_dir(cls, output_dir: Path) -> "AppConfig":

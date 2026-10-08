@@ -128,7 +128,7 @@ fun ActiveDownloads(files: List<FileProgress>, modifier: Modifier = Modifier) {
     }
 }
 
-/** Three tiles: downloaded / already had / failed tracks. */
+/** Downloaded / already had / failed tracks, plus unavailable ones (DRM, preview) when there are any. */
 @Composable
 fun TrackStatTiles(job: Job, modifier: Modifier = Modifier) {
     val stats = job.stats
@@ -162,6 +162,15 @@ fun TrackStatTiles(job: Job, modifier: Modifier = Modifier) {
             },
             modifier = Modifier.weight(1f),
         )
+        if (stats.tracksUnavailable > 0) {
+            StatTile(
+                value = stats.tracksUnavailable,
+                label = stringResource(R.string.stat_unavailable),
+                container = MaterialTheme.colorScheme.tertiaryContainer,
+                content = MaterialTheme.colorScheme.onTertiaryContainer,
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
 }
 

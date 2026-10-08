@@ -126,6 +126,7 @@ private fun JobDetailContent(job: Job, contentPadding: PaddingValues) {
     val clipboard = rememberClipboardAccess()
     val scope = rememberCoroutineScope()
     val runlogLabel = stringResource(R.string.job_runlog)
+    val unavailableLogLabel = stringResource(R.string.job_unavailable_log)
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(
@@ -191,6 +192,26 @@ private fun JobDetailContent(job: Job, contentPadding: PaddingValues) {
         if (job.log.isNotEmpty()) {
             item(key = "log-header") { SectionHeader(stringResource(R.string.job_activity)) }
             logEntries("log", job.log.asReversed())
+        }
+        val unavailableLog = job.unavailableLog
+        if (unavailableLog != null && job.stats.tracksUnavailable > 0) {
+            item(key = "unavailable-log") {
+                SegmentedListItem(
+                    onClick = { scope.launch { clipboard.write(unavailableLogLabel, unavailableLog) } },
+                    shapes = ListItemDefaults.segmentedShapes(index = 0, count = 1),
+                    modifier = Modifier.padding(top = 12.dp),
+                    leadingContent = { Icon(painterResource(R.drawable.ic_folder), contentDescription = null) },
+                    supportingContent = { Text(unavailableLog) },
+                    trailingContent = {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_content_copy),
+                            contentDescription = stringResource(R.string.action_copy),
+                        )
+                    },
+                ) {
+                    Text(unavailableLogLabel)
+                }
+            }
         }
         val runlog = job.runlog
         if (runlog != null && job.errorCount > 0) {
@@ -305,12 +326,22 @@ private fun ServiceSummary(job: Job) {
             if (stats.soundcloudTracksTotal > 0 || stats.soundcloudOk + stats.soundcloudFail > 0) {
                 DetailLine(
                     "SoundCloud",
-                    stringResource(
-                        R.string.service_summary,
-                        stats.soundcloudTracksDone,
-                        stats.soundcloudTracksSkipped,
-                        stats.soundcloudTracksFailed,
-                    ),
+                    if (stats.soundcloudTracksUnavailable > 0) {
+                        stringResource(
+                            R.string.service_summary_unavailable,
+                            stats.soundcloudTracksDone,
+                            stats.soundcloudTracksSkipped,
+                            stats.soundcloudTracksFailed,
+                            stats.soundcloudTracksUnavailable,
+                        )
+                    } else {
+                        stringResource(
+                            R.string.service_summary,
+                            stats.soundcloudTracksDone,
+                            stats.soundcloudTracksSkipped,
+                            stats.soundcloudTracksFailed,
+                        )
+                    },
                 )
             }
             DetailLine(
@@ -340,5 +371,6 @@ private fun OptionPills(job: Job) {
         if (options.recheck) Pill(text = stringResource(R.string.option_recheck), icon = R.drawable.ic_sync)
         if (options.soundcloudReposts) Pill(text = stringResource(R.string.option_reposts), icon = R.drawable.ic_repeat)
         if (options.soundcloudLikes) Pill(text = stringResource(R.string.option_likes), icon = R.drawable.ic_favorite)
+        if (options.soundcloudFallback) Pill(text = stringResource(R.string.option_fallback), icon = R.drawable.ic_library_music)
     }
 }

@@ -21,6 +21,10 @@ except ImportError:  # pragma: no cover - dependency is declared in pyproject
     MUTAGEN_AVAILABLE = False
 
 SOUNDCLOUD_ID_DESC = "SOUNDCLOUD_ID"
+# Set on a file that was not taken from SoundCloud itself (the fallback to
+# YouTube Music): where it came from, and the page it was taken from.
+SOURCE_DESC = "MUSIC_LOADER_SOURCE"
+SOURCE_URL_DESC = "MUSIC_LOADER_SOURCE_URL"
 _LYRICS_FRAMES = ("USLT", "SYLT")
 
 
@@ -126,6 +130,17 @@ def read_tags(path: Path) -> dict:
         str(getattr(frame, "text", "")).strip() for frame in id3.getall("USLT")
     ) or bool(id3.getall("SYLT"))
     return result
+
+
+def read_txxx(path: Path, desc: str) -> str:
+    """Value of one user-defined text frame, empty when missing."""
+    if not MUTAGEN_AVAILABLE:
+        return ""
+    try:
+        frames = ID3(str(path)).getall(f"TXXX:{desc}")
+    except Exception:
+        return ""
+    return str(frames[0].text[0]) if frames and frames[0].text else ""
 
 
 def read_woas(path: Path) -> str:

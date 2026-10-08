@@ -30,6 +30,7 @@ data class JobOptions(
     val recheck: Boolean = false,
     @SerialName("soundcloud_reposts") val soundcloudReposts: Boolean = false,
     @SerialName("soundcloud_likes") val soundcloudLikes: Boolean = false,
+    @SerialName("soundcloud_fallback") val soundcloudFallback: Boolean = false,
 ) {
     val lyricsMode: LyricsMode get() = LyricsMode.fromWire(lyrics)
 }
@@ -74,11 +75,14 @@ data class JobStats(
     @SerialName("soundcloud_tracks_done") val soundcloudTracksDone: Int = 0,
     @SerialName("soundcloud_tracks_skipped") val soundcloudTracksSkipped: Int = 0,
     @SerialName("soundcloud_tracks_failed") val soundcloudTracksFailed: Int = 0,
+    /** Tracks SoundCloud does not give out (DRM, preview, blocked): skipped, not failed. */
+    @SerialName("soundcloud_tracks_unavailable") val soundcloudTracksUnavailable: Int = 0,
 ) {
     val tracksDone: Int get() = spotifyTracksDone + soundcloudTracksDone
     val tracksSkipped: Int get() = spotifyTracksSkipped + soundcloudTracksSkipped
     val tracksFailed: Int get() = spotifyTracksFailed + soundcloudTracksFailed
-    val tracksProcessed: Int get() = tracksDone + tracksSkipped + tracksFailed
+    val tracksUnavailable: Int get() = soundcloudTracksUnavailable
+    val tracksProcessed: Int get() = tracksDone + tracksSkipped + tracksFailed + tracksUnavailable
 
     /** The total grows while links are being resolved; it never drops below what was processed. */
     val tracksTotal: Int get() = maxOf(spotifyTracksTotal + soundcloudTracksTotal, tracksProcessed)
@@ -150,6 +154,7 @@ data class Job(
     val log: List<LogEntry> = emptyList(),
     val errors: List<LogEntry> = emptyList(),
     val runlog: String? = null,
+    @SerialName("unavailable_log") val unavailableLog: String? = null,
 ) {
     val status: JobStatus get() = JobStatus.fromWire(statusWire)
 }

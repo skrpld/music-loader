@@ -39,7 +39,7 @@ fun jobTitle(job: Job): String {
     return if (more > 0) pluralStringResource(R.plurals.job_more_links, more, base, more) else base
 }
 
-/** "Downloaded: 12 · Already had: 3 · Failed: 1". */
+/** "Downloaded: 12 · Already had: 3 · Failed: 1 · Unavailable: 2". */
 @Composable
 fun trackSummary(job: Job): String {
     val stats = job.stats
@@ -47,11 +47,12 @@ fun trackSummary(job: Job): String {
         add(stringResource(R.string.stat_downloaded_count, stats.tracksDone))
         if (stats.tracksSkipped > 0) add(stringResource(R.string.stat_skipped_count, stats.tracksSkipped))
         if (stats.tracksFailed > 0) add(stringResource(R.string.stat_failed_count, stats.tracksFailed))
+        if (stats.tracksUnavailable > 0) add(stringResource(R.string.stat_unavailable_count, stats.tracksUnavailable))
     }
     return parts.joinToString(" · ")
 }
 
-/** A finished job with failed links or tracks is shown as "done with errors". */
+/** A finished job with failed links or tracks is shown as "done with errors"; unavailable tracks are not failures. */
 val Job.hasFailures: Boolean
     get() = stats.tracksFailed > 0 || stats.spotifyFail > 0 || stats.soundcloudFail > 0
 

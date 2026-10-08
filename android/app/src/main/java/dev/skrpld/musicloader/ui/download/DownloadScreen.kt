@@ -197,9 +197,11 @@ fun DownloadScreen(
                     recheck = viewModel.recheck,
                     reposts = options.soundcloudReposts,
                     likes = options.soundcloudLikes,
+                    fallback = options.soundcloudFallback,
                     onRecheckChange = { viewModel.recheck = it },
                     onRepostsChange = viewModel::setSoundcloudReposts,
                     onLikesChange = viewModel::setSoundcloudLikes,
+                    onFallbackChange = viewModel::setSoundcloudFallback,
                 )
             }
             Button(
@@ -358,9 +360,11 @@ private fun OptionsList(
     recheck: Boolean,
     reposts: Boolean,
     likes: Boolean,
+    fallback: Boolean,
     onRecheckChange: (Boolean) -> Unit,
     onRepostsChange: (Boolean) -> Unit,
     onLikesChange: (Boolean) -> Unit,
+    onFallbackChange: (Boolean) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
         OptionItem(
@@ -387,6 +391,14 @@ private fun OptionsList(
             checked = likes,
             onCheckedChange = onLikesChange,
         )
+        OptionItem(
+            index = 3,
+            icon = R.drawable.ic_library_music,
+            title = stringResource(R.string.option_fallback),
+            description = stringResource(R.string.option_fallback_description),
+            checked = fallback,
+            onCheckedChange = onFallbackChange,
+        )
     }
 }
 
@@ -403,7 +415,7 @@ private fun OptionItem(
     SegmentedListItem(
         checked = checked,
         onCheckedChange = onCheckedChange,
-        shapes = ListItemDefaults.segmentedShapes(index = index, count = 3),
+        shapes = ListItemDefaults.segmentedShapes(index = index, count = 4),
         leadingContent = { Icon(painterResource(icon), contentDescription = null) },
         supportingContent = { Text(description) },
         trailingContent = { Switch(checked = checked, onCheckedChange = null) },
