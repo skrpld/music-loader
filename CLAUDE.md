@@ -39,7 +39,7 @@ Android (from `android/`; JDK 17+, Android SDK, Python 3.13 in `PATH` for Chaquo
 - **Android phone mode.** `android.py` is the app's entry point: it starts the same server bound to `127.0.0.1` with a fresh token. Android has no Python executable, so `process.py` hands commands starting with `inprocess.MARK` to `inprocess.py`, which runs spotDL/yt-dlp in threads with per-run stdout/stderr routing. `inprocess.py` drives spotDL internals — re-check it when bumping spotDL.
 - **Android Python deps** are pinned in `android/app/requirements-android.txt` (pure-Python wheels, installed with `--no-deps`; three prebuilt in `android/app/wheels/`, pykakasi patched for Chaquopy). Stand-ins for packages without an Android build (`curl_cffi`, `pymongo`) live in `android/app/src/main/python/`. A new dependency of `music_loader` must be added there too, not only to `cli/pyproject.toml`.
 - **Library state** lives in hidden index files in the output folder (`.sc_index.json`, `.spotify_index.json`, `.music-loader-artists.json`, lyrics attempt files); paths are relative so libraries can move. `artists.py` keeps one canonical spelling per artist; `text_utils.py`/`soundcloud_meta.py` parse SoundCloud titles into credits; `lyrics.py` does strict verified matching. Rules are documented in `docs/how-it-works.md` — update it when behaviour changes.
-- Tags are ID3v2.3 with `/` between artists (same convention as spotDL).
+- Tags are ID3v2.4: `TPE1` = `A, B` plus `TXXX:ARTISTS` with the real list (`tags.py`); spotDL's ID3v2.3 `A/B` output is rewritten after download.
 
 ## Releasing (docs/releasing.md)
 

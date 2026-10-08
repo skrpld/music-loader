@@ -22,21 +22,34 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Callable, Iterable
 
 KnownArtist = Callable[[str], bool]
 
 # -- promotional noise -------------------------------------------------------
+_FREE_DL = r"free\s*(?:dl|download)"
+_BUY_FREE_DL = rf"buy\s*[=/]\s*{_FREE_DL}"
 _JUNK_WORDS = (
     r"official|\bvideo\b|\baudio\b|lyric video|visuali[sz]er|free ?download|free ?dl|"
-    r"out now|premiere|in description|in desc|link in bio|"
+    r"out now|premiere|in description|in desc|link in bio|" + _BUY_FREE_DL + r"|buy now|"
     r"\brelease\b|клип|премьера|скачать|"
     r"monstercat|nocopyrightsounds|\bncs\b"
 )
 _JUNK_RE = re.compile(_JUNK_WORDS, re.IGNORECASE)
 # Only junk when it is the whole bracket: "(Clean)" yes, "(Clean Bandit Remix)" no.
 _JUNK_WHOLE_RE = re.compile(
-    r"^\s*(?:(?:clean|explicit|dirty)(?: version)?|hq|hd|4k|mv|m/v)\s*$", re.IGNORECASE
+    r"^\s*(?:(?:clean|explicit|dirty)(?: version)?|hq|hd|4k|mv|m/v|(?:19|20)\d\d)\s*$", re.IGNORECASE
+)
+# "#phonk #drift": hashtags are promotion, "#1" or "No.#5" are not.
+_HASHTAG_RE = re.compile(r"(?<!\S)#[^\W\d_][\w-]*")
+# A trailing "OUT NOW" / "BUY = FREE DL" outside of brackets.
+_JUNK_TAIL_RE = re.compile(rf"\s+(?:out now|{_BUY_FREE_DL}|{_FREE_DL})\s*!*\s*$", re.IGNORECASE)
+# "Song | Some Label": a short last part after a pipe that names a label. A
+# subtitle ("| Live in Paris", "| Part Two") must stay.
+_LABEL_TAIL_RE = re.compile(
+    r"^(?:\S+\s+){0,3}(?:records|recordings|recs?|music|label|entertainment|productions?|media|network)$",
+    re.IGNORECASE,
 )
 
 _BRACKETS = {"(": ")", "[": "]", "{": "}"}
@@ -120,6 +133,42 @@ class ParsedTitle:
 # -- generic helpers ---------------------------------------------------------
 def collapse(text: str | None) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
+
+
+_ZERO_WIDTH_RE = re.compile("[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]")
+_QUOTE_TRANSLATION = str.maketrans({
+    "\u2018": "'", "\u2019": "'", "\u201a": "'", "\u201b": "'", "\u2032": "'", "\u02bc": "'",
+    "\u201c": '"', "\u201d": '"', "\u201e": '"', "\u201f": '"', "\u00ab": '"', "\u00bb": '"',
+    "\u2033": '"', "\u2013": "-", "\u2014": "-", "\u2212": "-",
+})
+# Symbols that carry meaning in a name ("30°", "C♯ minor") and stay.
+_KEPT_SYMBOLS = "°♯♭"
+
+
+def normalize_unicode(text: str | None) -> str:
+    """NFKC text without zero-width characters, with straight quotes and
+    dashes and full-width forms ("Ｔｉｔｌｅ") turned into plain ones.
+    Cyrillic, CJK and accented letters are untouched."""
+    value = unicodedata.normalize("NFKC", text or "")
+    value = _ZERO_WIDTH_RE.sub("", value).translate(_QUOTE_TRANSLATION)
+    return value
+
+
+@lru_cache(maxsize=None)
+def _is_decorative(char: str) -> bool:
+    if char in _KEPT_SYMBOLS:
+        return False
+    return (unicodedata.category(char) in {"So", "Cf", "Co", "Cn", "Cs"}
+            or char in "\ufe0e\ufe0f" or "\U0001f3fb" <= char <= "\U0001f3ff")
+
+
+def strip_symbols(text: str | None) -> str:
+    """Removes emoji and decorative symbols (✦ ★ ☆ ♥ 🔥) anywhere in the
+    text; math signs and punctuation stay."""
+    value = text or ""
+    if not value.isascii():
+        value = "".join(" " if _is_decorative(char) else char for char in value)
+    return collapse(value)
 
 
 def _strip_edges(text: str) -> str:
@@ -223,12 +272,19 @@ def _is_junk(inner: str) -> bool:
 
 
 def clean_promo(text: str) -> str:
-    """Drops promotional brackets and "| FREE DOWNLOAD" style tails."""
+    """Drops promotional brackets, hashtags, emoji and "| FREE DOWNLOAD" /
+    "| Label" style tails."""
+    text = strip_symbols(text)
     spans = [(start, end) for start, end, inner in _bracket_groups(text) if _is_junk(inner)]
     text = _remove_spans(text, spans)
     parts = re.split(r"\s+\|\s+|\s+//\s+", text)
-    text = " | ".join(part for index, part in enumerate(parts) if index == 0 or not _JUNK_RE.search(part))
-    text = re.sub(r"\s+(?:free\s*(?:dl|download))\s*$", "", text, flags=re.IGNORECASE)
+    parts = [part for index, part in enumerate(parts) if index == 0 or not _JUNK_RE.search(part)]
+    if len(parts) > 1 and _LABEL_TAIL_RE.match(parts[-1].strip()) and not variant_markers(parts[-1]):
+        parts.pop()
+    text = " | ".join(parts)
+    text = _JUNK_TAIL_RE.sub("", text)
+    if "#" in text:
+        text = _HASHTAG_RE.sub(" ", text)
     return _strip_edges(re.sub(r"[\(\[\{]\s*[\)\]\}]", " ", text))
 
 

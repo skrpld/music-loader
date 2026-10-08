@@ -26,7 +26,7 @@ from typing import Any
 from .artists import PRIORITY_TITLE, PRIORITY_UPLOADER, ArtistRegistry
 from .config import SINGLE_ALBUM_SUFFIX
 from .links import redact_url
-from .paths import safe_component
+from .naming import VARIOUS_ARTISTS, album_folder, track_filename
 from .process import module_available
 from .tags import TrackTags
 from .text_utils import clean_promo, normalize_name, parse_soundcloud_title, split_artist_names, strip_decorations
@@ -315,6 +315,8 @@ def build_meta(
         if owner:
             registry.register(owner, PRIORITY_UPLOADER)
         album_artist = registry.canonical(owner) if owner else main[0]
+        if album.set_type == "compilation":
+            album_artist = VARIOUS_ARTISTS
         number, total = max(album.position, 1), max(album.total, album.position, 1)
         release = info.get("release_timestamp") or album.release_timestamp or info.get("timestamp")
         genre = _genre(info) or strip_decorations(album.genre.lstrip("#"))
@@ -341,8 +343,8 @@ def build_meta(
     )
     return TrackMeta(
         tags=tags,
-        folder=safe_component(f"{album_artist} - {album_title}"),
-        filename=safe_component(f"{number:02d} - {title}") + ".mp3",
+        folder=album_folder(album_artist, album_title),
+        filename=track_filename(title, number, total),
         main_artists=main,
         featured=featured,
         title=title,
