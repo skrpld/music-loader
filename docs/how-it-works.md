@@ -159,7 +159,11 @@ tracks.
 
 SoundCloud allows roughly 600 API requests per 10 minutes. When it answers
 "429 Too Many Requests", all downloads pause (30 s, doubling up to 5 min) and
-the track is retried.
+the track is retried. From then on the run downloads one track at a time
+instead of `--soundcloud-download-workers`, so the parallel workers do not hit
+the limit again the moment the pause ends (a new server job starts at full
+speed again). A track that still fails after its retries is a `rate_limited`
+failure and can be retried later, see [Retrying](#retrying-failed-tracks).
 
 Profile, likes and reposts listings need yt-dlp's browser impersonation
 (`curl-cffi`), otherwise SoundCloud answers with HTTP 403.
@@ -213,6 +217,11 @@ command-line arguments are visible to every user of the machine in the
 process list; the environment variables are the safer channel. The secret
 is passed to spotdl through its environment, never on its command line.
 
+When credentials are in use the activity log says "Using the official Spotify
+API" (never the secret). In the Android app they are set under Settings →
+Phone and kept encrypted with the Android Keystore; they are handed to the
+embedded engine in memory and are not part of any job's options.
+
 ## Parallel work
 
 - SoundCloud: `--soundcloud-download-workers` downloads run in parallel; a
@@ -242,9 +251,9 @@ A track ends as one of: downloaded, already had, **failed**, or
   holder) or **removed**. It is skipped, counted separately and does **not**
   make the job fail: a run where only such tracks were skipped completes.
 - *failed* - anything else that went wrong; it counts as a failure.
-- *rate_limited* and *network* - transient causes. They are reported like
-  failures today; they exist as categories (`FailureCategory.retryable`) so
-  that a retry can pick exactly these and never an unavailable track.
+- *rate_limited* and *network* - transient causes. They count as failures,
+  but they are *retryable* (`FailureCategory.retryable`): a retry picks
+  exactly these and never an unavailable track.
 
 Music Loader does not decrypt DRM and does not try to get around it. SoundCloud
 serves such tracks only as `ctr-encrypted-hls` / `cbc-encrypted-hls` streams;
@@ -279,6 +288,34 @@ finished file is checked against SoundCloud's length like any other, is tagged
 and filed from SoundCloud's metadata, and carries `MUSIC_LOADER_SOURCE` and
 `MUSIC_LOADER_SOURCE_URL` tags saying where the audio came from.
 
+## Retrying failed tracks
+
+Every failed track (or a whole link that could not be resolved) is reported
+to the server with its category, URL and title (a `failure` event, see
+`events.py`). The server keeps them on the job (at most 2000, one entry per
+URL) and shows them grouped by category:
+
+| Category | Retried? | Typical cause |
+|---|---|---|
+| `rate_limited` | yes | HTTP 429 / 403, "too many requests" |
+| `network` | yes | timeout, connection reset, HTTP 5xx |
+| `failed` | no | conversion, tagging or an error nobody recognized |
+| `unavailable` | never | DRM, preview, blocked, removed - listed apart, not a failure |
+
+Re-running a link is cheap because tracks already in the library are skipped,
+so a retry is simply the same link queued again. `POST /api/v1/jobs/<id>/retry`
+creates a new job with the same options: scope `all` queues the original links,
+scope `failed` queues the URLs of the retryable failures only.
+
+**Automatic retry** (job option `auto_retry`, off by default; a switch in the
+app): when a job *completes* with retryable failures, the server queues them
+again by itself after 15 minutes, then 30, then 60 - at most three attempts.
+The job shows when the next attempt is due, and cancelling it stops the wait.
+Cancelled and crashed jobs are not retried. The timer lives in the memory of
+the server (`JobManager`): it survives as long as `music-loader serve` or the
+app's download service runs, but not a restart of the server or the app being
+killed. A persistent schedule (WorkManager) is left for later.
+
 ## Code map
 
 ```
@@ -308,7 +345,7 @@ cli/music_loader/
 ├── ui.py                 # live dashboard
 ├── server.py             # server mode: HTTP API, job queue, event stream
 ├── worker.py             # runs one server job in its own process
-├── events.py             # progress as JSON events (server mode)
+├── events.py             # progress as JSON events (server mode), incl. failed tracks
 ├── inprocess.py          # spotdl / yt-dlp inside the interpreter (Android)
 └── android.py            # entry points of the Android app's phone mode
 ```
