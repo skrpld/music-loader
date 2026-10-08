@@ -61,6 +61,7 @@ from .config import (
 )
 from .links import Link
 from .lyrics import LyricsRequest, LyricsService, get_attempts
+from .net import probe
 from .paths import move_with_sidecars, prune_empty_dirs, remove_with_sidecars
 from .process import (
     run_captured,
@@ -86,6 +87,22 @@ _VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 
 _HEARTBEAT_INTERVAL = 20.0  # seconds between "still working" log lines
 _TAIL_LINES = 20
+# Quiet for this long while resolving a link: say that Spotify may not answer.
+_SLOW_RESOLVE_SECONDS = 60.0
+
+# What spotDL talks to: the built-in client scrapes the web player, the official
+# API (own credentials) uses these two hosts.
+_BUILTIN_CLIENT_URLS = ("https://open.spotify.com/",)
+_OFFICIAL_API_URLS = ("https://accounts.spotify.com/", "https://api.spotify.com/")
+_REACHABLE_TIMEOUT = 10.0
+_REACHABLE_ATTEMPTS = 2
+
+
+def _not_reachable_hint() -> str:
+    hint = "Spotify does not answer from this network: check the internet connection, VPN or proxy"
+    if hasattr(sys, "getandroidapilevel"):
+        hint += " (a VPN app must include Music Loader)"
+    return f"{hint}, then run the link again."
 
 # spotdl's own template variables; "{output-ext}" is its extension variable
 # (an unknown name such as "{ext}" is written into the file name verbatim).
@@ -93,11 +110,17 @@ OUTPUT_TEMPLATE = "{album-artist} - {album}/{track-number} - {title}.{output-ext
 
 _SECRET_ENV = "MUSIC_LOADER_SPOTIFY_CLIENT_SECRET"
 # Runs spotdl in this interpreter with the client secret taken from the
-# environment, so it never shows up in the process list.
+# environment, so it never shows up in the process list, and with the cache of
+# the web player's query hashes in place (spotify_cache.py).
 _BOOTSTRAP = (
     "import os, runpy, sys\n"
     f"secret = os.environ.pop({_SECRET_ENV!r}, '')\n"
     "sys.argv = ['spotdl'] + sys.argv[1:] + (['--client-secret', secret] if secret else [])\n"
+    "try:\n"
+    "    from music_loader import spotify_cache\n"
+    "    spotify_cache.install()\n"
+    "except Exception as exc:\n"
+    "    print('music-loader: Spotify hash cache not active:', exc, file=sys.stderr)\n"
     "runpy.run_module('spotdl', run_name='__main__', alter_sys=True)\n"
 )
 
@@ -129,9 +152,11 @@ def spotdl_version(spotdl: list[str]) -> tuple[int, int, int] | None:
     return tuple(int(part) for part in match.groups()) if match else None
 
 
-def _command(spotdl: list[str], has_secret: bool) -> list[str]:
-    if has_secret and spotdl[:2] == [sys.executable, "-m"]:
+def _command(spotdl: list[str]) -> list[str]:
+    if spotdl[:2] == [sys.executable, "-m"]:
         return [sys.executable, "-c", _BOOTSTRAP]
+    # An in-process run is set up by inprocess.py; a spotdl of another Python
+    # environment cannot import this package.
     return list(spotdl)
 
 
@@ -172,6 +197,30 @@ def _is_complete(path: Path, url: str) -> bool | None:
     return True if found == url else None
 
 
+def _unreachable(
+    urls: tuple[str, ...],
+    timeout: float = _REACHABLE_TIMEOUT,
+    attempts: int = _REACHABLE_ATTEMPTS,
+) -> tuple[str, str] | None:
+    """(url, reason) of the first URL that does not answer, None when all do.
+    Any HTTP status is an answer: spotDL itself deals with refusals.
+
+    Without this check an unreachable Spotify (blocked, a VPN that does not
+    carry the app, no route) shows up as spotdl printing nothing for minutes:
+    its client retries every stalled request several times."""
+    for url in urls:
+        reason = ""
+        for _ in range(max(1, attempts)):
+            try:
+                probe(url, timeout=timeout)
+                break
+            except OSError as exc:
+                reason = str(exc) or type(exc).__name__
+        else:
+            return url, reason
+    return None
+
+
 class _Run:
     """Line parsing and dashboard updates for one spotdl invocation."""
 
@@ -189,6 +238,7 @@ class _Run:
         self.first_output = False
         self.last_heartbeat = 0.0
         self.last_on_disk = 0
+        self.slow_hint_shown = False
 
     def _progress(self) -> None:
         if self.total:
@@ -245,6 +295,13 @@ class _Run:
             new = on_disk - self.last_on_disk
             self.last_on_disk = on_disk
             self.dashboard.log(f"[Spotify] Working: {on_disk} file(s) written so far (+{new})")
+        elif not self.count_tracks and idle_seconds >= _SLOW_RESOLVE_SECONDS and not self.slow_hint_shown:
+            # An artist or a long playlist takes minutes; a stalled connection looks the same.
+            self.slow_hint_shown = True
+            self.dashboard.log(
+                f"[Spotify] Still resolving after {int(idle_seconds)}s. Large artists and playlists "
+                "take a while; if nothing changes, Spotify may not be reachable (VPN / network)."
+            )
         elif not self.first_output:
             self.dashboard.update_file(label=f"Spotify: resolving the link... ({int(idle_seconds)}s)")
         else:
@@ -294,13 +351,24 @@ def download_spotify(
         return False
     version = spotdl_version(spotdl)
     cred_args, env = _credential_args(config, version, spotdl)
-    base = _command(spotdl, bool(env))
+    dashboard.update_file(label="Spotify: checking the connection...")
+    # Credentials in cred_args: spotDL talks to the official API, else to the web player.
+    blocked = _unreachable(_OFFICIAL_API_URLS if cred_args else _BUILTIN_CLIENT_URLS)
+    if blocked is not None:
+        dashboard.log_error("Spotify", f"Cannot reach {blocked[0]} ({blocked[1][:150]}). {_not_reachable_hint()}")
+        dashboard.finish_file()
+        return False
+    base = _command(spotdl)
     template = f"{music_dir}/{OUTPUT_TEMPLATE}"
     common = [
         "--output", template, "--format", "mp3",
         # No spotdl lyrics: they are looked up and verified afterwards.
         "--lyrics",
         "--simple-tui", "--threads", str(max(1, config.spotify_threads)),
+        # YouTube Music first; a song it does not return (it answers differently
+        # by region and network) is looked up on YouTube, where spotDL applies the
+        # same name / artist / duration checks.
+        "--audio", "youtube-music", "youtube",
     ] + cred_args
     extra = ytdlp_extra_args()
     if extra:

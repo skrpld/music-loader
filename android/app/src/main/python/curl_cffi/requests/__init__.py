@@ -17,10 +17,17 @@ _REQUEST_ARGS = {
 }
 
 
+# (connect, read) seconds. requests has no default and would wait on a stalled connection
+# forever; curl_cffi's is 30 s, and a connection that is not up after 10 s is not coming
+# (spotapi retries every request, so a longer wait multiplies).
+DEFAULT_TIMEOUT = (10, 30)
+
+
 class Session(_requests.Session):
-    def __init__(self, *args, impersonate=None, **kwargs):
+    def __init__(self, *args, impersonate=None, timeout=DEFAULT_TIMEOUT, **kwargs):
         super().__init__()
         self.impersonate = impersonate
+        self.timeout = timeout
         for key in ("headers", "cookies", "proxies"):
             value = kwargs.get(key)
             if value:
@@ -28,6 +35,8 @@ class Session(_requests.Session):
 
     def request(self, method, url, *args, **kwargs):
         kwargs = {key: value for key, value in kwargs.items() if key in _REQUEST_ARGS}
+        if kwargs.get("timeout") is None:
+            kwargs["timeout"] = self.timeout
         return super().request(method, url, *args, **kwargs)
 
 
@@ -44,5 +53,5 @@ def post(url, **kwargs):
     return request("POST", url, **kwargs)
 
 
-__all__ = ["BrowserTypeLiteral", "HTTPError", "Response", "Session", "RequestException", "exceptions",
+__all__ = ["BrowserTypeLiteral", "DEFAULT_TIMEOUT", "HTTPError", "Response", "Session", "RequestException", "exceptions",
            "request", "get", "post"]

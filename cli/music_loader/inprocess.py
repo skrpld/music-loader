@@ -302,6 +302,27 @@ def _prepare_spotdl() -> None:
         stub = types.ModuleType("spotdl.console.web")
         stub.web = _no_web
         sys.modules["spotdl.console.web"] = stub
+    try:
+        from . import spotify_cache
+
+        spotify_cache.install()
+    except Exception as exc:  # only a slower start
+        print("music-loader: Spotify hash cache not active:", exc, file=sys.stderr)
+
+
+def check_spotdl() -> None:
+    """Imports what every spotDL run needs, so broken packaging fails the start
+    with one error instead of every Spotify job."""
+    with _SPOTDL_LOCK:
+        _prepare_spotdl()
+        try:
+            import pykakasi
+            import spotdl  # noqa: F401
+
+            # spotDL's formatter needs pykakasi's dictionaries (loaded once).
+            pykakasi.kakasi()
+        except Exception as exc:
+            raise RuntimeError(f"spotDL does not load: {type(exc).__name__}: {exc}") from exc
 
 
 def _run_spotdl(args: list[str]) -> int:

@@ -170,6 +170,31 @@ a playlist, a whole discography) and reports where every song goes;
 Spotify API calls. Before the download the library is checked (unfinished
 files, files under an older layout), after it every song is verified.
 
+spotDL looks a song up on YouTube Music first and on YouTube when YouTube
+Music returns nothing usable (`--audio youtube-music youtube`): its answers
+differ by region and network, and a song that plays there can come back empty.
+Both lookups go through spotDL's matching (name, artists, duration).
+
+Before the first spotdl run, Spotify is asked for a sign of life
+(`open.spotify.com`, or `accounts.spotify.com` and `api.spotify.com` with own
+credentials; any HTTP answer counts, two tries of 10 s). If it does not
+answer, the link fails at once with the reason and a hint (internet, VPN,
+proxy) instead of spotdl sitting silent for minutes: its client retries every
+stalled request. While `spotdl save` is quiet for a minute, the log says that
+large artists take a while and that Spotify may be unreachable.
+
+spotDL's built-in client finds the query hashes of Spotify's web player by
+downloading the player's script and every chunk of it - for every track,
+album and release of an artist it looks at (about a minute per object on a
+phone). The hashes only change with the player's build, so
+[`spotify_cache.py`](../cli/music_loader/spotify_cache.py) keeps them per
+build in `<cache dir>/music-loader/spotify-hashes.json` (the last three
+builds; the cache dir is `$XDG_CACHE_HOME` or `~/.cache`). The first run after
+a new build of the player is still slow; the rest only ask the start page for
+the current build. It patches spotapi's `BaseClient.part_hash` (a spotapi that
+looks different is left alone), in the spotdl child process through
+`spotify.py`'s bootstrap and in the app through `inprocess.py`.
+
 Credentials are optional. spotDL 4.5+ uses its built-in client and needs
 none. Own application credentials
 (<https://developer.spotify.com/dashboard>) switch spotdl to the official
@@ -215,6 +240,7 @@ cli/music_loader/
 ├── process.py            # subprocess execution with streamed output parsing
 ├── spotify.py            # Spotify: resolve, check, download, verify
 ├── spotify_index.py      # Spotify URL -> files (finds moved/duplicate files)
+├── spotify_cache.py      # remembers the web player's query hashes for spotDL's client
 ├── soundcloud.py         # SoundCloud: discovery, parallel pipeline, recheck
 ├── soundcloud_meta.py    # SoundCloud tags, album context, folders, covers
 ├── soundcloud_index.py   # SoundCloud id -> file index, archive

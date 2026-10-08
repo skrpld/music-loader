@@ -5,6 +5,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pytest
 from rich.console import Console
 
 from music_loader import cli, inprocess, process, server
@@ -119,3 +120,19 @@ def test_in_process_job_is_cancelled(monkeypatch, tmp_path: Path):
         assert any(entry["text"] == "started" for entry in detail["log"])
     finally:
         manager.shutdown(timeout=10)
+
+
+def test_check_spotdl_passes_with_working_spotdl():
+    inprocess.check_spotdl()
+
+
+def test_check_spotdl_reports_broken_packaging(monkeypatch):
+    pykakasi = pytest.importorskip("pykakasi")
+
+    # How pykakasi failed under Chaquopy: the path of its dictionaries was no path.
+    def broken_kakasi():
+        raise TypeError("expected str, bytes or os.PathLike object, not AssetPath")
+
+    monkeypatch.setattr(pykakasi, "kakasi", broken_kakasi)
+    with pytest.raises(RuntimeError, match="spotDL does not load: TypeError: .*AssetPath"):
+        inprocess.check_spotdl()
