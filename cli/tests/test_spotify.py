@@ -153,3 +153,29 @@ def test_slow_resolve_hint_is_shown_once(first_output):
     hints = [m for m in messages if "Still resolving" in m]
     assert len(hints) == 1
     assert "65s" in hints[0]
+
+
+def test_audio_lookup_falls_back_from_youtube_music_to_youtube(monkeypatch, tmp_path: Path):
+    parse_arguments = pytest.importorskip("spotdl.utils.arguments").parse_arguments
+    commands: list[list[str]] = []
+
+    def stop_after_resolve(command, *args, **kwargs):
+        commands.append(command)
+        return 1  # the resolve step fails: enough to see its command line
+
+    monkeypatch.setattr(spotify, "tool_command", lambda name: ["spotdl"])
+    monkeypatch.setattr(spotify, "spotdl_version", lambda command: (4, 5, 2))
+    monkeypatch.setattr(spotify, "_unreachable", lambda *args, **kwargs: None)
+    monkeypatch.setattr(spotify, "run_streamed", stop_after_resolve)
+    url = "https://open.spotify.com/track/2IdsniWGsU5oGhvyWDa4qG"
+    config = AppConfig.from_output_dir(tmp_path)
+    config.spotify_client_id, config.spotify_client_secret = "id", "secret"  # options after --audio
+
+    spotify.download_spotify(parse_link(url), config, _Dashboard())
+
+    # spotDL's own parser: --audio takes every following word, nothing else may be swallowed.
+    monkeypatch.setattr("sys.argv", commands[0])
+    arguments = parse_arguments()
+    assert arguments.audio_providers == ["youtube-music", "youtube"]
+    assert arguments.query == [url]
+    assert arguments.client_id == "id"

@@ -170,6 +170,11 @@ a playlist, a whole discography) and reports where every song goes;
 Spotify API calls. Before the download the library is checked (unfinished
 files, files under an older layout), after it every song is verified.
 
+spotDL looks a song up on YouTube Music first and on YouTube when YouTube
+Music returns nothing usable (`--audio youtube-music youtube`): its answers
+differ by region and network, and a song that plays there can come back empty.
+Both lookups go through spotDL's matching (name, artists, duration).
+
 Before the first spotdl run, Spotify is asked for a sign of life
 (`open.spotify.com`, or `accounts.spotify.com` and `api.spotify.com` with own
 credentials; any HTTP answer counts, two tries of 10 s). If it does not

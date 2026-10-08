@@ -365,6 +365,10 @@ def download_spotify(
         # No spotdl lyrics: they are looked up and verified afterwards.
         "--lyrics",
         "--simple-tui", "--threads", str(max(1, config.spotify_threads)),
+        # YouTube Music first; a song it does not return (it answers differently
+        # by region and network) is looked up on YouTube, where spotDL applies the
+        # same name / artist / duration checks.
+        "--audio", "youtube-music", "youtube",
     ] + cred_args
     extra = ytdlp_extra_args()
     if extra:
