@@ -63,6 +63,9 @@ Limits:
   browser: SoundCloud may refuse profile, likes and reposts listings
   (HTTP 403); tracks and sets work. spotDL's built-in Spotify client also runs
   without browser impersonation; if Spotify refuses it, use the server mode.
+- Spotify must be reachable from the app itself. With a VPN, the VPN app has
+  to include Music Loader (split tunneling often leaves new apps out); a
+  link then fails after a few seconds with "Cannot reach open.spotify.com".
 - Jobs live in the app's memory: the list starts empty after Android ends the
   app. The library and its indexes are on disk, so running a link again only
   fetches what is missing.

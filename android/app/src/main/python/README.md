@@ -7,7 +7,7 @@ build. They are part of the app only (Chaquopy adds this folder next to the
 - `curl_cffi` - spotDL's built-in Spotify client (spotapi) and soundcloud-v2
   talk through curl_cffi's browser impersonation. The stand-in offers the same
   session interface on top of `requests`, without the impersonation, and with
-  curl_cffi's default timeout of 30 s (`requests` has none: a stalled
+  a timeout (10 s to connect, 30 s to read; `requests` has none: a stalled
   connection would hold a job for ever). yt-dlp
   sees its version (0.0.0) as unsupported and does not use it.
 - `pymongo` - imported by spotapi for an optional MongoDB cache that spotDL

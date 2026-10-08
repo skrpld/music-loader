@@ -1,6 +1,7 @@
 """Small HTTP helpers on top of urllib (thread-safe, size-capped)."""
 from __future__ import annotations
 
+import http.client
 import json
 import urllib.error
 import urllib.parse
@@ -37,6 +38,24 @@ class Response:
 
     def json(self) -> Any:
         return json.loads(self.body.decode("utf-8", "replace"))
+
+
+def probe(url: str, timeout: float = 10.0) -> int:
+    """HTTP status of a GET over http(s), without reading the body: the answer
+    is the proof that the host can be reached. Any status is returned; network
+    errors (DNS, refused, timeout, TLS, a broken answer) raise OSError."""
+    scheme = urllib.parse.urlsplit(url).scheme.lower()
+    if scheme not in {"http", "https"}:
+        raise OSError(f"refusing non-http(s) URL: {url[:80]}")
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "*/*"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        return exc.code
+    except http.client.HTTPException as exc:
+        raise OSError(f"{type(exc).__name__}: {exc}") from exc
 
 
 def http_get(

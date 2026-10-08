@@ -170,6 +170,14 @@ a playlist, a whole discography) and reports where every song goes;
 Spotify API calls. Before the download the library is checked (unfinished
 files, files under an older layout), after it every song is verified.
 
+Before the first spotdl run, Spotify is asked for a sign of life
+(`open.spotify.com`, or `accounts.spotify.com` and `api.spotify.com` with own
+credentials; any HTTP answer counts, two tries of 10 s). If it does not
+answer, the link fails at once with the reason and a hint (internet, VPN,
+proxy) instead of spotdl sitting silent for minutes: its client retries every
+stalled request. While `spotdl save` is quiet for a minute, the log says that
+large artists take a while and that Spotify may be unreachable.
+
 Credentials are optional. spotDL 4.5+ uses its built-in client and needs
 none. Own application credentials
 (<https://developer.spotify.com/dashboard>) switch spotdl to the official

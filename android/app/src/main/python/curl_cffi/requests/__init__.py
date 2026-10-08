@@ -17,8 +17,10 @@ _REQUEST_ARGS = {
 }
 
 
-# curl_cffi's default; requests has none and would wait on a stalled connection forever.
-DEFAULT_TIMEOUT = 30
+# (connect, read) seconds. requests has no default and would wait on a stalled connection
+# forever; curl_cffi's is 30 s, and a connection that is not up after 10 s is not coming
+# (spotapi retries every request, so a longer wait multiplies).
+DEFAULT_TIMEOUT = (10, 30)
 
 
 class Session(_requests.Session):

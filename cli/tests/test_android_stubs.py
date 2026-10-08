@@ -14,7 +14,7 @@ import curl_cffi
 import curl_cffi.requests as cr
 
 assert curl_cffi.__version__ == "0.0.0", "the stand-in was not imported"
-assert cr.Session().timeout == 30
+assert cr.Session().timeout == (10, 30)
 session = cr.Session(timeout=1)
 try:
     session.get("http://127.0.0.1:{port}/")
