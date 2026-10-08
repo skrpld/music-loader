@@ -625,7 +625,8 @@ def _tag_artists(songs: list[_Song], existed: set[str], config: AppConfig,
             continue
         names = [registry.canonical(str(name)) for name in song.data.get("artists") or [] if name]
         if song.album_artist and song.album_artist != str(song.data.get("album_artist") or ""):
-            set_album_artist(path, song.album_artist)
+            if not set_album_artist(path, song.album_artist):
+                dashboard.log_error("Spotify", f"Could not write the album artist of {path.name}")
         if not names or artists_current(path, names):
             continue
         if set_artists(path, names):

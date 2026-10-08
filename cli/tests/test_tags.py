@@ -96,3 +96,11 @@ def test_rewrite_keeps_lyrics_and_cover(tmp_path):
 def test_clean_artists_dedupes():
     assert tg.clean_artists(["A", " a ", "", "B"]) == ["A", "B"]
     assert tg.set_artists is not None and tg.format_artists([]) == ""
+
+
+def test_split_artists_ignores_empty_parts():
+    known = ArtistRegistry(None).is_known
+    assert tg.split_artists("Artist/", "/", known) == ["Artist"]
+    assert tg.split_artists("A//B", "/", known) == ["A", "B"]
+    assert tg.split_artists("A, ", ", ", known) == ["A"]
+    assert tg.split_artists("", "/", known) == []

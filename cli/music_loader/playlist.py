@@ -114,6 +114,8 @@ def apply_moves(soundcloud_dir: Path, moves: list[tuple[Path, Path]], dashboard=
         return 0
     changed = 0
     for playlist in sorted(soundcloud_dir.glob("*.m3u*")):
+        if playlist.suffix.lower() not in (".m3u", ".m3u8"):
+            continue
         try:
             lines = playlist.read_text(encoding="utf-8").splitlines()
         except OSError:

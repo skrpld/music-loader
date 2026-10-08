@@ -27,14 +27,11 @@ _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 # -- Spotify title suffixes ----------------------------------------------------
 # Spotify writes versions as "Song - Remastered 2011"; SoundCloud and tags use
 # "Song (Remastered 2011)".
-_SUFFIX_WORDS = (
-    r"remaster|mix|edit|version|live|from|mono|stereo|demo|session|acoustic|instrumental|bonus|"
-    r"reprise|take|cut|original|deluxe|anniversary|radio|single|album|extended|explicit|clean|"
-    r"sped|slowed|vip|rework|bootleg|remix|feat|ft|with|pt|part|theme|soundtrack|score|"
-    r"commentary|a cappella|acapella"
-)
 _SUFFIX_RE = re.compile(
-    rf"^(?:(?:19|20)\d\d\b.*|.*\b(?:{_SUFFIX_WORDS})\w*\b.*)$", re.IGNORECASE
+    r"^(?:.*\b(?:remaster\w*|mix|edit|version|live|mono|stereo|demo|session|acoustic|instrumental|"
+    r"bonus track|reprise|radio|extended|remix|sped up|slowed|vip|rework|bootleg|a cappella|acapella)\b.*"
+    r"|from\s+[\"“].*|(?:19|20)\d\d\s+(?:remaster\w*|mix|version|edit))$",
+    re.IGNORECASE,
 )
 _DASH_TAIL_RE = re.compile(r"\s+[-–—]\s+(?=[^-–—]+$)")
 _FEAT_BRACKET_RE = re.compile(r"([\(\[])\s*(?:feat\.?|ft\.?|featuring)\s+", re.IGNORECASE)
@@ -63,9 +60,8 @@ def spotify_title(title: str | None) -> str:
     into brackets, so "Song - Part 1 - Intro" style titles stay readable."""
     value = clean_text(title)
     match = _DASH_TAIL_RE.search(value)
-    while match and _SUFFIX_RE.match(value[match.end():].strip()):
+    if match and _SUFFIX_RE.match(value[match.end():].strip()):
         value = f"{value[:match.start()]} ({value[match.end():].strip()})"
-        match = _DASH_TAIL_RE.search(value)
     return feat_style(value)
 
 
@@ -75,6 +71,7 @@ def safe_name(text: str | None, fallback: str = "Unknown") -> str:
     value = clean_text(text)
     value = _CONTROL_RE.sub("", value)
     value = value.replace('"', "'")
+    value = re.sub(r"(?<=\d):(?=\d)", "-", value)              # "12:30" -> "12-30"
     value = re.sub(r"\s*:\s+|\s*:\s*$", " - ", value)         # "Song: Live" -> "Song - Live"
     value = re.sub(r"\s*[\\/|]\s*", lambda m: " - " if " " in m.group(0) else "-", value)
     value = re.sub(r"[:*?<>]", "", value)
@@ -121,7 +118,8 @@ def album_folder(album_artist: str | None, album: str | None) -> str:
 
 def album_artist_for(album_artist: str | None, track_artists: list[list[str]]) -> str:
     """"Various Artists" for a compilation: an album of several tracks in
-    which no single artist is on more than 40% of them."""
+    which neither its own album artist nor any other artist is on more than
+    40% of them."""
     name = clean_text(album_artist)
     if normalize_name(name) in {"various artists", "various", "va", "разные исполнители"}:
         return VARIOUS_ARTISTS
@@ -130,7 +128,7 @@ def album_artist_for(album_artist: str | None, track_artists: list[list[str]]) -
     counts = Counter(
         normalize_name(artist) for artists in track_artists for artist in set(map(normalize_name, artists)) if artist
     )
-    distinct = len(counts)
-    if distinct >= 4 and counts.most_common(1)[0][1] * 5 <= len(track_artists) * 2:
+    own = counts.get(normalize_name(name), 0)
+    if len(counts) >= 4 and max(own, counts.most_common(1)[0][1]) * 5 <= len(track_artists) * 2:
         return VARIOUS_ARTISTS
     return name

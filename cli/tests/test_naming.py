@@ -33,6 +33,9 @@ def test_parse_titles(raw, uploader, artists, featured, title):
     ("Song #phonk #drift", "Song"),
     ("Track #1", "Track #1"),
     ("Song | Some Label", "Song"),
+    ("Song | Phonk Records", "Song"),
+    ("Song | Live in Paris", "Song | Live in Paris"),
+    ("Song | Part Two", "Song | Part Two"),
     ("Song | Sped Up", "Song | Sped Up"),
     ("Song [2019]", "Song"),
     ("Song (1999 Remaster)", "Song (1999 Remaster)"),
@@ -76,7 +79,7 @@ def test_clean_text(raw, expected):
     ("Song: Live", "Song - Live"),
     ('Why? "Not*"', "Why 'Not'"),
     ("A | B", "A - B"),
-    ("12:30", "1230"),
+    ("12:30", "12-30"),
     ("name...", "name"),
     ("CON", "_CON"),
     ("", "Unknown"),
@@ -98,6 +101,9 @@ def test_safe_name(raw, expected):
     ("Song ft. A & B", "Song (feat. A & B)"),
     ("Song (feat. Guest)", "Song (feat. Guest)"),
     ("Mr. Brightside", "Mr. Brightside"),
+    ("Love - With You", "Love - With You"),
+    ("Song - 2000 Miles", "Song - 2000 Miles"),
+    ("Song - Live - Remastered 2011", "Song - Live (Remastered 2011)"),
     ("Song - Intro", "Song - Intro"),
 ])
 def test_spotify_title(raw, expected):
@@ -136,6 +142,8 @@ def test_compilation_detection():
     assert naming.album_artist_for("Various Artists", [["A"]]) == naming.VARIOUS_ARTISTS
     assert naming.album_artist_for("Artist", [["Artist"], ["Artist", "Guest"], ["Artist"], ["Artist"]]) == "Artist"
     assert naming.album_artist_for("Artist", [["Artist"], ["X"]]) == "Artist"       # too few tracks
+    guests = [["Artist", "A"], ["Artist", "B"], ["Artist", "C"], ["Artist", "D"], ["Artist", "E"]]
+    assert naming.album_artist_for("Artist", guests) == "Artist"
 
 
 def test_same_rules_for_both_sources():

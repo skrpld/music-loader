@@ -45,8 +45,12 @@ _JUNK_WHOLE_RE = re.compile(
 _HASHTAG_RE = re.compile(r"(?<!\S)#[^\W\d_][\w-]*")
 # A trailing "OUT NOW" / "BUY = FREE DL" outside of brackets.
 _JUNK_TAIL_RE = re.compile(rf"\s+(?:out now|{_BUY_FREE_DL}|{_FREE_DL})\s*!*\s*$", re.IGNORECASE)
-# "Song | Some Label": a last part after a pipe of at most this many words.
-_LABEL_MAX_WORDS = 4
+# "Song | Some Label": a short last part after a pipe that names a label. A
+# subtitle ("| Live in Paris", "| Part Two") must stay.
+_LABEL_TAIL_RE = re.compile(
+    r"^(?:\S+\s+){0,3}(?:records|recordings|recs?|music|label|entertainment|productions?|media|network)$",
+    re.IGNORECASE,
+)
 
 _BRACKETS = {"(": ")", "[": "]", "{": "}"}
 
@@ -275,7 +279,7 @@ def clean_promo(text: str) -> str:
     text = _remove_spans(text, spans)
     parts = re.split(r"\s+\|\s+|\s+//\s+", text)
     parts = [part for index, part in enumerate(parts) if index == 0 or not _JUNK_RE.search(part)]
-    if len(parts) > 1 and len(parts[-1].split()) <= _LABEL_MAX_WORDS and not variant_markers(parts[-1]):
+    if len(parts) > 1 and _LABEL_TAIL_RE.match(parts[-1].strip()) and not variant_markers(parts[-1]):
         parts.pop()
     text = " | ".join(parts)
     text = _JUNK_TAIL_RE.sub("", text)

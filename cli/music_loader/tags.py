@@ -74,18 +74,19 @@ def split_artists(value: str, separator: str, is_known: Callable[[str], bool] | 
     """Splits `value` on `separator`, but never inside a name that
     `is_known` recognises ("AC/DC" stays one artist)."""
     parts = [part.strip() for part in value.split(separator)]
+    parts = [part for part in parts if part]
     if len(parts) < 2 or is_known is None:
-        return [part for part in parts if part]
+        return parts
     result: list[str] = []
     index = 0
     while index < len(parts):
         for end in range(len(parts), index, -1):
             joined = separator.join(parts[index:end])
-            if joined and (end - index == 1 or is_known(joined)):
+            if end - index == 1 or is_known(joined):
                 result.append(joined)
                 index = end
                 break
-    return [name for name in result if name]
+    return result
 
 
 def _artist_frames(id3, artists: list[str]) -> None:
