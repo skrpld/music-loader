@@ -11,6 +11,25 @@
 #   pip wheel --no-deps --no-build-isolation -C wheel.cmake=false rapidfuzz==3.14.6
 #   BUILD_EXTENSION=no pip wheel --no-deps --no-build-isolation websockets==14.2
 #
+# pykakasi in wheels/ (local version +android1, so pip cannot pick the PyPI
+# wheel) is the PyPI wheel with one line changed. pykakasi finds its
+# dictionaries with importlib.resources.files() and passes the result to
+# os.path.join; under Chaquopy files() returns an AssetPath, which is not a
+# path (also for packages listed in extractPackages), so every spotDL run
+# failed on import. The patched line uses __file__ instead:
+#   pip download --no-deps pykakasi==2.3.0 && wheel unpack pykakasi-2.3.0-py3-none-any.whl
+#   cd pykakasi-2.3.0
+#   sed -i 's|files(__package__) / "data"|Path(__file__).parent / "data"|' pykakasi/properties.py
+#   mv pykakasi-2.3.0.dist-info pykakasi-2.3.0+android1.dist-info
+#   sed -i 's/^Version: 2.3.0$/Version: 2.3.0+android1/' pykakasi-2.3.0+android1.dist-info/METADATA
+#   cd .. && wheel pack pykakasi-2.3.0
+#
+# No package needs extractPackages. Chaquopy extracts a package's data files
+# (everything but Python modules) when the package is first imported; reading
+# them through __file__, pkgutil.get_data or files() / "file" works. Only a
+# files() directory handed to os.path or open() fails - check new and updated
+# packages for that.
+#
 # spotDL is driven through its internals (cli/music_loader/inprocess.py); check that
 # file when updating it.
 rapidfuzz==3.14.6
@@ -31,7 +50,7 @@ idna==3.20
 charset-normalizer==3.5.2
 certifi==2026.7.22
 platformdirs==4.12.3
-pykakasi==2.3.0
+pykakasi==2.3.0+android1
 jaconv==0.5.0
 Deprecated==3.0.0
 wrapt==2.5.0

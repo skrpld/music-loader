@@ -103,9 +103,18 @@ cd android
 
 The app's Python packages are pinned in
 [`app/requirements-android.txt`](app/requirements-android.txt): pure-Python
-wheels only, installed without dependency resolution; two of them are
-prebuilt in [`app/wheels/`](app/wheels). Stand-ins for packages without an
-Android build are in [`app/src/main/python/`](app/src/main/python).
+wheels only, installed without dependency resolution; three of them are
+prebuilt in [`app/wheels/`](app/wheels): rapidfuzz and websockets without
+their C extensions, and pykakasi patched to find its dictionaries through
+`__file__` (Chaquopy's `importlib.resources.files()` returns no file system
+path for a folder). No package is listed in Chaquopy's `extractPackages`:
+data files are extracted anyway when their package is first imported. The
+comments in the requirements file have the build commands. Stand-ins for
+packages without an Android build are in
+[`app/src/main/python/`](app/src/main/python).
+
+If the bundled packages are broken, the phone mode does not start and shows
+the error ("spotDL does not load: ...") instead of failing every Spotify job.
 
 Release signing reads `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`,
 `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` from the environment; CI sets

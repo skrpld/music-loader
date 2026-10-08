@@ -159,6 +159,7 @@ def start(native_dir: str, files_dir: str, cache_dir: str, music_dir: str) -> st
         from .server import JobManager, make_server
 
         inprocess.install()
+        inprocess.check_spotdl()
         # The server's own messages end up in the app log (logcat).
         console = Console(file=sys.stderr, force_terminal=False, width=200)
         manager = JobManager(Path(music_dir), {}, console, in_process=True)
