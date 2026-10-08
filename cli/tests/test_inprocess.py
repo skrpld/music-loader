@@ -110,7 +110,10 @@ def test_in_process_job_is_cancelled(monkeypatch, tmp_path: Path):
     try:
         job = manager.submit([parse_link("https://soundcloud.com/artist/track")], {}, [])
         deadline = time.monotonic() + 10
-        while manager.job(job.id)["status"] != "running" and time.monotonic() < deadline:
+        # Cancel only once the job has logged: "running" is set a moment
+        # before process_links gets to its first line.
+        while (not any(e["text"] == "started" for e in manager.job(job.id)["log"])
+               and time.monotonic() < deadline):
             time.sleep(0.05)
         manager.cancel(job.id)
         while manager.job(job.id)["status"] == "running" and time.monotonic() < deadline:
