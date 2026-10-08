@@ -302,6 +302,12 @@ def _prepare_spotdl() -> None:
         stub = types.ModuleType("spotdl.console.web")
         stub.web = _no_web
         sys.modules["spotdl.console.web"] = stub
+    try:
+        from . import spotify_cache
+
+        spotify_cache.install()
+    except Exception as exc:  # only a slower start
+        print("music-loader: Spotify hash cache not active:", exc, file=sys.stderr)
 
 
 def check_spotdl() -> None:

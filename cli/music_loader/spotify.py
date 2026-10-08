@@ -110,11 +110,17 @@ OUTPUT_TEMPLATE = "{album-artist} - {album}/{track-number} - {title}.{output-ext
 
 _SECRET_ENV = "MUSIC_LOADER_SPOTIFY_CLIENT_SECRET"
 # Runs spotdl in this interpreter with the client secret taken from the
-# environment, so it never shows up in the process list.
+# environment, so it never shows up in the process list, and with the cache of
+# the web player's query hashes in place (spotify_cache.py).
 _BOOTSTRAP = (
     "import os, runpy, sys\n"
     f"secret = os.environ.pop({_SECRET_ENV!r}, '')\n"
     "sys.argv = ['spotdl'] + sys.argv[1:] + (['--client-secret', secret] if secret else [])\n"
+    "try:\n"
+    "    from music_loader import spotify_cache\n"
+    "    spotify_cache.install()\n"
+    "except Exception as exc:\n"
+    "    print('music-loader: Spotify hash cache not active:', exc, file=sys.stderr)\n"
     "runpy.run_module('spotdl', run_name='__main__', alter_sys=True)\n"
 )
 
@@ -146,9 +152,11 @@ def spotdl_version(spotdl: list[str]) -> tuple[int, int, int] | None:
     return tuple(int(part) for part in match.groups()) if match else None
 
 
-def _command(spotdl: list[str], has_secret: bool) -> list[str]:
-    if has_secret and spotdl[:2] == [sys.executable, "-m"]:
+def _command(spotdl: list[str]) -> list[str]:
+    if spotdl[:2] == [sys.executable, "-m"]:
         return [sys.executable, "-c", _BOOTSTRAP]
+    # An in-process run is set up by inprocess.py; a spotdl of another Python
+    # environment cannot import this package.
     return list(spotdl)
 
 
@@ -350,7 +358,7 @@ def download_spotify(
         dashboard.log_error("Spotify", f"Cannot reach {blocked[0]} ({blocked[1][:150]}). {_not_reachable_hint()}")
         dashboard.finish_file()
         return False
-    base = _command(spotdl, bool(env))
+    base = _command(spotdl)
     template = f"{music_dir}/{OUTPUT_TEMPLATE}"
     common = [
         "--output", template, "--format", "mp3",
