@@ -66,6 +66,10 @@ Limits:
 - Spotify must be reachable from the app itself. With a VPN, the VPN app has
   to include Music Loader (split tunneling often leaves new apps out); a
   link then fails after a few seconds with "Cannot reach open.spotify.com".
+- Tracks SoundCloud only serves DRM-protected (or as a 30-second preview) are
+  skipped and shown as "Unavailable"; the option "Look for blocked tracks
+  elsewhere" takes the same track from YouTube Music when artist, title,
+  version and length match (off by default).
 - Jobs live in the app's memory: the list starts empty after Android ends the
   app. The library and its indexes are on disk, so running a link again only
   fetches what is missing.
