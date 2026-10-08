@@ -1,40 +1,11 @@
-"""File-system helpers: safe path components and moving files together with
-their sidecar files (the `.lrc` lyrics)."""
+"""File-system helpers: moving files together with their sidecar files (the
+`.lrc` lyrics). File and folder names come from naming.py."""
 from __future__ import annotations
 
 import os
-import re
 from pathlib import Path
 
-try:
-    from yt_dlp.utils import sanitize_filename
-except ImportError:  # pragma: no cover - dependency is declared in pyproject
-    sanitize_filename = None
-
-_UNSAFE_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f\x7f]')
-_WINDOWS_RESERVED = {
-    "con", "prn", "aux", "nul",
-    *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10)),
-}
 SIDECAR_SUFFIXES = (".lrc",)
-
-
-def safe_component(text: str, fallback: str = "Unknown", max_bytes: int = 180) -> str:
-    """One file or folder name that is valid on Linux, Windows and the
-    FAT/exFAT cards phones use, and short enough for every file system."""
-    value = (text or "").replace("\x00", "").strip()
-    if sanitize_filename is not None:
-        value = sanitize_filename(value, restricted=False)
-    value = _UNSAFE_RE.sub("_", value)
-    value = re.sub(r"\s+", " ", value).strip().strip(".").strip()
-    if not value:
-        value = fallback
-    if value.split(".")[0].casefold() in _WINDOWS_RESERVED:
-        value = f"_{value}"
-    encoded = value.encode("utf-8")
-    if len(encoded) > max_bytes:
-        value = encoded[:max_bytes].decode("utf-8", "ignore").rstrip(" .")
-    return value or fallback
 
 
 def sidecars(path: Path) -> list[Path]:

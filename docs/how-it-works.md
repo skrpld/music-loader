@@ -30,6 +30,33 @@ The album artist decides the folder - the artist the album belongs to, not
 the first artist of a track - so an album whose tracks start with different
 artists stays together. Lyrics (`.lrc`) sit next to the audio file.
 
+### Names
+
+[`naming.py`](../cli/music_loader/naming.py) builds every folder and file
+name, for Spotify and SoundCloud alike (spotDL writes to its own path first
+and the file is renamed right after the download):
+
+- Track numbers are zero-padded (`01`, `007` for 100+ tracks). An album with
+  more than one disc uses `<disc>-<NN>` (`2-01 - Title.mp3`); a single-disc
+  album has no disc part.
+- Names are NFC; compatibility forms (full-width letters, ligatures) are
+  folded, zero-width characters, emoji and decorations (`✦ ★ ☆ 🔥`) are
+  removed, quotes and dashes become plain ones. Cyrillic, CJK and accents stay.
+- Characters not allowed on FAT/Windows are replaced the same way for both
+  sources: `/ \ |` become `-`, `:` becomes ` - `, `? * < >` are dropped, `"`
+  becomes `'` (no look-alike characters).
+- Spotify version suffixes move into brackets (`Song - Remastered 2011` ->
+  `Song (Remastered 2011)`), and `ft.` / `featuring` become `feat.`.
+- Long names are cut at a word boundary (180 bytes per component, extension
+  included), never inside a bracket. A name that is already taken by another
+  track gets `[<track id>]` appended.
+- An album whose tracks have no common artist (4+ tracks, nobody on more than
+  40% of them), a SoundCloud *compilation* set or a Spotify "Various Artists"
+  album is filed under `Various Artists`.
+- SoundCloud titles lose hashtags (`#phonk`), emoji, `OUT NOW`,
+  `BUY = FREE DL`, a trailing `| Label`, `(Explicit)` and whole-bracket years
+  (`[2019]`). Version markers (`Sped Up`, `VIP`, `Live`, ...) always stay.
+
 Artist photos are never downloaded: only album/track artwork is embedded.
 
 ## Metadata
@@ -150,8 +177,9 @@ library - useful after updating music-loader:
 
 - SoundCloud: metadata is fetched again; tags, folder and file name are
   rewritten (files from older versions move into album folders, with their
-  `.lrc`); a file whose length does not match is downloaded again.
-- Spotify: tags are refreshed from Spotify (`--overwrite metadata`), the
+  `.lrc`; entries in the `.m3u8` playlists follow the moved files); a file whose length does not match is downloaded again.
+- Spotify: tags are refreshed from Spotify (`--overwrite metadata`), files
+  are renamed to the current naming scheme (with their `.lrc`), the
   artist frames are rewritten as `A, B` + `ARTISTS` (ID3v2.4) and
   duplicate copies of a track under other paths are removed.
 - Lyrics are searched again with the current mode (existing ones are
@@ -352,7 +380,8 @@ cli/music_loader/
 ├── artists.py            # canonical artist spelling across the library
 ├── lyrics.py             # verified lyrics (LRCLIB, Musixmatch, Genius)
 ├── tags.py               # ID3 helpers (mutagen)
-├── paths.py              # safe file names, moving files with their .lrc
+├── naming.py             # one naming scheme for folders and files (both sources)
+├── paths.py              # moving files with their .lrc
 ├── net.py                # small HTTP helper
 ├── playlist.py           # .m3u8 playlists for SoundCloud
 ├── runlog.py             # persistent per-run failure log and unavailable-tracks list

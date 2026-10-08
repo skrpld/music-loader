@@ -78,7 +78,7 @@ from .links import Link, parse_link, redact_url
 from .lyrics import LyricsRequest, LyricsService, get_attempts
 from .net import http_get
 from .paths import move_with_sidecars, prune_empty_dirs, remove_with_sidecars
-from .playlist import update_soundcloud_playlist, write_named_playlist
+from .playlist import apply_moves, update_soundcloud_playlist, write_named_playlist
 from .process import run_captured, run_streamed, tool_command, wait_future, ytdlp_extra_args
 from .soundcloud_index import SoundCloudArchive, get_index
 from .soundcloud_meta import (
@@ -162,6 +162,8 @@ class _Context:
     registry: Any = None
     attempts: Any = None
     results: dict[str, Path] = field(default_factory=dict)
+    # Files renamed by --recheck, so playlists can follow them.
+    moves: list[tuple[Path, Path]] = field(default_factory=list)
     # Tracks recognized as not downloadable before any download (see _precheck).
     unavailable: dict[str, UnavailableTrack] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -810,6 +812,8 @@ def _retag(job: TrackJob, existing: Path, info: dict[str, Any], ctx: _Context) -
         write_tags(existing, meta.tags, cover)
         if output != existing:
             move_with_sidecars(existing, output)
+            with ctx.lock:
+                ctx.moves.append((existing, output))
             prune_empty_dirs(existing.parent, ctx.soundcloud_dir)
     except OSError as exc:
         ctx.dashboard.log_error("SoundCloud", f"Recheck failed for '{meta.title}': {exc}")
@@ -980,7 +984,10 @@ def download_soundcloud(
         return not ctx.had_failure
 
     _precheck(jobs, ctx)
-    _run_pipeline(jobs, ctx)
+    try:
+        _run_pipeline(jobs, ctx)
+    finally:
+        apply_moves(soundcloud_dir, ctx.moves, dashboard)
 
     try:
         staging_dir.rmdir()

@@ -99,3 +99,42 @@ def write_named_playlist(
 
     dashboard.log(f"[Playlist] Saved: {playlist_path.name} ({len(entries)} tracks)")
     return playlist_path
+
+
+def apply_moves(soundcloud_dir: Path, moves: list[tuple[Path, Path]], dashboard=None) -> int:
+    """Rewrites playlist entries after files were renamed (`--recheck`).
+    Returns the number of changed entries."""
+    mapping: dict[str, str] = {}
+    for old, new in moves:
+        try:
+            mapping[old.relative_to(soundcloud_dir).as_posix()] = new.relative_to(soundcloud_dir).as_posix()
+        except ValueError:
+            continue
+    if not mapping:
+        return 0
+    changed = 0
+    for playlist in sorted(soundcloud_dir.glob("*.m3u*")):
+        try:
+            lines = playlist.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        updated = []
+        for line in lines:
+            entry = line.strip().replace("\\", "/")
+            if entry in mapping:
+                line = mapping[entry]
+                changed += 1
+            updated.append(line)
+        if updated == lines:
+            continue
+        tmp = playlist.with_name(playlist.name + ".tmp")
+        try:
+            tmp.write_text("\n".join(updated) + "\n", encoding="utf-8")
+            tmp.replace(playlist)
+        except OSError as exc:
+            if dashboard is not None:
+                dashboard.log_error("Playlist", f"Could not update '{playlist.name}': {exc}")
+            tmp.unlink(missing_ok=True)
+    if changed and dashboard is not None:
+        dashboard.log(f"[Playlist] {changed} entr{'y' if changed == 1 else 'ies'} follow the renamed files")
+    return changed

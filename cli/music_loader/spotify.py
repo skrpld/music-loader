@@ -63,6 +63,7 @@ from .config import (
 from .links import Link
 from .lyrics import LyricsRequest, LyricsService, get_attempts
 from .net import probe
+from .naming import album_artist_for, album_folder, spotify_title, track_filename
 from .paths import move_with_sidecars, prune_empty_dirs, remove_with_sidecars
 from .process import (
     run_captured,
@@ -73,7 +74,7 @@ from .process import (
     ytdlp_extra_args,
 )
 from .spotify_index import get_library
-from .tags import artists_current, audio_duration, read_woas, set_artists
+from .tags import artists_current, audio_duration, read_woas, set_album_artist, set_artists
 
 _FOUND_RE = re.compile(r"Found (\d+) songs? in", re.IGNORECASE)
 _STATUS_RE = re.compile(r"^(?P<name>.+): (?P<status>Searching for song|Downloading|Converting|"
@@ -129,7 +130,11 @@ _BOOTSTRAP = (
 @dataclass
 class _Song:
     data: dict[str, Any]
+    # Where the song belongs in the library (naming.py), and where spotDL
+    # writes it (its own template; the file is renamed after the download).
     path: Path | None
+    work: Path | None = None
+    album_artist: str = ""
 
     @property
     def url(self) -> str:
@@ -329,9 +334,10 @@ def _count_new_files(music_dir: Path, since: float) -> int:
 
 def _cleanup_unfinished(songs: list[_Song], dashboard) -> None:
     for song in songs:
-        if song.path is not None and song.path.exists() and _is_complete(song.path, song.url) is False:
-            remove_with_sidecars(song.path)
-            dashboard.log(f"[Spotify] Removed unfinished file: {song.path.name}")
+        for path in {song.path, song.work}:
+            if path is not None and path.exists() and _is_complete(path, song.url) is False:
+                remove_with_sidecars(path)
+                dashboard.log(f"[Spotify] Removed unfinished file: {path.name}")
 
 
 def download_spotify(
@@ -425,20 +431,25 @@ def download_spotify(
             if song.data.get("album_artist"):
                 registry.register(str(song.data["album_artist"]), PRIORITY_SPOTIFY)
         registry.flush()
+        _assign_targets(songs, music_dir, registry)
 
         # -- 2. check what is already there --------------------------------------------
         existed = _prepare(songs, config, dashboard)
 
         # -- 3. download -----------------------------------------------------------------
         run = _Run(dashboard, music_dir, total=len(songs))
-        dashboard.start_file(label="Spotify: downloading...")
-        overwrite = "metadata" if config.recheck else "skip"
-        code = run_streamed(
-            base + ["download", str(save_file), "--bitrate", "320k", "--overwrite", overwrite,
-                    "--print-errors"] + common,
-            run.on_line, on_idle=run.on_idle, timeout=SUBPROCESS_TIMEOUT_SECONDS, env=env,
-        )
-        dashboard.finish_file()
+        todo = _stage_for_spotdl(songs, existed, config, save_file, dashboard)
+        code = 0
+        if todo:
+            dashboard.start_file(label="Spotify: downloading...")
+            overwrite = "metadata" if config.recheck else "skip"
+            code = run_streamed(
+                base + ["download", str(save_file), "--bitrate", "320k", "--overwrite", overwrite,
+                        "--print-errors"] + common,
+                run.on_line, on_idle=run.on_idle, timeout=SUBPROCESS_TIMEOUT_SECONDS, env=env,
+            )
+            dashboard.finish_file()
+        _place_downloads(songs, config, dashboard)
 
         # -- 4. verify on disk ------------------------------------------------------------
         ok = _verify(songs, existed, run, dashboard)
@@ -467,6 +478,92 @@ def download_spotify(
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
+def _assign_targets(songs: list[_Song], music_dir: Path, registry) -> None:
+    """Computes the library path of every song (naming.py). spotDL's own path
+    becomes `work`; without the path mapping nothing is renamed."""
+    albums: dict[str, list[list[str]]] = {}
+    for song in songs:
+        albums.setdefault(str(song.data.get("album_id") or ""), []).append(
+            [str(name) for name in song.data.get("artists") or [] if name]
+        )
+    for song in songs:
+        if song.path is None:
+            continue
+        data = song.data
+        artist = registry.canonical(str(data.get("album_artist") or "")) or "Unknown Artist"
+        group = albums.get(str(data.get("album_id") or ""), [])
+        song.album_artist = album_artist_for(artist, group if data.get("album_id") else [])
+        song.work = song.path
+        song.path = music_dir / album_folder(song.album_artist, str(data.get("album_name") or "")) / track_filename(
+            spotify_title(str(data.get("name") or "")),
+            _int(data.get("track_number"), 1), _int(data.get("tracks_count"), 1),
+            _int(data.get("disc_number"), 1), _int(data.get("disc_count"), 1),
+            song.work.suffix or ".mp3",
+        )
+
+
+def _int(value: Any, default: int) -> int:
+    try:
+        return int(value) if value else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _stage_for_spotdl(songs: list[_Song], existed: set[str], config: AppConfig,
+                      save_file: Path, dashboard) -> list[_Song]:
+    """spotDL looks for a song at its own path. Complete songs are left out
+    of its run; with --recheck they are put at its path for the metadata
+    refresh and renamed back afterwards (a crash in between is repaired by
+    the lookup by URL on the next run)."""
+    todo: list[_Song] = []
+    for song in songs:
+        if song.url not in existed or song.path is None or song.work is None:
+            todo.append(song)
+            continue
+        if not config.recheck:
+            continue
+        if song.work != song.path:
+            try:
+                move_with_sidecars(song.path, song.work)
+            except OSError as exc:
+                dashboard.log_error("Spotify", f"Could not stage '{song.path.name}' for the refresh: {exc}")
+                continue
+        todo.append(song)
+    if len(todo) != len(songs):
+        try:
+            save_file.write_text(json.dumps([song.data for song in todo]), encoding="utf-8")
+        except OSError as exc:
+            dashboard.log_error("Spotify", f"Could not narrow spotdl's song list: {exc}")
+            return songs
+    return todo
+
+
+def _place_downloads(songs: list[_Song], config: AppConfig, dashboard) -> None:
+    """Renames what spotDL wrote to the library path."""
+    for song in songs:
+        work, target = song.work, song.path
+        if work is None or target is None or work == target or not work.exists():
+            continue
+        state = _is_complete(work, song.url)
+        if state is False:
+            remove_with_sidecars(work)
+            continue
+        if state is None:
+            continue
+        if target.exists() and _is_complete(target, song.url) is None:
+            # Another song already has this name.
+            tail = song.url.rstrip("/").rsplit("/", 1)[-1]
+            target = target.with_name(f"{target.stem} [{tail}]{target.suffix}")
+            song.path = target
+        try:
+            move_with_sidecars(work, target)
+        except OSError as exc:
+            dashboard.log_error("Spotify", f"Could not rename '{work.name}' to '{target.name}': {exc}")
+            song.path = work
+            continue
+        prune_empty_dirs(work.parent, config.music_dir)
+
+
 def _prepare(songs: list[_Song], config: AppConfig, dashboard) -> set[str]:
     """Returns the URLs of songs that are complete before the download."""
     existed: set[str] = set()
@@ -475,6 +572,10 @@ def _prepare(songs: list[_Song], config: AppConfig, dashboard) -> set[str]:
         path = song.path
         if path is None or not song.url:
             continue
+        work = song.work
+        if work is not None and work != path and work.exists() and _is_complete(work, song.url) is False:
+            # Left by an interrupted run; spotDL would skip it as "existing".
+            remove_with_sidecars(work)
         if path.exists():
             state = _is_complete(path, song.url)
             if state is True:
@@ -523,6 +624,8 @@ def _tag_artists(songs: list[_Song], existed: set[str], config: AppConfig,
         if song.url in existed and not config.recheck:
             continue
         names = [registry.canonical(str(name)) for name in song.data.get("artists") or [] if name]
+        if song.album_artist and song.album_artist != str(song.data.get("album_artist") or ""):
+            set_album_artist(path, song.album_artist)
         if not names or artists_current(path, names):
             continue
         if set_artists(path, names):

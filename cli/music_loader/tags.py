@@ -44,6 +44,8 @@ class TrackTags:
     album_artist: str
     track_number: int = 1
     track_total: int = 1
+    disc_number: int = 1
+    disc_total: int = 1
     date: str = ""            # "YYYY" or "YYYY-MM-DD"
     genre: str = ""
     url: str = ""             # public page of the track
@@ -110,6 +112,20 @@ def set_artists(path: Path, artists) -> bool:
     return True
 
 
+def set_album_artist(path: Path, name: str) -> bool:
+    """Rewrites only the album artist frame (TPE2)."""
+    if not MUTAGEN_AVAILABLE or not name:
+        return False
+    try:
+        id3 = ID3(str(path))
+        id3.delall("TPE2")
+        id3.add(TPE2(encoding=3, text=[name]))
+        id3.save(str(path), v2_version=ID3_VERSION)
+    except Exception:
+        return False
+    return True
+
+
 def artists_current(path: Path, artists) -> bool:
     """True when the file already has exactly this artist list in the
     ID3v2.4 layout (so a rewrite is not needed)."""
@@ -163,7 +179,7 @@ def write_tags(path: Path, tags: TrackTags, cover: bytes | None = None) -> None:
     id3.add(TALB(encoding=3, text=tags.album))
     total = max(tags.track_total, tags.track_number, 1)
     id3.add(TRCK(encoding=3, text=f"{max(tags.track_number, 1)}/{total}"))
-    id3.add(TPOS(encoding=3, text="1/1"))
+    id3.add(TPOS(encoding=3, text=f"{max(tags.disc_number, 1)}/{max(tags.disc_total, tags.disc_number, 1)}"))
     if tags.date:
         id3.add(TDRC(encoding=3, text=tags.date))
     if tags.genre:
