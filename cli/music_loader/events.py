@@ -9,6 +9,7 @@ the job state the Android app shows.
 Events:
 
     {"type": "runlog", "path": "..."}
+    {"type": "unavailable_log", "path": "..."}      (when the first unavailable track is listed)
     {"type": "queue", "completed": 1, "total": 3}
     {"type": "stats", "stats": {...Stats fields...}}
     {"type": "log", "level": "info" | "error", "source": "Spotify" | null, "text": "..."}
@@ -25,6 +26,7 @@ import threading
 from dataclasses import asdict
 from typing import Any, Optional, TextIO
 
+from .availability import UnavailableTrack
 from .runlog import RunLog, redact_secrets
 from .ui import Stats
 
@@ -36,6 +38,7 @@ class EventDashboard:
         self.stats = Stats()
         self._files: dict[int, dict[str, Any]] = {}
         self._lock = threading.RLock()
+        self._unavailable_announced = False
 
     # -- output ---------------------------------------------------------------
     def emit(self, event: dict[str, Any]) -> None:
@@ -70,6 +73,17 @@ class EventDashboard:
     def record_track(self, kind: str, status: str, amount: int = 1) -> None:
         if amount:
             self._bump(f"{kind}_tracks_{status}", amount)
+
+    def record_unavailable(self, kind: str, track: UnavailableTrack, note: str = "") -> None:
+        self.record_track(kind, "unavailable")
+        self.log(f"[{track.source}] {track.message(note)}")
+        if self.runlog is not None:
+            self.runlog.record_unavailable(track)
+            with self._lock:
+                announce = not self._unavailable_announced
+                self._unavailable_announced = True
+            if announce:
+                self.emit({"type": "unavailable_log", "path": str(self.runlog.unavailable_path)})
 
     def record_lyrics(self, found: bool) -> None:
         self._bump("lyrics_ok" if found else "lyrics_fail", 1)

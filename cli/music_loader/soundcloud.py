@@ -25,6 +25,13 @@ Every new file is checked before it enters the library: a length that does
 not match SoundCloud's (a 30-second Go+ preview, a cut-off download) fails the
 track instead of being filed as complete. `--recheck` applies the current
 rules to tracks that are already there: tags, folder, broken files, lyrics.
+
+Tracks SoundCloud does not give out (DRM-protected, preview only, blocked) are
+not failures: they are recognized from SoundCloud's track JSON before any
+download (50 tracks per request) or, failing that, from yt-dlp's error, counted
+as "unavailable", listed in the run's unavailable-tracks file and skipped; the
+job still completes. See availability.py. With `--soundcloud-fallback` such a
+track is looked up on YouTube Music first (fallback.py).
 """
 from __future__ import annotations
 
@@ -42,6 +49,14 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .artists import get_registry
+from .availability import (
+    RATE_LIMIT_RE as _RATE_LIMIT_RE,
+    FailureCategory,
+    Reason,
+    UnavailableTrack,
+    classify_error,
+    classify_track,
+)
 from .config import (
     ARCHIVE_FILENAME,
     ARTISTS_FILENAME,
@@ -56,15 +71,24 @@ from .config import (
     SUBPROCESS_TIMEOUT_SECONDS,
     AppConfig,
 )
+from .fallback import SOURCE_LABEL as _FALLBACK_LABEL
+from .fallback import Wanted, find_match
 from .links import Link, parse_link, redact_url
 from .lyrics import LyricsRequest, LyricsService, get_attempts
 from .net import http_get
 from .paths import move_with_sidecars, prune_empty_dirs, remove_with_sidecars
 from .playlist import update_soundcloud_playlist, write_named_playlist
-from .process import run_captured, run_streamed, tool_command, wait_future
+from .process import run_captured, run_streamed, tool_command, wait_future, ytdlp_extra_args
 from .soundcloud_index import SoundCloudArchive, get_index
-from .soundcloud_meta import AlbumContext, SoundCloudApi, TrackMeta, build_meta, context_from_set
-from .tags import audio_duration, read_tags, write_tags
+from .soundcloud_meta import (
+    BATCH_SIZE,
+    AlbumContext,
+    SoundCloudApi,
+    TrackMeta,
+    build_meta,
+    context_from_set,
+)
+from .tags import SOURCE_DESC, SOURCE_URL_DESC, audio_duration, read_tags, read_txxx, write_tags
 from .text_utils import parse_soundcloud_title
 
 # yt-dlp's default (--newline) progress line, e.g.:
@@ -74,8 +98,6 @@ _PROGRESS_RE = re.compile(
     r"([\d.]+\w+/s|Unknown speed)\s+ETA\s+(\S+)"
 )
 _ERROR_RE = re.compile(r"^ERROR:", re.IGNORECASE)
-_RATE_LIMIT_RE = re.compile(r"\b429\b|too many requests|rate limit", re.IGNORECASE)
-_NO_FORMAT_RE = re.compile(r"requested format is not available", re.IGNORECASE)
 # SoundCloud track/playlist ids are numeric; anything else is never used to
 # build a path (a crafted id like "../.." would otherwise escape the folder).
 _ID_RE = re.compile(r"^[0-9A-Za-z_-]{1,64}$")
@@ -91,6 +113,9 @@ _RETRY_ARGS = [
     "--retry-sleep", "extractor:exp=2:60",
 ]
 _MAX_RATE_LIMIT_RETRIES = 2
+# Key in a track's info dict: the page the audio was taken from when it did
+# not come from SoundCloud (the opt-in fallback). Never leaves this module.
+_SOURCE_KEY = "_music_loader_source_url"
 
 
 class DownloadAborted(Exception):
@@ -136,6 +161,8 @@ class _Context:
     registry: Any = None
     attempts: Any = None
     results: dict[str, Path] = field(default_factory=dict)
+    # Tracks recognized as not downloadable before any download (see _precheck).
+    unavailable: dict[str, UnavailableTrack] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
     had_failure: bool = False
 
@@ -371,6 +398,8 @@ class _Download:
     raw_path: Path | None = None
     info: dict[str, Any] = field(default_factory=dict)
     rate_limited: bool = False
+    # Set when the track cannot be downloaded at all (DRM, preview, ...).
+    unavailable: Reason | None = None
 
 
 def _merge_info(base: dict[str, Any], full: dict[str, Any] | None) -> dict[str, Any]:
@@ -404,7 +433,12 @@ def _fetch_full_info(url: str, ctx: _Context) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
-def _download_one(job: TrackJob, ctx: _Context, slot: int) -> _Download:
+def _download_one(job: TrackJob, ctx: _Context, slot: int, source_url: str | None = None) -> _Download:
+    """Downloads the track's source audio into the staging folder.
+
+    `source_url` is the fallback: the same track from another site. Its
+    answer never replaces SoundCloud's metadata, and its failures are not
+    reported here (the caller reports the track as unavailable)."""
     track_id = job.track_id
     title = str(job.info.get("title") or track_id)
     # A partial file from an interrupted run must never be taken as finished:
@@ -413,16 +447,18 @@ def _download_one(job: TrackJob, ctx: _Context, slot: int) -> _Download:
         if stale.is_file():
             stale.unlink(missing_ok=True)
 
-    cmd = ctx.yt + [
+    cmd = ctx.yt + (ytdlp_extra_args() if source_url else []) + [
         "--no-playlist", "--newline", "--progress", "--no-simulate", "--dump-json",
         "-f", _FORMAT, "--no-part", "--no-mtime", *_RETRY_ARGS,
         # The folder goes through -P: inside -o a "%" in the library path
         # would be read as a template field.
         "-P", f"home:{ctx.staging_dir}", "-P", f"temp:{ctx.staging_dir}",
         "-o", f"{track_id}.%(ext)s",
-        "--", job.url,
+        "--", source_url or job.url,
     ]
-    ctx.dashboard.start_file(label=f"SoundCloud: {title[:60]}", slot=slot)
+    # The label says where the audio comes from (the fallback is another site).
+    prefix = _FALLBACK_LABEL if source_url else "SoundCloud"
+    ctx.dashboard.start_file(label=f"{prefix}: {title[:60]}", slot=slot)
     error_lines: list[str] = []
     full_info: dict[str, Any] | None = None
 
@@ -436,7 +472,7 @@ def _download_one(job: TrackJob, ctx: _Context, slot: int) -> _Download:
             if isinstance(parsed, dict) and parsed.get("id"):
                 full_info = parsed
                 label = str(parsed.get("title") or title)
-                ctx.dashboard.update_file(label=f"SoundCloud: {label[:60]}", slot=slot)
+                ctx.dashboard.update_file(label=f"{prefix}: {label[:60]}", slot=slot)
                 return
         match = _PROGRESS_RE.search(line)
         if match:
@@ -454,7 +490,7 @@ def _download_one(job: TrackJob, ctx: _Context, slot: int) -> _Download:
         if path.is_file() and path.suffix.lower() not in {".part", ".tmp", ".ytdl"}
     )
     audio = [path for path in candidates if path.suffix.lower() in RAW_EXTENSIONS]
-    merged = _merge_info(job.info, full_info)
+    merged = dict(job.info) if source_url else _merge_info(job.info, full_info)
 
     if code == -2:
         for path in candidates:
@@ -464,27 +500,27 @@ def _download_one(job: TrackJob, ctx: _Context, slot: int) -> _Download:
     if code != 0 or not audio:
         for path in candidates:
             path.unlink(missing_ok=True)
-        rate_limited = any(_RATE_LIMIT_RE.search(line) for line in error_lines)
-        if rate_limited:
+        verdict = classify_error(error_lines)
+        if verdict.category is FailureCategory.RATE_LIMITED:
             return _Download(False, None, merged, rate_limited=True)
+        if verdict.category is FailureCategory.UNAVAILABLE:
+            # DRM, a Go+ preview, a blocked track: nothing to report as an
+            # error; the caller counts and lists the track as unavailable.
+            return _Download(False, None, merged, unavailable=verdict.reason)
+        if source_url:
+            return _Download(False, None, merged)
         name = merged.get("title") or title
-        if any(_NO_FORMAT_RE.search(line) for line in error_lines):
+        for line in error_lines[-3:]:
+            ctx.dashboard.log_error("SoundCloud", redact_url(line))
+        if code == 0:
             ctx.dashboard.log_error(
                 "SoundCloud",
-                f"'{name}': only a 30-second preview is available (SoundCloud Go+), skipped",
+                f"No usable audio file was produced for '{name}' "
+                f"(got: {', '.join(p.name for p in candidates) or 'nothing'})",
             )
-        else:
-            for line in error_lines[-3:]:
-                ctx.dashboard.log_error("SoundCloud", redact_url(line))
-            if code == 0:
-                ctx.dashboard.log_error(
-                    "SoundCloud",
-                    f"No usable audio file was produced for '{name}' "
-                    f"(got: {', '.join(p.name for p in candidates) or 'nothing'})",
-                )
         return _Download(False, None, merged)
 
-    if full_info is None:
+    if full_info is None and not source_url:
         # Rare: the metadata line was not printed. One extra request keeps
         # the tags correct instead of writing "Unknown Artist".
         merged = _merge_info(job.info, _fetch_full_info(job.url, ctx))
@@ -492,6 +528,83 @@ def _download_one(job: TrackJob, ctx: _Context, slot: int) -> _Download:
         if path not in audio:
             path.unlink(missing_ok=True)
     return _Download(True, audio[0], merged)
+
+
+def _precheck(jobs: list[TrackJob], ctx: _Context) -> None:
+    """Finds tracks SoundCloud does not give out before anything is downloaded.
+
+    SoundCloud's track JSON lists every stream of a track and whether it is
+    encrypted or a preview; asking for 50 tracks at once costs one request
+    instead of a failed download per track, which matters against the budget
+    of about 600 requests per 10 minutes on a 200-track album. Tracks already
+    in the library are left out. Whatever cannot be checked here is caught
+    from yt-dlp's error after the download attempt."""
+    if ctx.api.disabled:
+        return
+    ids = [job.track_id for job in jobs if ctx.index.find(job.info) is None]
+    if not ids:
+        return
+    ctx.dashboard.start_file(label="SoundCloud: checking which tracks can be downloaded...")
+    try:
+        for start in range(0, len(ids), BATCH_SIZE):
+            ctx.gate.wait(ctx.abort)
+            try:
+                found = ctx.api.tracks(ids[start:start + BATCH_SIZE])
+            except Exception as exc:
+                if _RATE_LIMIT_RE.search(str(exc)):
+                    ctx.gate.trip()
+                ctx.dashboard.log("[SoundCloud] Could not check availability up front; "
+                                  "tracks are checked while downloading")
+                return
+            for track_id, data in found.items():
+                reason = classify_track(data)
+                if reason is not None:
+                    ctx.unavailable[track_id] = UnavailableTrack.from_api(data, reason)
+    finally:
+        ctx.dashboard.finish_file()
+    if ctx.unavailable:
+        ctx.dashboard.log(
+            f"[SoundCloud] {len(ctx.unavailable)} track(s) cannot be downloaded from SoundCloud "
+            "(DRM, preview only or blocked) and will be skipped"
+        )
+
+
+def _fallback_download(
+    job: TrackJob, track: UnavailableTrack, ctx: _Context, slot: int,
+) -> tuple[_Download | None, str]:
+    """The same song from YouTube Music, if one can be verified.
+
+    Returns the download (None when nothing was taken) and a note for the
+    unavailable-track message."""
+    duration = track.duration or _seconds(job.info.get("duration"))
+    if not duration:
+        return None, "no length to compare, not looked up elsewhere"
+    info = dict(job.info)
+    info["duration"] = duration
+    meta = build_meta(info, job.album, ctx.registry)
+    wanted = Wanted(meta.title, tuple(meta.main_artists), duration)
+    ctx.dashboard.start_file(label=f"{_FALLBACK_LABEL}: looking for '{meta.title[:50]}'", slot=slot)
+    match, checked = find_match(wanted, ctx.yt, ctx.abort.is_set)
+    if ctx.abort.is_set():
+        raise DownloadAborted()
+    if match is None:
+        if checked:
+            return None, f"no matching track on {_FALLBACK_LABEL}"
+        return None, f"nothing found on {_FALLBACK_LABEL}, or it did not answer"
+    job = TrackJob(info=info, album=job.album, lookup_album=job.lookup_album)
+    download = _download_one(job, ctx, slot, source_url=match.url)
+    if not download.ok:
+        return None, f"download from {_FALLBACK_LABEL} failed"
+    download.info[_SOURCE_KEY] = match.url
+    return download, ""
+
+
+def _seconds(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
 
 
 # -- conversion / tagging -------------------------------------------------------------------------
@@ -605,6 +718,9 @@ def _postprocess(job: TrackJob, raw_path: Path, info: dict[str, Any], ctx: _Cont
         return _Processed(True, existing, True)
 
     meta = build_meta(info, _album_for(job, info, ctx), ctx.registry)
+    if info.get(_SOURCE_KEY):
+        meta.tags.extra[SOURCE_DESC] = _FALLBACK_LABEL
+        meta.tags.extra[SOURCE_URL_DESC] = str(info[_SOURCE_KEY])
     output = _allocate_output(_target_path(meta, ctx), track_id)
     work_dir = ctx.staging_dir / f"{track_id}.work"
     tmp_output = ctx.staging_dir / f"{track_id}.converted.mp3"
@@ -663,6 +779,12 @@ def _retag(job: TrackJob, existing: Path, info: dict[str, Any], ctx: _Context) -
     """--recheck of a track that is already in the library: current tags,
     current folder/name, lyrics redone by the caller."""
     meta = build_meta(info, _album_for(job, info, ctx), ctx.registry)
+    # write_tags replaces every frame it owns: keep the note of a file that
+    # was taken from another source.
+    for desc in (SOURCE_DESC, SOURCE_URL_DESC):
+        value = read_txxx(existing, desc)
+        if value:
+            meta.tags.extra[desc] = value
     target = _target_path(meta, ctx)
     work_dir = ctx.staging_dir / f"{job.track_id}.work"
     output = _allocate_output(target, job.track_id, current=existing)
@@ -799,6 +921,7 @@ def download_soundcloud(
         update_soundcloud_playlist(soundcloud_dir, dashboard)
         return not ctx.had_failure
 
+    _precheck(jobs, ctx)
     _run_pipeline(jobs, ctx)
 
     try:
@@ -902,7 +1025,29 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
             dashboard.finish_file(slot)
             slots.release(slot)
 
+    def unavailable(job: TrackJob, track: UnavailableTrack, slot: int) -> None:
+        """A track SoundCloud does not give out: replaced by a verified copy
+        from another source when the fallback is on, else counted and listed.
+        Never a failure."""
+        note = ""
+        if config.soundcloud_fallback:
+            download, note = _fallback_download(job, track, ctx, slot)
+            if download is not None and download.raw_path is not None:
+                # No gate.relax(): a download from another site says nothing
+                # about SoundCloud's rate limit.
+                dashboard.log(
+                    f"[SoundCloud] '{track.title}' cannot be downloaded from SoundCloud "
+                    f"({track.reason.value}); taking the same track from {_FALLBACK_LABEL}"
+                )
+                hand_over(job, "new", download.raw_path, download.info)
+                return
+        dashboard.record_unavailable("soundcloud", track, note)
+
     def _track(job: TrackJob, slot: int) -> None:
+        flagged = ctx.unavailable.get(job.track_id)
+        if flagged is not None:
+            unavailable(job, flagged, slot)
+            return
         info: dict[str, Any] | None = None
         existing = ctx.index.find(job.info)
         if existing is None and (config.recheck or ctx.index.has_unindexed_legacy_files()):
@@ -955,6 +1100,9 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
             attempt += 1
             delay = ctx.gate.trip()
             dashboard.log(f"[SoundCloud] Rate limited by SoundCloud, pausing downloads for {delay}s")
+        if download.unavailable is not None:
+            unavailable(job, UnavailableTrack.from_info(download.info, download.unavailable), slot)
+            return
         if download.rate_limited and not download.ok:
             dashboard.log_error(
                 "SoundCloud",

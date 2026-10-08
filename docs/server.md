@@ -50,7 +50,8 @@ An explicit token must be at least 16 characters of letters, digits and
 - Jobs run one after another, each in its own worker process
   (`python -m music_loader.worker`).
 - Options per job: lyrics mode (strict / loose / off), `--recheck`,
-  SoundCloud reposts and likes.
+  SoundCloud reposts and likes, and `soundcloud_fallback` (look for tracks
+  SoundCloud does not give out on YouTube Music, off by default).
 - Cancelling a job goes through the same cleanup as Ctrl+C: child processes
   stop and unfinished files are removed. A worker that does not finish its
   cleanup within 60 s is killed.
@@ -113,9 +114,15 @@ Queue request:
 ```json
 {
   "links": ["https://open.spotify.com/album/...", "https://soundcloud.com/..."],
-  "options": {"lyrics": "strict", "recheck": false, "soundcloud_reposts": false, "soundcloud_likes": false}
+  "options": {"lyrics": "strict", "recheck": false, "soundcloud_reposts": false, "soundcloud_likes": false,
+              "soundcloud_fallback": false}
 }
 ```
+
+In a job's `stats`, `soundcloud_tracks_unavailable` counts tracks SoundCloud does
+not give out (DRM, preview, blocked). They are skipped, not failures: a job
+with only such tracks still ends `completed`. The job detail carries
+`unavailable_log`, the path of the list of these tracks on the server.
 
 `links` entries may hold several whitespace-separated links. Entries that are
 not Spotify/SoundCloud links are returned in `rejected`; a request without a

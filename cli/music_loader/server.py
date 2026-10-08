@@ -19,7 +19,7 @@ the first start (printed at startup).
     GET    /api/v1/events             Server-Sent Events: a "state" event on every change
 
 Job options: {"lyrics": "strict" | "loose" | "off", "recheck": false,
-"soundcloud_reposts": false, "soundcloud_likes": false}.
+"soundcloud_reposts": false, "soundcloud_likes": false, "soundcloud_fallback": false}.
 
 The server speaks plain HTTP: use it in a trusted network or a VPN
 (Tailscale, WireGuard), or put an HTTPS reverse proxy in front of it.
@@ -123,6 +123,7 @@ class Job:
     error_count: int = 0
     log_seq: int = 0
     runlog: Optional[str] = None
+    unavailable_log: Optional[str] = None
     cancel_requested: bool = False
 
     @property
@@ -159,6 +160,7 @@ class Job:
             log=list(self.log)[-log_limit:],
             errors=list(self.errors)[-error_limit:],
             runlog=self.runlog,
+            unavailable_log=self.unavailable_log,
         )
         return data
 
@@ -527,6 +529,8 @@ class JobManager:
                 job.files.pop(slot, None)
         elif kind == "runlog":
             job.runlog = _text(event.get("path")) or None
+        elif kind == "unavailable_log":
+            job.unavailable_log = _text(event.get("path")) or None
 
     def _interrupt(self) -> None:
         """Asks the running worker to stop (caller holds the lock)."""
@@ -621,7 +625,7 @@ def _parse_job_request(body: Any) -> tuple[list[Link], dict[str, Any], list[str]
     if lyrics not in _LYRICS_MODES:
         raise _RequestError(HTTPStatus.BAD_REQUEST, f"'lyrics' must be one of {', '.join(_LYRICS_MODES)}")
     options: dict[str, Any] = {"lyrics": lyrics}
-    for key in ("recheck", "soundcloud_reposts", "soundcloud_likes"):
+    for key in ("recheck", "soundcloud_reposts", "soundcloud_likes", "soundcloud_fallback"):
         value = raw_options.get(key, False)
         if not isinstance(value, bool):
             raise _RequestError(HTTPStatus.BAD_REQUEST, f"'{key}' must be true or false")

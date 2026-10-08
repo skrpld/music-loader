@@ -31,7 +31,8 @@ queue downloads from the phone.
   interrupted files are rejected), duplicates and moved files are detected,
   `--recheck` brings old downloads up to the current rules.
 - **Live terminal dashboard** with speed, ETA and statistics; a persistent
-  failure log per run.
+  failure log per run. Tracks SoundCloud only serves DRM-protected or as a
+  preview are skipped and listed, not counted as failures.
 - **Android app** (Material 3 Expressive): downloads straight to the phone -
   the same Python code runs inside the app - or drives a computer in server
   mode; share links straight from the Spotify/SoundCloud apps, follow progress

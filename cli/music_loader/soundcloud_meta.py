@@ -34,6 +34,8 @@ from .text_utils import clean_promo, normalize_name, parse_soundcloud_title, spl
 ALBUM_SET_TYPES = {"album", "ep", "single", "compilation"}
 _SET_TYPE_RANK = {"album": 0, "ep": 1, "compilation": 2, "single": 3}
 _AVATAR_MARKER = "avatars-"
+# The tracks endpoint takes this many ids per request.
+BATCH_SIZE = 50
 
 
 @dataclass
@@ -178,6 +180,24 @@ class SoundCloudApi:
                 self._failures += 1
                 if self._failures >= 3:
                     self.disabled = True
+
+    def tracks(self, track_ids: list[str]) -> dict[str, dict]:
+        """Full track JSON of up to `BATCH_SIZE` tracks in ONE request
+        (`GET /tracks?ids=...`), by id. Tracks the API leaves out (private,
+        removed) are missing from the result.
+
+        Unlike the album lookup this is not switched off by failures and
+        raises them: the caller decides what a 429 or a network error means
+        for the rest of the run."""
+        ids = [item for item in track_ids if item.isdigit()][:BATCH_SIZE]
+        if not ids:
+            return {}
+        data = self._call("tracks", ids[0], {"ids": ",".join(ids)})
+        found: dict[str, dict] = {}
+        for item in data if isinstance(data, list) else []:
+            if isinstance(item, dict) and item.get("id") is not None:
+                found[str(item["id"])] = item
+        return found
 
     def _playlist(self, playlist_id: str) -> dict | None:
         with self._lock:
