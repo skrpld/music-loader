@@ -427,7 +427,6 @@ def test_auto_retry_chain_ends_after_three_attempts(timed):
     [
         {"auto_retry": False},                                                  # the option is off
         {"status": "cancelled"},                                                # a person stopped it
-        {"status": "failed"},                                                   # the worker broke
         {"failures": [failure(TRACK_A, "failed")]},                             # nothing worth retrying
         {"failures": []},
         {"failures": [failure(TRACK_A, "unavailable")]},
@@ -479,14 +478,29 @@ def test_a_job_waiting_for_its_retry_is_not_trimmed_from_the_history(timed, monk
     assert waiting.id in manager._jobs
 
 
-def test_a_full_queue_drops_the_automatic_retry_without_crashing(timed, monkeypatch):
+def test_a_full_queue_postpones_the_automatic_retry_instead_of_losing_it(timed, monkeypatch):
     manager, clock = timed
     job = submit(manager)
     end(manager, job)
     monkeypatch.setattr(server, "_MAX_QUEUED_JOBS", 0)
     clock.advance(15 * 60)
     assert manager.tick() == []
-    assert job.retry_at is None
+    assert job.retry_at == int((clock.now + server._QUEUE_FULL_RECHECK_SECONDS) * 1000)
+    monkeypatch.setattr(server, "_MAX_QUEUED_JOBS", 100)
+    clock.advance(server._QUEUE_FULL_RECHECK_SECONDS)
+    (new_id,) = manager.tick()
+    assert manager._jobs[new_id].attempt == 1
+
+
+def test_a_job_whose_worker_crashed_still_retries_the_failures_it_recorded(timed):
+    manager, clock = timed
+    job = submit(manager)
+    end(manager, job, status="failed")
+    assert job.retry_at == int((clock.now + 15 * 60) * 1000)
+    # ...but not when it recorded nothing worth retrying.
+    other = submit(manager)
+    end(manager, other, status="failed", failures=[])
+    assert other.retry_at is None
 
 
 def wait_until(manager, condition, timeout=10.0):

@@ -31,8 +31,9 @@ all. `/retry` creates a new job with the same options: scope "all" queues the
 original links again, scope "failed" only the retryable failures. Tracks
 already in the library are skipped either way, so a retry is cheap. With the
 job option `auto_retry` a job that ends with retryable failures is queued again
-by the server after 15, then 30, then 60 minutes (three attempts at most). The
-job shows `retry_at` while it waits and `/cancel` stops the wait. The timer
+by the server after 15, then 30, then 60 minutes (three attempts at most; the
+retry is queued once the running job is done, so the time is a lower bound).
+The job shows `retry_at` while it waits and `/cancel` stops the wait. The timer
 lives in memory: it is lost when the server stops.
 
 `GET /api/v1/info` (and every `state` event) lists the server's `features`
@@ -105,6 +106,8 @@ _FAILED_KEPT = _MAX_LINKS_PER_JOB
 _AUTO_RETRY_DELAYS = (15 * 60, 30 * 60, 60 * 60)
 # The runner re-reads the clock at least this often while a retry is pending.
 _RETRY_POLL_SECONDS = 30.0
+# A due retry that finds the queue full is tried again after this long.
+_QUEUE_FULL_RECHECK_SECONDS = 60
 _STREAM_LOG = 50
 _STREAM_ERRORS = 20
 _STREAM_INTERVAL = 0.5
@@ -394,6 +397,8 @@ class JobManager:
                     new = self.submit(links, dict(job.options), [], attempt=job.attempt + 1,
                                       retry_of=job.id)
                 except QueueFull:
+                    # Not lost: look again shortly, when the queue may have room.
+                    job.retry_at = now + _QUEUE_FULL_RECHECK_SECONDS * 1000
                     self._changed()
                     continue
                 queued.append(new.id)
@@ -401,7 +406,7 @@ class JobManager:
 
     def _schedule_retry(self, job: Job) -> None:
         """Called under the lock when a job finished: plans the next automatic attempt."""
-        if (job.status != "completed" or not job.options.get("auto_retry") or self.closed
+        if (job.status not in ("completed", "failed") or not job.options.get("auto_retry") or self.closed
                 or job.attempt >= len(_AUTO_RETRY_DELAYS) or not job.retryable()):
             return
         job.retry_at = int(self._clock() * 1000) + _AUTO_RETRY_DELAYS[job.attempt] * 1000
@@ -452,6 +457,9 @@ class JobManager:
     def _run_loop(self) -> None:
         while True:
             with self._cond:
+                # Also between back-to-back jobs, so a due retry waits for the
+                # running job at most, not for an empty queue.
+                self.tick()
                 while not self._pending and not self.closed:
                     self.tick()
                     if self._pending or self.closed:

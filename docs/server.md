@@ -149,8 +149,9 @@ the job is queued or running or when scope `failed` finds nothing to retry,
 `503` when the queue is full.
 
 With the job option `auto_retry` the server does this by itself: a job that
-*completes* with retryable failures is queued again after 15, 30 and 60
-minutes (three attempts at most; `attempt` / `max_attempts` count them). While
+*completes* (or whose worker crashed after recording failures) with retryable failures is queued again after 15, 30 and 60
+minutes (three attempts at most; `attempt` / `max_attempts` count them). The
+retry is queued once the running job is done, so the times are a lower bound. While
 it waits, the job has `retry_at` (epoch milliseconds); `POST .../cancel` on it
 stops the wait. The timer is kept in memory: it is lost when the server
 restarts.

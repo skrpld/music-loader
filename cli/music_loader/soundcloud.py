@@ -1053,7 +1053,7 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
         except Exception as exc:
             ctx.fail()
             dashboard.record_track("soundcloud", "failed")
-            _note_failure(dashboard, job, FailureCategory.FAILED, info)
+            _note_failure(dashboard, job, failure_category([str(exc)]), info)
             dashboard.log_error("SoundCloud", f"Worker failed for '{info.get('title') or job.track_id}': {exc}")
             if kind != "retag":
                 path.unlink(missing_ok=True)

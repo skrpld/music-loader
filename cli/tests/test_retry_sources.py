@@ -77,3 +77,20 @@ def test_android_spotify_credentials_reach_the_worker_config_only_when_both_are_
     assert config.spotify_client_id is None and config.spotify_client_secret is None
     android.set_spotify_credentials("", "")
     assert worker.build_config(spec).spotify_client_secret is None
+
+
+def test_worker_announces_the_official_api_once_without_the_secret(monkeypatch, tmp_path):
+    from music_loader import cli, worker
+    from music_loader.events import EventDashboard
+
+    monkeypatch.setattr(cli, "process_links", lambda links, config, dashboard: None)
+    monkeypatch.setenv("SPOTIFY_CLIENT_ID", "my-id")
+    monkeypatch.setenv("SPOTIFY_CLIENT_SECRET", "my-very-secret")
+    import io
+    out = io.StringIO()
+    spec = {"output": str(tmp_path), "links": ["https://open.spotify.com/album/4uLU6hMCjMI75M1A2tKUQC",
+                                                "https://open.spotify.com/album/5Z9KJZvQzH6PFmb8SNkxuk"]}
+    worker.run(spec, EventDashboard(out))
+    text = out.getvalue()
+    assert text.count("official Spotify API") == 1
+    assert "my-very-secret" not in text

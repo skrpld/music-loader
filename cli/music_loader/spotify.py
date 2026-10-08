@@ -352,9 +352,6 @@ def download_spotify(
         return False
     version = spotdl_version(spotdl)
     cred_args, env = _credential_args(config, version, spotdl)
-    if cred_args:
-        # Never the secret itself.
-        dashboard.log("[Spotify] Using the official Spotify API (own application credentials)")
     dashboard.update_file(label="Spotify: checking the connection...")
     # Credentials in cred_args: spotDL talks to the official API, else to the web player.
     blocked = _unreachable(_OFFICIAL_API_URLS if cred_args else _BUILTIN_CLIENT_URLS)
