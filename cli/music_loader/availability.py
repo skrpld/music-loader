@@ -231,3 +231,12 @@ def classify_error(lines: Iterable[str]) -> Verdict:
     if _NETWORK_RE.search(text):
         return Verdict(FailureCategory.NETWORK)
     return FAILED
+
+
+def failure_category(lines: Iterable[str]) -> FailureCategory:
+    """Category of a track that failed for the given error lines. Unlike
+    `classify_error` it never answers ``unavailable``: a track is only
+    listed as unavailable on solid evidence (see `classify_track`), a message
+    that merely looks like one stays a plain failure here."""
+    category = classify_error(lines).category
+    return FailureCategory.FAILED if category is FailureCategory.UNAVAILABLE else category
