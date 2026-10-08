@@ -36,8 +36,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.skrpld.musicloader.R
+import dev.skrpld.musicloader.data.Features
 import dev.skrpld.musicloader.data.Job
 import dev.skrpld.musicloader.data.JobStatus
+import dev.skrpld.musicloader.data.supports
 import dev.skrpld.musicloader.ui.components.EmptyState
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -96,6 +98,9 @@ fun JobsPane(
             onBack = { viewModel.select(null) },
             onCancel = { confirmCancel = it },
             onDelete = { confirmDelete = it },
+            canRetry = connection.supports(Features.Retry),
+            onRetry = { job, scope -> viewModel.retryJob(job.id, scope) },
+            onCancelRetryWait = { viewModel.cancel(it.id) },
             modifier = detailModifier,
         )
     }

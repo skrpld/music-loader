@@ -8,6 +8,7 @@ from music_loader.availability import (
     UnavailableTrack,
     classify_error,
     classify_track,
+    failure_category,
 )
 
 # Trimmed SoundCloud API v2 track JSON (api-v2.soundcloud.com/tracks/<id>).
@@ -200,3 +201,19 @@ def test_only_transient_categories_are_retryable():
     }
     assert not FailureCategory.UNAVAILABLE.retryable
     assert [category.value for category in FailureCategory] == ["failed", "unavailable", "rate_limited", "network"]
+
+
+# -- failure_category: what a retry may pick -----------------------------------------
+@pytest.mark.parametrize(
+    "lines, category",
+    [
+        (["ERROR: HTTP Error 429: Too Many Requests"], FailureCategory.RATE_LIMITED),
+        (["ERROR: unable to download: Connection reset by peer"], FailureCategory.NETWORK),
+        (["ERROR: The read operation timed out"], FailureCategory.NETWORK),
+        (["ERROR: something nobody has seen before"], FailureCategory.FAILED),
+        # Looks unavailable, but only solid evidence lists a track as unavailable.
+        (["ERROR: This video is DRM protected"], FailureCategory.FAILED),
+    ],
+)
+def test_failure_category_never_answers_unavailable(lines, category):
+    assert failure_category(lines) is category

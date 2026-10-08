@@ -31,6 +31,8 @@ data class JobOptions(
     @SerialName("soundcloud_reposts") val soundcloudReposts: Boolean = false,
     @SerialName("soundcloud_likes") val soundcloudLikes: Boolean = false,
     @SerialName("soundcloud_fallback") val soundcloudFallback: Boolean = false,
+    /** The server queues retryable failures again after a cooldown (needs [Features.AutoRetry]). */
+    @SerialName("auto_retry") val autoRetry: Boolean = false,
 ) {
     val lyricsMode: LyricsMode get() = LyricsMode.fromWire(lyrics)
 }
@@ -43,6 +45,36 @@ data class ServerInfo(
     @SerialName("music_dir") val musicDir: String = "",
     val busy: Boolean = false,
     val queued: Int = 0,
+    /** Optional abilities of the server; an older server sends none. */
+    val features: List<String> = emptyList(),
+)
+
+/** Names in [ServerInfo.features] and [ServerState.features]. */
+object Features {
+    /** `POST /jobs/<id>/retry`. */
+    const val Retry = "retry"
+
+    /** The `auto_retry` job option. */
+    const val AutoRetry = "auto_retry"
+}
+
+/** What a retry queues: every link of the job again, or only the failures worth another try. */
+enum class RetryScope(val wire: String) {
+    All("all"),
+    Failed("failed"),
+}
+
+@Serializable
+data class RetryRequest(val scope: String)
+
+/** A track (or link) that failed. [category] is "rate_limited", "network" or "failed". */
+@Serializable
+data class FailedItem(
+    val url: String = "",
+    val service: String = "",
+    val title: String = "",
+    val category: String = "failed",
+    val retryable: Boolean = false,
 )
 
 @Serializable
@@ -155,8 +187,20 @@ data class Job(
     val errors: List<LogEntry> = emptyList(),
     val runlog: String? = null,
     @SerialName("unavailable_log") val unavailableLog: String? = null,
+    @SerialName("failed_counts") val failedCounts: Map<String, Int> = emptyMap(),
+    @SerialName("retryable_count") val retryableCount: Int = 0,
+    @SerialName("failed_items") val failedItems: List<FailedItem> = emptyList(),
+    /** 0 for a job somebody queued, n for the nth automatic retry. */
+    val attempt: Int = 0,
+    @SerialName("max_attempts") val maxAttempts: Int = 0,
+    @SerialName("retry_of") val retryOf: String? = null,
+    /** When the server queues the failed tracks again (epoch ms), while it waits for that. */
+    @SerialName("retry_at") val retryAt: Long? = null,
 ) {
     val status: JobStatus get() = JobStatus.fromWire(statusWire)
+
+    /** A finished job whose retryable failures the server will queue again by itself. */
+    val isWaitingForRetry: Boolean get() = status.isFinished && retryAt != null
 }
 
 @Serializable
@@ -165,6 +209,7 @@ data class ServerState(
     val busy: Boolean = false,
     val jobs: List<Job> = emptyList(),
     val active: Job? = null,
+    val features: List<String> = emptyList(),
 )
 
 @Serializable

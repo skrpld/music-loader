@@ -60,6 +60,14 @@ class MusicLoaderApi(
         ).job
     }
 
+    /** Queues a finished job again; the answer is the new job. Needs [Features.Retry]. */
+    suspend fun retry(server: ServerConfig, id: String, scope: RetryScope): Job {
+        val body = json.encodeToString(RetryRequest.serializer(), RetryRequest(scope.wire)).toRequestBody(JSON)
+        return json.decodeFromString<JobEnvelope>(
+            execute(request(server, "jobs", id, "retry").post(body).build()),
+        ).job
+    }
+
     suspend fun delete(server: ServerConfig, id: String) {
         execute(request(server, "jobs", id).delete().build())
     }

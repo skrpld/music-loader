@@ -29,7 +29,7 @@ Enter both in the app: **Settings → Where to download → Server**, then **Tes
 | `--spotify-threads`, `--soundcloud-download-workers`, `--soundcloud-workers`, `--lyrics-workers` | as in the CLI | Parallel work for every job |
 
 Spotify credentials are read from `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET`
-as in the CLI.
+as in the CLI. They are never part of a job's options or of an API answer.
 
 ## Token
 
@@ -50,8 +50,10 @@ An explicit token must be at least 16 characters of letters, digits and
 - Jobs run one after another, each in its own worker process
   (`python -m music_loader.worker`).
 - Options per job: lyrics mode (strict / loose / off), `--recheck`,
-  SoundCloud reposts and likes, and `soundcloud_fallback` (look for tracks
-  SoundCloud does not give out on YouTube Music, off by default).
+  SoundCloud reposts and likes, `soundcloud_fallback` (look for tracks
+  SoundCloud does not give out on YouTube Music, off by default) and
+  `auto_retry` (queue retryable failures again after a cooldown, off by
+  default).
 - Cancelling a job goes through the same cleanup as Ctrl+C: child processes
   stop and unfinished files are removed. A worker that does not finish its
   cleanup within 60 s is killed.
@@ -101,11 +103,12 @@ JSON over HTTP, `Authorization: Bearer <token>` on every request.
 
 | Request | Meaning |
 |---|---|
-| `GET /api/v1/info` | version, API version, library folder, queue state |
+| `GET /api/v1/info` | version, API version, `features`, library folder, queue state |
 | `GET /api/v1/jobs` | all jobs, newest first (summaries) |
 | `POST /api/v1/jobs` | queue links (body below); `201` with the job and the rejected entries |
 | `GET /api/v1/jobs/<id>` | one job with its log, errors and active downloads |
-| `POST /api/v1/jobs/<id>/cancel` | cancel a queued or running job |
+| `POST /api/v1/jobs/<id>/cancel` | cancel a queued or running job; on a finished job it cancels the pending automatic retry |
+| `POST /api/v1/jobs/<id>/retry` | queue a finished job again (body below); `201` with the new job |
 | `DELETE /api/v1/jobs/<id>` | remove a finished job (`409` while it runs) |
 | `GET /api/v1/events` | Server-Sent Events: a `state` event after every change, keep-alive comments every 15 s |
 
@@ -115,7 +118,7 @@ Queue request:
 {
   "links": ["https://open.spotify.com/album/...", "https://soundcloud.com/..."],
   "options": {"lyrics": "strict", "recheck": false, "soundcloud_reposts": false, "soundcloud_likes": false,
-              "soundcloud_fallback": false}
+              "soundcloud_fallback": false, "auto_retry": false}
 }
 ```
 
@@ -123,6 +126,39 @@ In a job's `stats`, `soundcloud_tracks_unavailable` counts tracks SoundCloud doe
 not give out (DRM, preview, blocked). They are skipped, not failures: a job
 with only such tracks still ends `completed`. The job detail carries
 `unavailable_log`, the path of the list of these tracks on the server.
+
+### Failures and retrying
+
+A track (or link) that failed is listed in the job detail as `failed_items`
+(`url`, `title`, `service`, `category`, `retryable`); the summary carries
+`failed_counts` (per category) and `retryable_count`. Categories:
+`rate_limited` and `network` are retryable, `failed` is not. Unavailable
+tracks (DRM, preview, blocked) are never failures and never retried.
+
+```bash
+# only the retryable failures, or every link of the job again
+curl -H "Authorization: Bearer $MUSIC_LOADER_TOKEN" -d '{"scope": "failed"}' \
+     http://192.168.1.10:8765/api/v1/jobs/<id>/retry
+curl -H "Authorization: Bearer $MUSIC_LOADER_TOKEN" -d '{"scope": "all"}' \
+     http://192.168.1.10:8765/api/v1/jobs/<id>/retry
+```
+
+The new job has the same options and `retry_of` set to the original. Errors:
+`400` for a missing or unknown `scope`, `404` for an unknown job, `409` while
+the job is queued or running or when scope `failed` finds nothing to retry,
+`503` when the queue is full.
+
+With the job option `auto_retry` the server does this by itself: a job that
+*completes* (or whose worker crashed after recording failures) with retryable failures is queued again after 15, 30 and 60
+minutes (three attempts at most; `attempt` / `max_attempts` count them). The
+retry is queued once the running job is done, so the times are a lower bound. While
+it waits, the job has `retry_at` (epoch milliseconds); `POST .../cancel` on it
+stops the wait. The timer is kept in memory: it is lost when the server
+restarts.
+
+`GET /api/v1/info` and every `state` event carry `features`
+(`["retry", "auto_retry"]`). An older server has no such list; the Android app
+then hides the retry actions.
 
 `links` entries may hold several whitespace-separated links. Entries that are
 not Spotify/SoundCloud links are returned in `rejected`; a request without a

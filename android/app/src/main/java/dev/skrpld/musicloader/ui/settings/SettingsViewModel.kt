@@ -14,6 +14,7 @@ import dev.skrpld.musicloader.data.ServerInfo
 import dev.skrpld.musicloader.data.ServerRepository
 import dev.skrpld.musicloader.data.ServerUrls
 import dev.skrpld.musicloader.data.SettingsStore
+import dev.skrpld.musicloader.data.SpotifyCredentials
 import dev.skrpld.musicloader.data.ThemeMode
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Job
@@ -56,6 +57,17 @@ class SettingsViewModel(
 
     val defaultMusicDir: String get() = local.defaultMusicDir
 
+    /** Phone mode: the Spotify application credentials being edited (stored encrypted). */
+    var spotifyIdInput by mutableStateOf("")
+        private set
+    var spotifySecretInput by mutableStateOf("")
+        private set
+    var spotifySaveFailed by mutableStateOf(false)
+        private set
+
+    val spotifyCredentials: StateFlow<SpotifyCredentials?> =
+        settingsStore.spotifyCredentials.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
     private var testJob: Job? = null
 
     init {
@@ -65,7 +77,51 @@ class SettingsViewModel(
             if (urlInput.isEmpty()) urlInput = stored.serverUrl
             if (tokenInput.isEmpty()) tokenInput = stored.token
             if (musicDirInput.isEmpty()) musicDirInput = stored.musicDir
+            val credentials = settingsStore.spotifyCredentials.first()
+            if (spotifyIdInput.isEmpty()) spotifyIdInput = credentials.clientId
+            if (spotifySecretInput.isEmpty()) spotifySecretInput = credentials.clientSecret
         }
+    }
+
+    fun updateSpotifyId(value: String) {
+        spotifyIdInput = value
+        spotifySaveFailed = false
+    }
+
+    fun updateSpotifySecret(value: String) {
+        spotifySecretInput = value
+        spotifySaveFailed = false
+    }
+
+    /** Both fields filled (use the official API) or both empty (the built-in client). */
+    val spotifyValid: Boolean
+        get() = spotifyIdInput.isBlank() == spotifySecretInput.isBlank()
+
+    fun isSpotifySaved(saved: SpotifyCredentials?): Boolean =
+        saved != null && saved.clientId == spotifyIdInput.trim() && saved.clientSecret == spotifySecretInput.trim()
+
+    fun saveSpotify() {
+        if (!spotifyValid) return
+        val credentials = SpotifyCredentials(spotifyIdInput.trim(), spotifySecretInput.trim())
+        spotifyIdInput = credentials.clientId
+        spotifySecretInput = credentials.clientSecret
+        viewModelScope.launch {
+            try {
+                settingsStore.setSpotifyCredentials(credentials)
+                spotifySaveFailed = false
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // The Keystore refused (no secure lock screen policy, a reset keystore): nothing was stored.
+                spotifySaveFailed = true
+            }
+        }
+    }
+
+    fun clearSpotify() {
+        spotifyIdInput = ""
+        spotifySecretInput = ""
+        saveSpotify()
     }
 
     fun setMode(mode: DownloadMode) {

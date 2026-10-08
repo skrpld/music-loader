@@ -137,6 +137,27 @@
     <string name="delete_dialog_title">Удалить задание?</string>
     <string name="delete_dialog_body">Удаляется только запись в списке; скачанная музыка остаётся в библиотеке.</string>
 
+    <!-- Retrying -->
+    <string name="status_waiting_retry">Ждёт повтора</string>
+    <string name="action_retry_failed">Повторить неудачные (%1$d)</string>
+    <string name="action_run_again">Запустить снова</string>
+    <string name="action_cancel_retry">Отменить повтор</string>
+    <string name="retry_waiting">Следующая попытка в %1$s</string>
+    <string name="retry_waiting_attempt">Попытка %1$d из %2$d</string>
+    <string name="retry_waiting_body">Неудачные треки будут поставлены в очередь снова автоматически. Это работает, пока приложение запущено; если закрыть его в списке недавних, ожидание отменится.</string>
+    <string name="job_failures">Ошибки по типам</string>
+    <string name="failure_group_title">%1$s (%2$d)</string>
+    <string name="failure_rate_limited">Лимит запросов</string>
+    <string name="failure_rate_limited_hint">Сервис отклонил слишком частые запросы. Можно повторить.</string>
+    <string name="failure_network">Проблема с сетью</string>
+    <string name="failure_network_hint">Соединение оборвалось или истекло время ожидания. Можно повторить.</string>
+    <string name="failure_failed">Ошибка</string>
+    <string name="failure_failed_hint">Не удалось скачать или обработать. Повтор вряд ли поможет.</string>
+    <string name="failure_unavailable">Недоступны</string>
+    <string name="failure_unavailable_hint">Защищены DRM, доступен только фрагмент или заблокированы. Скачать нельзя, повторяться не будут.</string>
+    <string name="option_auto_retry">Повторять автоматически</string>
+    <string name="option_auto_retry_description">После лимита запросов или сетевых ошибок самостоятельно повторять неудачные треки: через 15, 30 и 60 минут (не более 3 попыток). Работает, пока запущено приложение или сервер.</string>
+
     <!-- Settings -->
     <string name="settings_mode">Куда скачивать</string>
     <string name="mode_phone">Этот телефон</string>
@@ -172,6 +193,15 @@
     <string name="settings_dynamic_color">Динамические цвета</string>
     <string name="settings_dynamic_color_hint">Цвета из обоев (Material You)</string>
     <string name="settings_dynamic_color_unavailable">Доступно на Android 12 и новее</string>
+    <string name="settings_spotify">Доступ к Spotify</string>
+    <string name="settings_spotify_description">Необязательно. Со своим приложением Spotify (developer.spotify.com/dashboard) приложение работает через официальный API, который отклоняет запросы намного реже встроенного доступа. Хранится на телефоне в зашифрованном виде, используется только в режиме «Телефон».</string>
+    <string name="settings_spotify_client_id">Client ID</string>
+    <string name="settings_spotify_client_secret">Client Secret</string>
+    <string name="settings_spotify_secret_hint">Оставьте оба поля пустыми, чтобы использовать встроенный доступ</string>
+    <string name="settings_spotify_pair_invalid">Заполните оба поля или оставьте оба пустыми</string>
+    <string name="settings_spotify_save_failed">Не удалось надёжно сохранить секрет на этом устройстве</string>
+    <string name="action_show_secret">Показать секрет</string>
+    <string name="action_hide_secret">Скрыть секрет</string>
     <string name="settings_about">О приложении</string>
     <string name="settings_version">Версия %1$s</string>
     <string name="settings_server_howto">Запустите сервер на компьютере с библиотекой</string>
@@ -181,4 +211,5 @@
     <string name="notification_channel_downloads">Загрузки</string>
     <string name="notification_downloading">Загрузка музыки</string>
     <string name="notification_queued">В очереди: %1$d</string>
+    <string name="notification_waiting_retry">Ожидание повтора неудачных треков в %1$s</string>
 </resources>

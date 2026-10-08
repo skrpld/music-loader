@@ -25,6 +25,8 @@ import dev.skrpld.musicloader.data.Job
 import dev.skrpld.musicloader.data.JobStatus
 import dev.skrpld.musicloader.data.ServerState
 import java.io.File
+import java.text.DateFormat
+import java.util.Date
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -41,6 +43,10 @@ import kotlinx.coroutines.withContext
  * off the queue: a foreground service with a progress notification and a partial wake
  * lock. Stops itself once nothing is running or queued. Finished tracks are handed to
  * the media scanner so music players see them.
+ *
+ * A finished job that waits for its automatic retry (the cooldown after a rate limit) counts
+ * as work: the retry timer lives in the downloader inside this process, so the service stays
+ * until the retry has run. Killing the app drops the timer.
  */
 class DownloadService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -48,6 +54,7 @@ class DownloadService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private val scanned = mutableSetOf<String>()
     private val createdAt = System.currentTimeMillis()
+    private val timeFormat: DateFormat by lazy { android.text.format.DateFormat.getTimeFormat(this) }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -105,7 +112,7 @@ class DownloadService : Service() {
     }
 
     private val ServerState.isBusy: Boolean
-        get() = jobs.any { it.status == JobStatus.Running || it.status == JobStatus.Queued }
+        get() = jobs.any { it.status == JobStatus.Running || it.status == JobStatus.Queued || it.isWaitingForRetry }
 
     private suspend fun scanFinished(state: ServerState, musicDir: String) {
         // Jobs that finished while the service ran; older ones were scanned back then.
@@ -130,6 +137,7 @@ class DownloadService : Service() {
     private fun notification(state: ServerState?): Notification {
         val job: Job? = state?.active ?: state?.jobs?.firstOrNull { it.status == JobStatus.Running }
         val queued = state?.jobs?.count { it.status == JobStatus.Queued } ?: 0
+        val nextRetry = state?.jobs?.mapNotNull { if (it.isWaitingForRetry) it.retryAt else null }?.minOrNull()
         val open = PendingIntent.getActivity(
             this,
             0,
@@ -146,7 +154,11 @@ class DownloadService : Service() {
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
         val stats = job?.stats
-        if (stats != null && stats.tracksTotal > 0) {
+        if (job == null && queued == 0 && nextRetry != null) {
+            // Only waiting for the cooldown after a rate limit.
+            builder.setContentText(getString(R.string.notification_waiting_retry, timeFormat.format(Date(nextRetry))))
+            builder.setProgress(0, 0, false)
+        } else if (stats != null && stats.tracksTotal > 0) {
             builder.setContentText(getString(R.string.progress_tracks, stats.tracksProcessed, stats.tracksTotal))
             builder.setProgress(stats.tracksTotal, stats.tracksProcessed, false)
         } else {

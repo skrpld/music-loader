@@ -61,7 +61,11 @@ fun statusLabel(job: Job): String = stringResource(
     when (job.status) {
         JobStatus.Queued -> R.string.status_queued
         JobStatus.Running -> if (job.cancelRequested) R.string.status_cancelling else R.string.status_running
-        JobStatus.Completed -> if (job.hasFailures) R.string.status_completed_with_errors else R.string.status_completed
+        JobStatus.Completed -> when {
+            job.isWaitingForRetry -> R.string.status_waiting_retry
+            job.hasFailures -> R.string.status_completed_with_errors
+            else -> R.string.status_completed
+        }
         JobStatus.Cancelled -> R.string.status_cancelled
         JobStatus.Failed -> R.string.status_failed
     },
@@ -70,7 +74,11 @@ fun statusLabel(job: Job): String = stringResource(
 fun statusIcon(job: Job): Int = when (job.status) {
     JobStatus.Queued -> R.drawable.ic_schedule
     JobStatus.Running -> R.drawable.ic_sync
-    JobStatus.Completed -> if (job.hasFailures) R.drawable.ic_warning else R.drawable.ic_check_circle
+    JobStatus.Completed -> when {
+        job.isWaitingForRetry -> R.drawable.ic_schedule
+        job.hasFailures -> R.drawable.ic_warning
+        else -> R.drawable.ic_check_circle
+    }
     JobStatus.Cancelled -> R.drawable.ic_block
     JobStatus.Failed -> R.drawable.ic_error
 }
@@ -81,7 +89,11 @@ fun statusColor(job: Job): Color {
     return when (job.status) {
         JobStatus.Queued -> colors.secondary
         JobStatus.Running -> colors.tertiary
-        JobStatus.Completed -> if (job.hasFailures) colors.error else colors.primary
+        JobStatus.Completed -> when {
+            job.isWaitingForRetry -> colors.secondary
+            job.hasFailures -> colors.error
+            else -> colors.primary
+        }
         JobStatus.Cancelled -> colors.onSurfaceVariant
         JobStatus.Failed -> colors.error
     }
@@ -95,3 +107,33 @@ fun lyricsModeName(mode: LyricsMode): String = stringResource(
         LyricsMode.Off -> R.string.lyrics_off
     },
 )
+
+/** Why a track failed, in a word ("Rate limited"); unknown categories read as a plain failure. */
+@Composable
+fun failureCategoryName(category: String): String = stringResource(
+    when (category) {
+        "rate_limited" -> R.string.failure_rate_limited
+        "network" -> R.string.failure_network
+        "unavailable" -> R.string.failure_unavailable
+        else -> R.string.failure_failed
+    },
+)
+
+/** What the category means and whether a retry can help. */
+@Composable
+fun failureCategoryHint(category: String): String = stringResource(
+    when (category) {
+        "rate_limited" -> R.string.failure_rate_limited_hint
+        "network" -> R.string.failure_network_hint
+        "unavailable" -> R.string.failure_unavailable_hint
+        else -> R.string.failure_failed_hint
+    },
+)
+
+/** Retryable categories first, in the order of how likely a retry is to help. */
+fun failureCategoryOrder(category: String): Int = when (category) {
+    "rate_limited" -> 0
+    "network" -> 1
+    "unavailable" -> 3
+    else -> 2
+}

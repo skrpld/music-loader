@@ -31,6 +31,10 @@ class LocalEngine(context: Context) : LocalBackend {
     private val app = context.applicationContext
     private val mutex = Mutex()
 
+    // Held in memory only; handed to the downloader whenever it is (or becomes) available.
+    private var spotifyClientId = ""
+    private var spotifyClientSecret = ""
+
     @Suppress("DEPRECATION")
     override val defaultMusicDir: String =
         Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC).absolutePath
@@ -55,11 +59,34 @@ class LocalEngine(context: Context) : LocalBackend {
                 Log.e(TAG, "The downloader did not start", e)
                 throw EngineException(e.message ?: "The downloader did not start", e)
             }
+            applySpotifyCredentials()
             val endpoint = Json.parseToJsonElement(result).jsonObject
             ServerConfig(
                 baseUrl = endpoint.getValue("url").jsonPrimitive.content,
                 token = endpoint.getValue("token").jsonPrimitive.content,
             )
+        }
+    }
+
+    override suspend fun setSpotifyCredentials(clientId: String, clientSecret: String) {
+        withContext(Dispatchers.IO) {
+            mutex.withLock {
+                spotifyClientId = clientId
+                spotifyClientSecret = clientSecret
+                // Before the first start there is nothing to tell yet: start() does it.
+                if (Python.isStarted()) applySpotifyCredentials()
+            }
+        }
+    }
+
+    private fun applySpotifyCredentials() {
+        try {
+            Python.getInstance()
+                .getModule("music_loader.android")
+                .callAttr("set_spotify_credentials", spotifyClientId, spotifyClientSecret)
+        } catch (e: PyException) {
+            // The message is left out on purpose: nothing about the credentials goes to the log.
+            Log.w(TAG, "Could not hand the Spotify credentials to the downloader")
         }
     }
 

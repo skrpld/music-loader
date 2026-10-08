@@ -27,7 +27,7 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TaskID, TaskProgre
 from rich.table import Table
 from rich.text import Text
 
-from .availability import UnavailableTrack
+from .availability import FailureCategory, UnavailableTrack
 from .runlog import RunLog
 
 _LOG_LINES = 10
@@ -166,6 +166,11 @@ class Dashboard:
         self.log(f"[{track.source}] {track.message(note)}")
         if self.runlog is not None:
             self.runlog.record_unavailable(track)
+
+    def record_failure(self, kind: str, category: FailureCategory, url: str, title: str = "") -> None:
+        """Names a track (or a whole link) that failed and why. The counters
+        and the failure log are fed by `record_track` and `log_error`; this is
+        for the server, which lets the app retry exactly the retryable ones."""
 
     def record_lyrics(self, found: bool) -> None:
         """Records one lyrics lookup result (found / not found)."""

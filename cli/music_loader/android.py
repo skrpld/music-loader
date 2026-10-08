@@ -20,6 +20,7 @@ Called from Kotlin (dev.skrpld.musicloader.engine.LocalEngine):
 
     start(native_dir, files_dir, cache_dir, music_dir) -> JSON {"url", "token"}
     set_music_dir(path)
+    set_spotify_credentials(client_id, client_secret)
     stop()
 """
 from __future__ import annotations
@@ -181,6 +182,23 @@ def set_music_dir(path: str) -> None:
     with manager._cond:
         manager.music_dir = Path(path)
         manager._changed()
+
+
+def set_spotify_credentials(client_id: str, client_secret: str) -> None:
+    """Own Spotify application credentials (Settings), or none when either is
+    empty. They switch spotDL from the web player to the official API, which
+    refuses far less often. They live in this process' environment, where the
+    job worker reads them (worker.build_config); they are not part of a job's
+    options, so no API answer or log carries them."""
+    from .config import SPOTIFY_CLIENT_ID_ENV, SPOTIFY_CLIENT_SECRET_ENV
+
+    client_id, client_secret = (client_id or "").strip(), (client_secret or "").strip()
+    if client_id and client_secret:
+        os.environ[SPOTIFY_CLIENT_ID_ENV] = client_id
+        os.environ[SPOTIFY_CLIENT_SECRET_ENV] = client_secret
+    else:
+        os.environ.pop(SPOTIFY_CLIENT_ID_ENV, None)
+        os.environ.pop(SPOTIFY_CLIENT_SECRET_ENV, None)
 
 
 def stop() -> None:

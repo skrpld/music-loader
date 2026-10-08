@@ -52,6 +52,7 @@ from pathlib import Path
 from typing import Any
 
 from .artists import PRIORITY_SPOTIFY, get_registry
+from .availability import RATE_LIMIT_RE, FailureCategory, failure_category
 from .config import (
     ARTISTS_FILENAME,
     AUDIO_EXTENSIONS,
@@ -356,6 +357,7 @@ def download_spotify(
     blocked = _unreachable(_OFFICIAL_API_URLS if cred_args else _BUILTIN_CLIENT_URLS)
     if blocked is not None:
         dashboard.log_error("Spotify", f"Cannot reach {blocked[0]} ({blocked[1][:150]}). {_not_reachable_hint()}")
+        dashboard.record_failure("spotify", FailureCategory.NETWORK, url)
         dashboard.finish_file()
         return False
     base = _command(spotdl)
@@ -390,6 +392,11 @@ def download_spotify(
             dashboard.log_error("Spotify", f"Could not resolve '{url}': {reason}")
             resolve.report_tail()
             _refusal_hint(resolve.refused, config, dashboard)
+            # The link as a whole failed; a retry runs it again.
+            category = (FailureCategory.RATE_LIMITED if resolve.refused
+                        else FailureCategory.NETWORK if code == -1
+                        else failure_category(resolve.tail))
+            dashboard.record_failure("spotify", category, url)
             return False
         try:
             raw = json.loads(save_file.read_text(encoding="utf-8"))
@@ -503,6 +510,8 @@ def _prepare(songs: list[_Song], config: AppConfig, dashboard) -> set[str]:
 def _verify(songs: list[_Song], existed: set[str], run: _Run, dashboard) -> bool:
     if not any(song.path for song in songs):
         # No path mapping: fall back to what spotdl printed.
+        for track_url, reason in run.errors.items():
+            dashboard.record_failure("spotify", _song_category(reason, run), track_url)
         return run.failed == 0 and not run.errors
     done = skipped = failed = 0
     for song in songs:
@@ -521,6 +530,8 @@ def _verify(songs: list[_Song], existed: set[str], run: _Run, dashboard) -> bool
         else:
             reason = "file missing after the download"
         dashboard.log_error("Spotify", f"{song.name}: {reason[:300]}")
+        dashboard.record_failure("spotify", _song_category(reason, run, missing=song.url not in run.errors),
+                                 song.url, song.name)
         if song.path is not None and song.path.exists() and state is False:
             remove_with_sidecars(song.path)
     # Replace the live estimate with the exact result.
@@ -529,6 +540,17 @@ def _verify(songs: list[_Song], existed: set[str], run: _Run, dashboard) -> bool
     dashboard.record_track("spotify", "failed", failed - run.failed)
     dashboard.log(f"[Spotify] Done: {done} downloaded, {skipped} already had, {failed} failed")
     return failed == 0
+
+
+def _song_category(reason: str, run: "_Run", missing: bool = False) -> FailureCategory:
+    """Why one song failed. A song that is just gone after a run in which
+    Spotify refused requests was most likely one of the refused ones."""
+    if RATE_LIMIT_RE.search(reason) or _REFUSED_RE.search(reason):
+        return FailureCategory.RATE_LIMITED
+    category = failure_category([reason])
+    if category is FailureCategory.FAILED and missing and run.refused:
+        return FailureCategory.RATE_LIMITED
+    return category
 
 
 def _lyrics(songs: list[_Song], config: AppConfig, dashboard, service: LyricsService) -> None:

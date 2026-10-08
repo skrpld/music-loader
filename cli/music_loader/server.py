@@ -14,12 +14,31 @@ the first start (printed at startup).
     GET    /api/v1/jobs               all jobs, newest first (summaries)
     POST   /api/v1/jobs               queue links: {"links": [...], "options": {...}}
     GET    /api/v1/jobs/<id>          one job with its log, errors and active downloads
-    POST   /api/v1/jobs/<id>/cancel   cancel a queued or running job
+    POST   /api/v1/jobs/<id>/cancel   cancel a queued or running job, or the pending automatic retry
+                                      of a finished one
+    POST   /api/v1/jobs/<id>/retry    queue a finished job again: {"scope": "all" | "failed"}
     DELETE /api/v1/jobs/<id>          remove a finished job from the list
     GET    /api/v1/events             Server-Sent Events: a "state" event on every change
 
 Job options: {"lyrics": "strict" | "loose" | "off", "recheck": false,
-"soundcloud_reposts": false, "soundcloud_likes": false, "soundcloud_fallback": false}.
+"soundcloud_reposts": false, "soundcloud_likes": false, "soundcloud_fallback": false,
+"auto_retry": false}.
+
+Retrying: a track (or link) that failed is recorded with a category (see
+availability.py). `rate_limited` and `network` are retryable, `failed` is not,
+and an unavailable track (DRM, preview, blocked) is never listed as failed at
+all. `/retry` creates a new job with the same options: scope "all" queues the
+original links again, scope "failed" only the retryable failures. Tracks
+already in the library are skipped either way, so a retry is cheap. With the
+job option `auto_retry` a job that ends with retryable failures is queued again
+by the server after 15, then 30, then 60 minutes (three attempts at most; the
+retry is queued once the running job is done, so the time is a lower bound).
+The job shows `retry_at` while it waits and `/cancel` stops the wait. The timer
+lives in memory: it is lost when the server stops.
+
+`GET /api/v1/info` (and every `state` event) lists the server's `features`
+("retry", "auto_retry"); a client talking to an older server finds the list
+missing and leaves the retry actions out.
 
 The server speaks plain HTTP: use it in a trusted network or a VPN
 (Tailscale, WireGuard), or put an HTTPS reverse proxy in front of it.
@@ -44,7 +63,7 @@ from dataclasses import asdict, dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import urlsplit
 
 from rich.console import Console
@@ -52,12 +71,15 @@ from rich.markup import escape
 
 from . import __version__
 from .cli import _positive_int
+from .availability import FailureCategory
 from .config import LYRICS_MODE_LOOSE, LYRICS_MODE_STRICT
 from .deps import check_dependencies
 from .links import Link, parse_link, redact_url
 from .ui import Stats
 
 API_VERSION = 1
+# Optional capabilities, for clients that may talk to an older server.
+FEATURES = ("retry", "auto_retry")
 DEFAULT_PORT = 8765
 TOKEN_ENV = "MUSIC_LOADER_TOKEN"
 TOKEN_FILENAME = "server-token"
@@ -65,6 +87,7 @@ TOKEN_FILENAME = "server-token"
 _TOKEN_RE = re.compile(r"[A-Za-z0-9._~+/=-]{16,512}")
 _LYRICS_MODES = (LYRICS_MODE_STRICT, LYRICS_MODE_LOOSE, "off")
 _FINISHED = {"completed", "cancelled", "failed"}
+_RETRY_SCOPES = ("all", "failed")
 
 _MAX_BODY_BYTES = 256 * 1024
 _MAX_LINKS_PER_JOB = 2000
@@ -77,6 +100,14 @@ _PREVIEW_LINKS = 3
 # pushed up to twice a second.
 _LOG_KEPT = 300
 _ERRORS_KEPT = 500
+# Failed tracks of one job that can be retried; the most a job can be queued with.
+_FAILED_KEPT = _MAX_LINKS_PER_JOB
+# Pause before the 1st, 2nd and 3rd automatic retry (seconds).
+_AUTO_RETRY_DELAYS = (15 * 60, 30 * 60, 60 * 60)
+# The runner re-reads the clock at least this often while a retry is pending.
+_RETRY_POLL_SECONDS = 30.0
+# A due retry that finds the queue full is tried again after this long.
+_QUEUE_FULL_RECHECK_SECONDS = 60
 _STREAM_LOG = 50
 _STREAM_ERRORS = 20
 _STREAM_INTERVAL = 0.5
@@ -125,10 +156,21 @@ class Job:
     runlog: Optional[str] = None
     unavailable_log: Optional[str] = None
     cancel_requested: bool = False
+    # Failed tracks (or whole links) by their link, with the reason; the full
+    # link is kept for the retry, clients only get it redacted.
+    failed: dict[str, dict[str, str]] = field(default_factory=dict)
+    # 0 for a job a person queued, n for the nth automatic retry of it.
+    attempt: int = 0
+    retry_of: Optional[str] = None
+    # When the server queues the failed tracks again (epoch ms), if it waits for that.
+    retry_at: Optional[int] = None
 
     @property
     def finished(self) -> bool:
         return self.status in _FINISHED
+
+    def retryable(self) -> list[dict[str, str]]:
+        return [item for item in self.failed.values() if FailureCategory(item["category"]).retryable]
 
     def summary(self) -> dict[str, Any]:
         services: dict[str, int] = {}
@@ -149,7 +191,19 @@ class Job:
             "stats": dict(self.stats),
             "error_count": self.error_count,
             "cancel_requested": self.cancel_requested,
+            "failed_counts": self._failed_counts(),
+            "retryable_count": len(self.retryable()),
+            "attempt": self.attempt,
+            "max_attempts": len(_AUTO_RETRY_DELAYS),
+            "retry_of": self.retry_of,
+            "retry_at": self.retry_at,
         }
+
+    def _failed_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for item in self.failed.values():
+            counts[item["category"]] = counts.get(item["category"], 0) + 1
+        return counts
 
     def detail(self, log_limit: int = _LOG_KEPT, error_limit: int = _ERRORS_KEPT) -> dict[str, Any]:
         data = self.summary()
@@ -161,12 +215,26 @@ class Job:
             errors=list(self.errors)[-error_limit:],
             runlog=self.runlog,
             unavailable_log=self.unavailable_log,
+            failed_items=[
+                {"url": redact_url(item["url"]), "service": item["service"], "title": item["title"],
+                 "category": item["category"],
+                 "retryable": FailureCategory(item["category"]).retryable}
+                for item in self.failed.values()
+            ],
         )
         return data
 
 
 class QueueFull(Exception):
     pass
+
+
+class JobNotFound(Exception):
+    pass
+
+
+class JobConflict(Exception):
+    """The request is fine but the job is not in a state it can be applied to."""
 
 
 class JobManager:
@@ -178,7 +246,9 @@ class JobManager:
     in that thread - the same cleanup the worker's SIGINT triggers."""
 
     def __init__(self, music_dir: Path, worker_options: dict[str, Any], console: Console,
-                 in_process: bool = False):
+                 in_process: bool = False, clock: Callable[[], float] = time.time):
+        # `clock` (epoch seconds) times the automatic retries; tests hand in a fake one.
+        self._clock = clock
         self.music_dir = music_dir
         self.worker_options = worker_options
         self.console = console
@@ -208,6 +278,7 @@ class JobManager:
                 "busy": self._running is not None,
                 "queued": len(self._pending),
                 "lyrics_modes": list(_LYRICS_MODES),
+                "features": list(FEATURES),
             }
 
     def jobs(self) -> list[dict[str, Any]]:
@@ -224,6 +295,7 @@ class JobManager:
         return {
             "revision": self.revision,
             "busy": running is not None,
+            "features": list(FEATURES),
             "jobs": [job.summary() for job in reversed(self._jobs.values())],
             "active": running.detail(_STREAM_LOG, _STREAM_ERRORS) if running is not None else None,
         }
@@ -242,7 +314,8 @@ class JobManager:
         self.revision += 1
         self._cond.notify_all()
 
-    def submit(self, links: list[Link], options: dict[str, Any], rejected: list[str]) -> Job:
+    def submit(self, links: list[Link], options: dict[str, Any], rejected: list[str],
+               attempt: int = 0, retry_of: Optional[str] = None) -> Job:
         with self._cond:
             if self.closed:
                 raise QueueFull("the server is shutting down")
@@ -251,7 +324,8 @@ class JobManager:
             job_id = secrets.token_hex(6)
             while job_id in self._jobs:
                 job_id = secrets.token_hex(6)
-            job = Job(id=job_id, links=links, options=options, rejected=rejected)
+            job = Job(id=job_id, links=links, options=options, rejected=rejected,
+                      attempt=attempt, retry_of=retry_of)
             self._jobs[job.id] = job
             self._pending.append(job.id)
             self._trim_history()
@@ -273,7 +347,78 @@ class JobManager:
                 job.cancel_requested = True
                 self._interrupt()
                 self._changed()
+            elif job.finished and job.retry_at is not None:
+                # Cancelling a job that waits for its automatic retry.
+                job.retry_at = None
+                self._changed()
             return job.summary()
+
+    def retry(self, job_id: str, scope: str) -> Job:
+        """Queues a finished job again: all its links, or only the failures
+        that may succeed on another try. Raises JobNotFound, JobConflict or
+        QueueFull."""
+        with self._cond:
+            job = self._jobs.get(job_id)
+            if job is None:
+                raise JobNotFound(job_id)
+            if not job.finished:
+                raise JobConflict("The job has not finished yet")
+            if scope == "all":
+                links = list(job.links)
+            else:
+                links = []
+                for item in job.retryable():
+                    link = parse_link(item["url"])
+                    if link is not None:
+                        links.append(link)
+            if not links:
+                raise JobConflict("The job has no failed tracks that can be retried")
+            new = self.submit(links, dict(job.options), [], retry_of=job.id)
+            # What a person queued by hand replaces the automatic retry.
+            job.retry_at = None
+            return new
+
+    def tick(self) -> list[str]:
+        """Queues the automatic retries that are due; returns the new job ids.
+        The runner thread calls it, tests call it with a fake clock."""
+        queued: list[str] = []
+        with self._cond:
+            now = int(self._clock() * 1000)
+            for job in list(self._jobs.values()):
+                if job.retry_at is None or job.retry_at > now:
+                    continue
+                job.retry_at = None
+                links = [link for link in map(parse_link, (i["url"] for i in job.retryable()))
+                         if link is not None]
+                if self.closed or not links:
+                    self._changed()
+                    continue
+                try:
+                    new = self.submit(links, dict(job.options), [], attempt=job.attempt + 1,
+                                      retry_of=job.id)
+                except QueueFull:
+                    # Not lost: look again shortly, when the queue may have room.
+                    job.retry_at = now + _QUEUE_FULL_RECHECK_SECONDS * 1000
+                    self._changed()
+                    continue
+                queued.append(new.id)
+        return queued
+
+    def _schedule_retry(self, job: Job) -> None:
+        """Called under the lock when a job finished: plans the next automatic attempt."""
+        if (job.status not in ("completed", "failed") or not job.options.get("auto_retry") or self.closed
+                or job.attempt >= len(_AUTO_RETRY_DELAYS) or not job.retryable()):
+            return
+        job.retry_at = int(self._clock() * 1000) + _AUTO_RETRY_DELAYS[job.attempt] * 1000
+
+    def _retry_wait(self) -> Optional[float]:
+        """How long the runner may sleep: until the next automatic retry (but
+        re-reading the clock regularly), forever when none is planned."""
+        due = [job.retry_at for job in self._jobs.values() if job.retry_at is not None]
+        if not due:
+            return None
+        remaining = min(due) / 1000 - self._clock()
+        return min(max(remaining, 0.0), _RETRY_POLL_SECONDS)
 
     def delete(self, job_id: str) -> Optional[bool]:
         """None: no such job; False: it has not finished yet."""
@@ -302,7 +447,9 @@ class JobManager:
         self._thread.join(timeout)
 
     def _trim_history(self) -> None:
-        finished = [job_id for job_id, job in self._jobs.items() if job.finished]
+        # A job that waits for its automatic retry is still needed.
+        finished = [job_id for job_id, job in self._jobs.items()
+                    if job.finished and job.retry_at is None]
         for job_id in finished[:max(0, len(finished) - _MAX_FINISHED_JOBS)]:
             del self._jobs[job_id]
 
@@ -310,7 +457,14 @@ class JobManager:
     def _run_loop(self) -> None:
         while True:
             with self._cond:
-                self._cond.wait_for(lambda: self._pending or self.closed)
+                # Also between back-to-back jobs, so a due retry waits for the
+                # running job at most, not for an empty queue.
+                self.tick()
+                while not self._pending and not self.closed:
+                    self.tick()
+                    if self._pending or self.closed:
+                        break
+                    self._cond.wait(self._retry_wait())
                 if self.closed:
                     return
                 job = self._jobs[self._pending.popleft()]
@@ -333,6 +487,7 @@ class JobManager:
                 self._process = None
                 self._job_thread = None
                 self._give_up_at = None
+                self._schedule_retry(job)
                 self._trim_history()
                 self._changed()
             style = {"completed": "green", "cancelled": "yellow"}.get(status, "red")
@@ -340,6 +495,10 @@ class JobManager:
             if message:
                 line += f": {escape(message)}"
             self.console.print(line)
+            if job.retry_at is not None:
+                self.console.print(f"[yellow]Job {job.id}: {len(job.retryable())} failed track(s) will be "
+                                   f"retried automatically (attempt {job.attempt + 1} of "
+                                   f"{len(_AUTO_RETRY_DELAYS)})[/yellow]")
 
     def _execute(self, job: Job) -> tuple[str, Optional[str]]:
         spec = {
@@ -527,10 +686,32 @@ class JobManager:
                 }
             else:
                 job.files.pop(slot, None)
+        elif kind == "failure":
+            JobManager._apply_failure(job, event)
         elif kind == "runlog":
             job.runlog = _text(event.get("path")) or None
         elif kind == "unavailable_log":
             job.unavailable_log = _text(event.get("path")) or None
+
+    @staticmethod
+    def _apply_failure(job: Job, event: dict[str, Any]) -> None:
+        link = parse_link(_text(event.get("url")))
+        try:
+            category = FailureCategory(event.get("category"))
+        except ValueError:
+            category = FailureCategory.FAILED
+        if category is FailureCategory.UNAVAILABLE:
+            # Unavailable tracks are reported through their own event, never as failures.
+            return
+        if link is None or (link.url not in job.failed and len(job.failed) >= _FAILED_KEPT):
+            return
+        service = _text(event.get("service"))
+        job.failed[link.url] = {
+            "url": link.url,
+            "service": service if service in ("spotify", "soundcloud") else link.service,
+            "title": _text(event.get("title"))[:300],
+            "category": category.value,
+        }
 
     def _interrupt(self) -> None:
         """Asks the running worker to stop (caller holds the lock)."""
@@ -561,7 +742,7 @@ class JobManager:
 def _reset_run_caches() -> None:
     """Library indexes and registries are cached for the run of one worker
     process; an in-process job starts from the files on disk just the same."""
-    from . import artists, lyrics, soundcloud_index, spotify_index
+    from . import artists, lyrics, soundcloud, soundcloud_index, spotify_index
 
     with artists._REGISTRIES_LOCK:
         artists._REGISTRIES.clear()
@@ -570,6 +751,9 @@ def _reset_run_caches() -> None:
     with soundcloud_index._INDEX_CACHE_LOCK:
         soundcloud_index._INDEX_CACHE.clear()
     spotify_index._LIBRARIES.clear()
+    # A new job starts with all its parallel downloads, not with the reduced
+    # number an earlier rate limit caused.
+    soundcloud._SHARED_GATE.reset_throttle()
 
 
 def _kill_tree(process: subprocess.Popen) -> None:
@@ -625,7 +809,7 @@ def _parse_job_request(body: Any) -> tuple[list[Link], dict[str, Any], list[str]
     if lyrics not in _LYRICS_MODES:
         raise _RequestError(HTTPStatus.BAD_REQUEST, f"'lyrics' must be one of {', '.join(_LYRICS_MODES)}")
     options: dict[str, Any] = {"lyrics": lyrics}
-    for key in ("recheck", "soundcloud_reposts", "soundcloud_likes", "soundcloud_fallback"):
+    for key in ("recheck", "soundcloud_reposts", "soundcloud_likes", "soundcloud_fallback", "auto_retry"):
         value = raw_options.get(key, False)
         if not isinstance(value, bool):
             raise _RequestError(HTTPStatus.BAD_REQUEST, f"'{key}' must be true or false")
@@ -634,6 +818,17 @@ def _parse_job_request(body: Any) -> tuple[list[Link], dict[str, Any], list[str]
     if not links:
         raise _RequestError(HTTPStatus.BAD_REQUEST, "No Spotify or SoundCloud links", rejected=rejected)
     return links, options, rejected
+
+
+def _parse_retry_request(body: bytes) -> str:
+    try:
+        request = json.loads(body.decode("utf-8") or "null")
+    except (UnicodeDecodeError, ValueError):
+        raise _RequestError(HTTPStatus.BAD_REQUEST, "Body is not valid JSON")
+    scope = request.get("scope") if isinstance(request, dict) else None
+    if scope not in _RETRY_SCOPES:
+        raise _RequestError(HTTPStatus.BAD_REQUEST, "'scope' must be one of " + ", ".join(_RETRY_SCOPES))
+    return scope
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -757,6 +952,17 @@ class _Handler(BaseHTTPRequestHandler):
             if summary is None:
                 raise _RequestError(HTTPStatus.NOT_FOUND, "No such job")
             return self._send_json(HTTPStatus.OK, {"job": summary})
+        if len(parts) == 3 and parts[0] == "jobs" and parts[2] == "retry" and method == "POST":
+            scope = _parse_retry_request(body)
+            try:
+                job = manager.retry(parts[1], scope)
+            except JobNotFound:
+                raise _RequestError(HTTPStatus.NOT_FOUND, "No such job")
+            except JobConflict as exc:
+                raise _RequestError(HTTPStatus.CONFLICT, str(exc))
+            except QueueFull as exc:
+                raise _RequestError(HTTPStatus.SERVICE_UNAVAILABLE, str(exc))
+            return self._send_json(HTTPStatus.CREATED, {"job": manager.job(job.id)})
         raise _RequestError(HTTPStatus.NOT_FOUND, "Not found")
 
     def _stream(self) -> None:

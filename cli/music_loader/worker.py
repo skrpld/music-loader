@@ -96,6 +96,9 @@ def run(spec: dict[str, Any], events: EventDashboard) -> int:
         return 1
 
     config = build_config(spec)
+    if config.spotify_client_id and config.spotify_client_secret and any(l.service == "spotify" for l in links):
+        # Once per job, and never the secret itself.
+        events.log("[Spotify] Using the official Spotify API (own application credentials)")
     try:
         config.ensure_dirs()
     except OSError as exc:

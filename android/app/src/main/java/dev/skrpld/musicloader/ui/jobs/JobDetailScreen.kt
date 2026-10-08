@@ -6,14 +6,18 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -22,6 +26,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.Text
@@ -41,6 +46,7 @@ import dev.skrpld.musicloader.R
 import dev.skrpld.musicloader.data.Job
 import dev.skrpld.musicloader.data.JobStatus
 import dev.skrpld.musicloader.data.LogEntry
+import dev.skrpld.musicloader.data.RetryScope
 import dev.skrpld.musicloader.ui.components.CenteredLoading
 import dev.skrpld.musicloader.ui.components.EmptyState
 import dev.skrpld.musicloader.ui.components.Pill
@@ -48,6 +54,7 @@ import dev.skrpld.musicloader.ui.components.SectionHeader
 import dev.skrpld.musicloader.ui.formatClock
 import dev.skrpld.musicloader.ui.formatDateTime
 import dev.skrpld.musicloader.ui.formatDuration
+import dev.skrpld.musicloader.ui.formatTime
 import dev.skrpld.musicloader.ui.rememberClipboardAccess
 import kotlinx.coroutines.launch
 
@@ -59,6 +66,10 @@ fun JobDetailScreen(
     onBack: () -> Unit,
     onCancel: (Job) -> Unit,
     onDelete: (Job) -> Unit,
+    /** The server can retry jobs; false for an older server, which hides the retry actions. */
+    canRetry: Boolean,
+    onRetry: (Job, RetryScope) -> Unit,
+    onCancelRetryWait: (Job) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val job = selected?.job
@@ -115,14 +126,26 @@ fun JobDetailScreen(
                 body = null,
                 modifier = Modifier.padding(padding),
             )
-            else -> JobDetailContent(job = job, contentPadding = padding)
+            else -> JobDetailContent(
+                job = job,
+                contentPadding = padding,
+                canRetry = canRetry,
+                onRetry = onRetry,
+                onCancelRetryWait = onCancelRetryWait,
+            )
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun JobDetailContent(job: Job, contentPadding: PaddingValues) {
+private fun JobDetailContent(
+    job: Job,
+    contentPadding: PaddingValues,
+    canRetry: Boolean,
+    onRetry: (Job, RetryScope) -> Unit,
+    onCancelRetryWait: (Job) -> Unit,
+) {
     val clipboard = rememberClipboardAccess()
     val scope = rememberCoroutineScope()
     val runlogLabel = stringResource(R.string.job_runlog)
@@ -138,6 +161,12 @@ private fun JobDetailContent(job: Job, contentPadding: PaddingValues) {
         verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
     ) {
         item(key = "status") { StatusCard(job) }
+        if (job.isWaitingForRetry) {
+            item(key = "retry-wait") { RetryWaitCard(job, onCancel = { onCancelRetryWait(job) }) }
+        }
+        if (canRetry && job.status.isFinished) {
+            item(key = "retry-actions") { RetryActions(job, onRetry) }
+        }
         if (job.status == JobStatus.Running) {
             item(key = "progress") {
                 Card(
@@ -156,6 +185,7 @@ private fun JobDetailContent(job: Job, contentPadding: PaddingValues) {
         if (job.status != JobStatus.Queued) {
             item(key = "tiles") { TrackStatTiles(job, Modifier.padding(top = 8.dp)) }
             item(key = "services") { ServiceSummary(job) }
+            failureGroups(job)
         }
         item(key = "options-header") { SectionHeader(stringResource(R.string.job_options)) }
         item(key = "options") { OptionPills(job) }
@@ -232,6 +262,117 @@ private fun JobDetailContent(job: Job, contentPadding: PaddingValues) {
                     Text(runlogLabel)
                 }
             }
+        }
+    }
+}
+
+/** Failed tracks by category: "rate limited, can be retried" apart from "DRM-protected, cannot be downloaded". */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+private fun LazyListScope.failureGroups(job: Job) {
+    val groups = job.failedItems.groupBy { it.category }.toList().sortedBy { failureCategoryOrder(it.first) }
+    val unavailable = job.stats.tracksUnavailable
+    if (groups.isEmpty() && unavailable == 0) return
+    item(key = "failures-header") { SectionHeader(stringResource(R.string.job_failures)) }
+    for ((category, items) in groups) {
+        item(key = "failure-group-$category") { FailureGroupHeader(category, items.size) }
+        itemsIndexed(items, key = { index, _ -> "failure-$category-$index" }) { index, entry ->
+            SegmentedListItem(
+                shapes = ListItemDefaults.segmentedShapes(index = index, count = items.size),
+                leadingContent = {
+                    Icon(
+                        painter = painterResource(if (entry.retryable) R.drawable.ic_schedule else R.drawable.ic_error),
+                        contentDescription = null,
+                    )
+                },
+                supportingContent = { Text(text = entry.url, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            ) {
+                Text(text = entry.title.ifBlank { entry.url }, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+    if (unavailable > 0) {
+        // Not failures: listed in the unavailable-tracks file, never retried.
+        item(key = "failure-group-unavailable") { FailureGroupHeader("unavailable", unavailable) }
+    }
+}
+
+@Composable
+private fun FailureGroupHeader(category: String, count: Int) {
+    Column(modifier = Modifier.padding(start = 4.dp, top = 12.dp, bottom = 4.dp)) {
+        Text(
+            text = stringResource(R.string.failure_group_title, failureCategoryName(category), count),
+            style = MaterialTheme.typography.titleSmall,
+        )
+        Text(
+            text = failureCategoryHint(category),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun RetryWaitCard(job: Job, onCancel: () -> Unit) {
+    val at = job.retryAt ?: return
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        shape = MaterialTheme.shapes.extraLarge,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+    ) {
+        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Icon(painter = painterResource(R.drawable.ic_schedule), contentDescription = null)
+                Column {
+                    Text(
+                        text = stringResource(R.string.retry_waiting, formatTime(at)),
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        text = stringResource(R.string.retry_waiting_attempt, job.attempt + 1, job.maxAttempts),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+            Text(text = stringResource(R.string.retry_waiting_body), style = MaterialTheme.typography.bodySmall)
+            OutlinedButton(
+                onClick = onCancel,
+                shapes = ButtonDefaults.shapes(),
+                modifier = Modifier.align(Alignment.End),
+            ) {
+                Text(stringResource(R.string.action_cancel_retry))
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun RetryActions(job: Job, onRetry: (Job, RetryScope) -> Unit) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (job.retryableCount > 0) {
+            Button(onClick = { onRetry(job, RetryScope.Failed) }, shapes = ButtonDefaults.shapes()) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_refresh),
+                    contentDescription = null,
+                    modifier = Modifier.size(ButtonDefaults.IconSize),
+                )
+                Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                Text(stringResource(R.string.action_retry_failed, job.retryableCount))
+            }
+        }
+        OutlinedButton(onClick = { onRetry(job, RetryScope.All) }, shapes = ButtonDefaults.shapes()) {
+            Icon(
+                painter = painterResource(R.drawable.ic_sync),
+                contentDescription = null,
+                modifier = Modifier.size(ButtonDefaults.IconSize),
+            )
+            Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+            Text(stringResource(R.string.action_run_again))
         }
     }
 }
@@ -372,5 +513,6 @@ private fun OptionPills(job: Job) {
         if (options.soundcloudReposts) Pill(text = stringResource(R.string.option_reposts), icon = R.drawable.ic_repeat)
         if (options.soundcloudLikes) Pill(text = stringResource(R.string.option_likes), icon = R.drawable.ic_favorite)
         if (options.soundcloudFallback) Pill(text = stringResource(R.string.option_fallback), icon = R.drawable.ic_library_music)
+        if (options.autoRetry) Pill(text = stringResource(R.string.option_auto_retry), icon = R.drawable.ic_schedule)
     }
 }

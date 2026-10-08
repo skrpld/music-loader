@@ -56,6 +56,7 @@ from .availability import (
     UnavailableTrack,
     classify_error,
     classify_track,
+    failure_category,
 )
 from .config import (
     ARCHIVE_FILENAME,
@@ -178,6 +179,7 @@ class _RateGate:
         self._lock = threading.Lock()
         self._until = 0.0
         self._strikes = 0
+        self._throttled = False
 
     def wait(self, abort: threading.Event) -> None:
         while not abort.is_set():
@@ -190,6 +192,7 @@ class _RateGate:
     def trip(self) -> int:
         with self._lock:
             self._strikes += 1
+            self._throttled = True
             delay = min(30 * 2 ** (self._strikes - 1), 300)
             self._until = max(self._until, time.monotonic() + delay)
             return delay
@@ -202,6 +205,17 @@ class _RateGate:
     def tripped(self) -> bool:
         with self._lock:
             return self._strikes > 0
+
+    @property
+    def throttled(self) -> bool:
+        """True once the limit was hit in this run (survives `relax`)."""
+        with self._lock:
+            return self._throttled
+
+    def reset_throttle(self) -> None:
+        """A new run starts with the full number of parallel downloads."""
+        with self._lock:
+            self._throttled = False
 
 
 # -- discovery ----------------------------------------------------------------------------------
@@ -400,6 +414,8 @@ class _Download:
     rate_limited: bool = False
     # Set when the track cannot be downloaded at all (DRM, preview, ...).
     unavailable: Reason | None = None
+    # Why a failed download failed; the retryable ones can be tried again later.
+    category: FailureCategory = FailureCategory.FAILED
 
 
 def _merge_info(base: dict[str, Any], full: dict[str, Any] | None) -> dict[str, Any]:
@@ -502,13 +518,14 @@ def _download_one(job: TrackJob, ctx: _Context, slot: int, source_url: str | Non
             path.unlink(missing_ok=True)
         verdict = classify_error(error_lines)
         if verdict.category is FailureCategory.RATE_LIMITED:
-            return _Download(False, None, merged, rate_limited=True)
+            return _Download(False, None, merged, rate_limited=True, category=verdict.category)
         if verdict.category is FailureCategory.UNAVAILABLE:
             # DRM, a Go+ preview, a blocked track: nothing to report as an
             # error; the caller counts and lists the track as unavailable.
             return _Download(False, None, merged, unavailable=verdict.reason)
+        category = failure_category(error_lines)
         if source_url:
-            return _Download(False, None, merged)
+            return _Download(False, None, merged, category=category)
         name = merged.get("title") or title
         for line in error_lines[-3:]:
             ctx.dashboard.log_error("SoundCloud", redact_url(line))
@@ -518,7 +535,7 @@ def _download_one(job: TrackJob, ctx: _Context, slot: int, source_url: str | Non
                 f"No usable audio file was produced for '{name}' "
                 f"(got: {', '.join(p.name for p in candidates) or 'nothing'})",
             )
-        return _Download(False, None, merged)
+        return _Download(False, None, merged, category=category)
 
     if full_info is None and not source_url:
         # Rare: the metadata line was not printed. One extra request keeps
@@ -850,6 +867,44 @@ def _cleanup_stale_staging(staging_dir: Path) -> None:
             continue
 
 
+def _note_failure(dashboard, job: TrackJob, category: FailureCategory,
+                  info: dict[str, Any] | None = None) -> None:
+    """Tells the dashboard which track failed and why (see `record_failure`)."""
+    url = job.url or str((info or {}).get("webpage_url") or "")
+    title = str((info or job.info).get("title") or job.track_id)
+    dashboard.record_failure("soundcloud", category, url, title)
+
+
+class _Limiter:
+    """Caps the parallel downloads. After SoundCloud answered "429" the cap
+    drops to one for the rest of the run: pausing alone would let all workers
+    run into the limit again the moment the pause ends."""
+
+    def __init__(self, limit: int, gate: "_RateGate"):
+        self._limit = max(1, limit)
+        self._gate = gate
+        self._active = 0
+        self._cond = threading.Condition()
+
+    @property
+    def limit(self) -> int:
+        return 1 if self._gate.throttled else self._limit
+
+    def acquire(self, abort: threading.Event) -> bool:
+        with self._cond:
+            while self._active >= self.limit:
+                if abort.is_set():
+                    return False
+                self._cond.wait(0.5)
+            self._active += 1
+            return True
+
+    def release(self) -> None:
+        with self._cond:
+            self._active -= 1
+            self._cond.notify_all()
+
+
 class _Slots:
     """Progress-row numbers for the parallel downloads."""
 
@@ -910,6 +965,8 @@ def download_soundcloud(
         raise KeyboardInterrupt
     except Exception as exc:
         dashboard.log_error("SoundCloud", f"Could not resolve '{redact_url(url)}': {exc}")
+        # The whole link failed: a retry runs the link again.
+        dashboard.record_failure("soundcloud", failure_category([str(exc)]), url)
         dashboard.finish_file()
         return False
 
@@ -945,6 +1002,7 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
     pp_workers = max(1, int(config.soundcloud_postprocess_workers))
     lyrics_workers = max(1, int(config.lyrics_workers))
     slots = _Slots(download_workers)
+    limiter = _Limiter(download_workers, ctx.gate)
     # Bounded hand-over between downloads and conversion: at most this many
     # unconverted source files wait on disk.
     pp_capacity = threading.BoundedSemaphore(pp_workers * 2)
@@ -970,6 +1028,7 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
         if not result.ok or result.path is None:
             ctx.fail()
             dashboard.record_track("soundcloud", "failed")
+            _note_failure(dashboard, job, FailureCategory.FAILED)
             return
         with ctx.lock:
             ctx.results[job.track_id] = result.path
@@ -994,6 +1053,7 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
         except Exception as exc:
             ctx.fail()
             dashboard.record_track("soundcloud", "failed")
+            _note_failure(dashboard, job, failure_category([str(exc)]), info)
             dashboard.log_error("SoundCloud", f"Worker failed for '{info.get('title') or job.track_id}': {exc}")
             if kind != "retag":
                 path.unlink(missing_ok=True)
@@ -1012,6 +1072,8 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
     def track_task(job: TrackJob) -> None:
         if ctx.abort.is_set():
             return
+        if not limiter.acquire(ctx.abort):
+            return
         slot = slots.acquire()
         try:
             _track(job, slot)
@@ -1020,10 +1082,12 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
         except Exception as exc:
             ctx.fail()
             dashboard.record_track("soundcloud", "failed")
+            _note_failure(dashboard, job, failure_category([str(exc)]))
             dashboard.log_error("SoundCloud", f"Download failed for '{job.info.get('title') or job.track_id}': {exc}")
         finally:
             dashboard.finish_file(slot)
             slots.release(slot)
+            limiter.release()
 
     def unavailable(job: TrackJob, track: UnavailableTrack, slot: int) -> None:
         """A track SoundCloud does not give out: replaced by a verified copy
@@ -1074,6 +1138,7 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
                 if full is None:
                     ctx.fail()
                     dashboard.record_track("soundcloud", "failed")
+                    _note_failure(dashboard, job, FailureCategory.FAILED)
                     dashboard.log_error("SoundCloud", f"Recheck: could not fetch metadata for '{existing.name}'")
                     return
                 info = _merge_info(job.info, full)
@@ -1099,7 +1164,8 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
                 break
             attempt += 1
             delay = ctx.gate.trip()
-            dashboard.log(f"[SoundCloud] Rate limited by SoundCloud, pausing downloads for {delay}s")
+            slower = " and downloading one track at a time from now on" if download_workers > 1 else ""
+            dashboard.log(f"[SoundCloud] Rate limited by SoundCloud, pausing downloads for {delay}s{slower}")
         if download.unavailable is not None:
             unavailable(job, UnavailableTrack.from_info(download.info, download.unavailable), slot)
             return
@@ -1112,6 +1178,7 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
         if not download.ok or download.raw_path is None:
             ctx.fail()
             dashboard.record_track("soundcloud", "failed")
+            _note_failure(dashboard, job, download.category, download.info)
             return
         ctx.gate.relax()
         hand_over(job, "new", download.raw_path, download.info)

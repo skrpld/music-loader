@@ -10,6 +10,8 @@ Events:
 
     {"type": "runlog", "path": "..."}
     {"type": "unavailable_log", "path": "..."}      (when the first unavailable track is listed)
+    {"type": "failure", "service": "spotify" | "soundcloud", "category": "rate_limited" | "network" | "failed",
+     "url": "...", "title": "..."}                 (a track or a whole link that failed)
     {"type": "queue", "completed": 1, "total": 3}
     {"type": "stats", "stats": {...Stats fields...}}
     {"type": "log", "level": "info" | "error", "source": "Spotify" | null, "text": "..."}
@@ -17,7 +19,9 @@ Events:
      "speed": "...", "eta": "..."}
     {"type": "finished", "status": "completed" | "cancelled" | "failed", "message": "..."}
 
-Private SoundCloud tokens are masked in every text that leaves the process.
+Private SoundCloud tokens are masked in every text that leaves the process;
+only a "failure" event carries its link unmasked, because the server needs it
+to retry the track (and redacts it again in everything it sends to clients).
 """
 from __future__ import annotations
 
@@ -26,7 +30,7 @@ import threading
 from dataclasses import asdict
 from typing import Any, Optional, TextIO
 
-from .availability import UnavailableTrack
+from .availability import FailureCategory, UnavailableTrack
 from .runlog import RunLog, redact_secrets
 from .ui import Stats
 
@@ -84,6 +88,12 @@ class EventDashboard:
                 self._unavailable_announced = True
             if announce:
                 self.emit({"type": "unavailable_log", "path": str(self.runlog.unavailable_path)})
+
+    def record_failure(self, kind: str, category: FailureCategory, url: str, title: str = "") -> None:
+        if not url:
+            return
+        self.emit({"type": "failure", "service": kind, "category": category.value,
+                   "url": url, "title": redact_secrets(title)[:300]})
 
     def record_lyrics(self, found: bool) -> None:
         self._bump("lyrics_ok" if found else "lyrics_fail", 1)

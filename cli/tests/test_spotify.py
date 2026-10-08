@@ -29,6 +29,7 @@ def _closed_port() -> int:
 class _Dashboard:
     def __init__(self):
         self.errors: list[str] = []
+        self.failures: list[tuple] = []
         self.finished = 0
 
     def log(self, message): pass
@@ -38,6 +39,9 @@ class _Dashboard:
 
     def log_error(self, source, message):
         self.errors.append(f"{source}: {message}")
+
+    def record_failure(self, kind, category, url, title=""):
+        self.failures.append((kind, category.value, url, title))
 
 
 class _Forbidden(BaseHTTPRequestHandler):
