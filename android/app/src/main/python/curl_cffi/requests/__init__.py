@@ -17,10 +17,15 @@ _REQUEST_ARGS = {
 }
 
 
+# curl_cffi's default; requests has none and would wait on a stalled connection forever.
+DEFAULT_TIMEOUT = 30
+
+
 class Session(_requests.Session):
-    def __init__(self, *args, impersonate=None, **kwargs):
+    def __init__(self, *args, impersonate=None, timeout=DEFAULT_TIMEOUT, **kwargs):
         super().__init__()
         self.impersonate = impersonate
+        self.timeout = timeout
         for key in ("headers", "cookies", "proxies"):
             value = kwargs.get(key)
             if value:
@@ -28,6 +33,8 @@ class Session(_requests.Session):
 
     def request(self, method, url, *args, **kwargs):
         kwargs = {key: value for key, value in kwargs.items() if key in _REQUEST_ARGS}
+        if kwargs.get("timeout") is None:
+            kwargs["timeout"] = self.timeout
         return super().request(method, url, *args, **kwargs)
 
 
@@ -44,5 +51,5 @@ def post(url, **kwargs):
     return request("POST", url, **kwargs)
 
 
-__all__ = ["BrowserTypeLiteral", "HTTPError", "Response", "Session", "RequestException", "exceptions",
+__all__ = ["BrowserTypeLiteral", "DEFAULT_TIMEOUT", "HTTPError", "Response", "Session", "RequestException", "exceptions",
            "request", "get", "post"]
