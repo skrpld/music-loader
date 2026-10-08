@@ -61,3 +61,19 @@ def test_downloads_drop_to_one_at_a_time_after_a_rate_limit():
     limiter.release()
     gate.reset_throttle()              # ...but the next run starts at full speed
     assert limiter.limit == 3
+
+
+def test_android_spotify_credentials_reach_the_worker_config_only_when_both_are_set(monkeypatch, tmp_path):
+    from music_loader import android, worker
+
+    monkeypatch.delenv("SPOTIFY_CLIENT_ID", raising=False)
+    monkeypatch.delenv("SPOTIFY_CLIENT_SECRET", raising=False)
+    spec = {"output": str(tmp_path)}
+    android.set_spotify_credentials(" my-id ", " my-secret ")
+    config = worker.build_config(spec)
+    assert (config.spotify_client_id, config.spotify_client_secret) == ("my-id", "my-secret")
+    android.set_spotify_credentials("my-id", "")           # half a pair is no pair
+    config = worker.build_config(spec)
+    assert config.spotify_client_id is None and config.spotify_client_secret is None
+    android.set_spotify_credentials("", "")
+    assert worker.build_config(spec).spotify_client_secret is None
