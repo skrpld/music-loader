@@ -13,8 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -39,19 +37,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.skrpld.musicloader.R
 import dev.skrpld.musicloader.data.Job
 import dev.skrpld.musicloader.data.JobStatus
-import dev.skrpld.musicloader.data.LogEntry
 import dev.skrpld.musicloader.data.RetryScope
 import dev.skrpld.musicloader.ui.components.CenteredLoading
 import dev.skrpld.musicloader.ui.components.EmptyState
 import dev.skrpld.musicloader.ui.components.Pill
 import dev.skrpld.musicloader.ui.components.SectionHeader
-import dev.skrpld.musicloader.ui.formatClock
 import dev.skrpld.musicloader.ui.formatDateTime
 import dev.skrpld.musicloader.ui.formatDuration
 import dev.skrpld.musicloader.ui.formatTime
@@ -160,32 +155,31 @@ private fun JobDetailContent(
         ),
         verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
     ) {
-        item(key = "status") { StatusCard(job) }
+        if (job.status == JobStatus.Running) {
+            item(key = "progress") {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.extraLarge,
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+                ) {
+                    Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        JobProgressHeader(job, showElapsed = true)
+                        LinkQueueProgress(job)
+                        ActiveDownloads(job)
+                    }
+                }
+            }
+        } else {
+            item(key = "status") { StatusCard(job) }
+        }
         if (job.isWaitingForRetry) {
             item(key = "retry-wait") { RetryWaitCard(job, onCancel = { onCancelRetryWait(job) }) }
         }
         if (canRetry && job.status.isFinished) {
             item(key = "retry-actions") { RetryActions(job, onRetry) }
         }
-        if (job.status == JobStatus.Running) {
-            item(key = "progress") {
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    shape = MaterialTheme.shapes.extraLarge,
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
-                ) {
-                    Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        JobProgressHeader(job)
-                        LinkQueueProgress(job)
-                        ActiveDownloads(job.files)
-                    }
-                }
-            }
-        }
         if (job.status != JobStatus.Queued) {
-            item(key = "tiles") { TrackStatTiles(job, Modifier.padding(top = 8.dp)) }
-            item(key = "services") { ServiceSummary(job) }
-            failureGroups(job)
+            item(key = "statistics") { JobStatistics(job, Modifier.padding(top = 8.dp)) }
         }
         item(key = "options-header") { SectionHeader(stringResource(R.string.job_options)) }
         item(key = "options") { OptionPills(job) }
@@ -213,15 +207,9 @@ private fun JobDetailContent(
                 }
             }
         }
-        if (job.errors.isNotEmpty() || job.errorCount > 0) {
-            item(key = "errors-header") {
-                SectionHeader(stringResource(R.string.job_errors_count, job.errorCount))
-            }
-            logEntries("error", job.errors.asReversed())
-        }
-        if (job.log.isNotEmpty()) {
+        if (job.log.isNotEmpty() || job.errors.isNotEmpty()) {
             item(key = "log-header") { SectionHeader(stringResource(R.string.job_activity)) }
-            logEntries("log", job.log.asReversed())
+            item(key = "log") { ActivityLog(job) }
         }
         val unavailableLog = job.unavailableLog
         if (unavailableLog != null && job.stats.tracksUnavailable > 0) {
@@ -263,51 +251,6 @@ private fun JobDetailContent(
                 }
             }
         }
-    }
-}
-
-/** Failed tracks by category: "rate limited, can be retried" apart from "DRM-protected, cannot be downloaded". */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
-private fun LazyListScope.failureGroups(job: Job) {
-    val groups = job.failedItems.groupBy { it.category }.toList().sortedBy { failureCategoryOrder(it.first) }
-    val unavailable = job.stats.tracksUnavailable
-    if (groups.isEmpty() && unavailable == 0) return
-    item(key = "failures-header") { SectionHeader(stringResource(R.string.job_failures)) }
-    for ((category, items) in groups) {
-        item(key = "failure-group-$category") { FailureGroupHeader(category, items.size) }
-        itemsIndexed(items, key = { index, _ -> "failure-$category-$index" }) { index, entry ->
-            SegmentedListItem(
-                shapes = ListItemDefaults.segmentedShapes(index = index, count = items.size),
-                leadingContent = {
-                    Icon(
-                        painter = painterResource(if (entry.retryable) R.drawable.ic_schedule else R.drawable.ic_error),
-                        contentDescription = null,
-                    )
-                },
-                supportingContent = { Text(text = entry.url, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-            ) {
-                Text(text = entry.title.ifBlank { entry.url }, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            }
-        }
-    }
-    if (unavailable > 0) {
-        // Not failures: listed in the unavailable-tracks file, never retried.
-        item(key = "failure-group-unavailable") { FailureGroupHeader("unavailable", unavailable) }
-    }
-}
-
-@Composable
-private fun FailureGroupHeader(category: String, count: Int) {
-    Column(modifier = Modifier.padding(start = 4.dp, top = 12.dp, bottom = 4.dp)) {
-        Text(
-            text = stringResource(R.string.failure_group_title, failureCategoryName(category), count),
-            style = MaterialTheme.typography.titleSmall,
-        )
-        Text(
-            text = failureCategoryHint(category),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 
@@ -377,57 +320,30 @@ private fun RetryActions(job: Job, onRetry: (Job, RetryScope) -> Unit) {
     }
 }
 
-private fun LazyListScope.logEntries(prefix: String, entries: List<LogEntry>) {
-    items(entries, key = { "$prefix-${it.seq}" }) { entry -> LogRow(entry) }
-}
-
-@Composable
-private fun LogRow(entry: LogEntry) {
-    val color = if (entry.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text(
-            text = formatClock(entry.time),
-            style = MaterialTheme.typography.labelSmall,
-            fontFamily = FontFamily.Monospace,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            text = if (entry.source != null) "[${entry.source}] ${entry.text}" else entry.text,
-            style = MaterialTheme.typography.bodySmall,
-            fontFamily = FontFamily.Monospace,
-            color = color,
-            modifier = Modifier.weight(1f),
-        )
-    }
-}
-
+/** Status, when it happened and how long it took, in two lines; the progress block replaces it while the job runs. */
 @Composable
 private fun StatusCard(job: Job) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.extraLarge,
+        shape = MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
     ) {
-        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Icon(
                     painter = painterResource(statusIcon(job)),
                     contentDescription = null,
                     tint = statusColor(job),
-                    modifier = Modifier.size(32.dp),
+                    modifier = Modifier.size(24.dp),
                 )
-                Text(text = statusLabel(job), style = MaterialTheme.typography.titleLargeEmphasized)
-            }
-            DetailLine(stringResource(R.string.job_created), formatDateTime(job.createdAt))
-            job.startedAt?.let { DetailLine(stringResource(R.string.job_started), formatDateTime(it)) }
-            job.finishedAt?.let { DetailLine(stringResource(R.string.job_finished), formatDateTime(it)) }
-            val started = job.startedAt
-            if (started != null) {
-                val end = job.finishedAt ?: System.currentTimeMillis()
-                DetailLine(stringResource(R.string.job_duration), formatDuration(end - started))
+                Column {
+                    Text(text = statusLabel(job), style = MaterialTheme.typography.titleMediumEmphasized)
+                    Text(
+                        text = timingLine(job),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             job.message?.let {
                 Text(text = it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
@@ -436,65 +352,13 @@ private fun StatusCard(job: Job) {
     }
 }
 
+/** "Created 09.10.26, 14:05", or "Finished 09.10.26, 14:09 · took 4:02". */
 @Composable
-private fun DetailLine(label: String, value: String) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(text = label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(text = value, style = MaterialTheme.typography.bodyMedium)
-    }
-}
-
-@Composable
-private fun ServiceSummary(job: Job) {
-    val stats = job.stats
-    Card(
-        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-        shape = MaterialTheme.shapes.large,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-    ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            if (stats.spotifyTracksTotal > 0 || stats.spotifyOk + stats.spotifyFail > 0) {
-                DetailLine(
-                    "Spotify",
-                    stringResource(
-                        R.string.service_summary,
-                        stats.spotifyTracksDone,
-                        stats.spotifyTracksSkipped,
-                        stats.spotifyTracksFailed,
-                    ),
-                )
-            }
-            if (stats.soundcloudTracksTotal > 0 || stats.soundcloudOk + stats.soundcloudFail > 0) {
-                DetailLine(
-                    "SoundCloud",
-                    if (stats.soundcloudTracksUnavailable > 0) {
-                        stringResource(
-                            R.string.service_summary_unavailable,
-                            stats.soundcloudTracksDone,
-                            stats.soundcloudTracksSkipped,
-                            stats.soundcloudTracksFailed,
-                            stats.soundcloudTracksUnavailable,
-                        )
-                    } else {
-                        stringResource(
-                            R.string.service_summary,
-                            stats.soundcloudTracksDone,
-                            stats.soundcloudTracksSkipped,
-                            stats.soundcloudTracksFailed,
-                        )
-                    },
-                )
-            }
-            DetailLine(
-                stringResource(R.string.lyrics_title),
-                stringResource(R.string.lyrics_summary, stats.lyricsOk, stats.lyricsFail, stats.lyricsSkipped),
-            )
-            val failedLinks = stats.spotifyFail + stats.soundcloudFail
-            if (failedLinks > 0) {
-                DetailLine(stringResource(R.string.job_failed_links), failedLinks.toString())
-            }
-        }
-    }
+private fun timingLine(job: Job): String {
+    val finished = job.finishedAt ?: return stringResource(R.string.job_created_at, formatDateTime(job.createdAt))
+    val started = job.startedAt
+        ?: return stringResource(R.string.job_finished_at, formatDateTime(finished))
+    return stringResource(R.string.job_finished_took, formatDateTime(finished), formatDuration(finished - started))
 }
 
 @OptIn(ExperimentalLayoutApi::class)

@@ -119,17 +119,6 @@ fun failureCategoryName(category: String): String = stringResource(
     },
 )
 
-/** What the category means and whether a retry can help. */
-@Composable
-fun failureCategoryHint(category: String): String = stringResource(
-    when (category) {
-        "rate_limited" -> R.string.failure_rate_limited_hint
-        "network" -> R.string.failure_network_hint
-        "unavailable" -> R.string.failure_unavailable_hint
-        else -> R.string.failure_failed_hint
-    },
-)
-
 /** Retryable categories first, in the order of how likely a retry is to help. */
 fun failureCategoryOrder(category: String): Int = when (category) {
     "rate_limited" -> 0
