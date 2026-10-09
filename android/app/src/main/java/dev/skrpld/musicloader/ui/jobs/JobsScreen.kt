@@ -227,7 +227,7 @@ private fun ActiveJobCard(job: Job, onClick: () -> Unit, onCancel: () -> Unit, m
             }
             JobProgressHeader(job)
             LinkQueueProgress(job)
-            ActiveDownloads(job.files)
+            ActiveDownloads(job)
             if (!job.cancelRequested) {
                 OutlinedButton(
                     onClick = onCancel,

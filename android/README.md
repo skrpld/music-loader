@@ -15,10 +15,13 @@ Russian. Android 8.0 (API 26) or later, `arm64-v8a`.
 
 - **Download**: paste links (or share them from the Spotify / SoundCloud app
   into Music Loader), choose the lyrics mode and options, add to the queue.
-- **Jobs**: the running job live - links and tracks progress, active
-  downloads with speed and ETA, counters - plus the queue and finished jobs
-  with their errors and activity log; cancel and remove. A finished job shows
-  its failures by kind (rate limited, network, failed, unavailable) with
+- **Jobs**: the running job live - links and tracks progress, elapsed time,
+  active downloads with speed and ETA (no ETA for a single track) - plus the
+  queue and finished jobs; cancel and remove. One statistics block counts
+  tracks (split by service when a job has both), failures by kind (rate
+  limited, network, failed) and lyrics. The activity log scrolls inside its
+  own block and can be filtered - everything or errors only, by tag
+  (`Spotify`, `Lyrics`, ...) and by a search word. A finished job offers
   **Retry failed (N)** - only the tracks a retry can help - and **Run again**.
   With the *Retry automatically* option (off by default) the failed tracks are
   queued again after 15, 30 and 60 minutes; the job shows when the next
