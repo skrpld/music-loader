@@ -1,149 +1,85 @@
 # Music Loader for Android
 
-Downloads Spotify and SoundCloud links straight to the phone - the
-[`music_loader`](../cli/music_loader) package runs inside the app - or queues
-them on a computer running [`music-loader serve`](../docs/server.md) and
-follows the downloads there.
+Downloads Spotify and SoundCloud links straight to the phone, or queues them on a Music Loader server.
 
-Kotlin and Jetpack Compose with Material 3 Expressive: dynamic colors from the
-wallpaper (Android 12+), light / dark / system theme, expressive motion, wavy
-progress indicators, and an adaptive layout - bottom bar on phones, navigation
-rail and list + details side by side on tablets and foldables. English and
-Russian. Android 8.0 (API 26) or later, `arm64-v8a`.
+The [`music_loader`](../cli/music_loader) package runs inside the app (phone mode, the default), or
+the app drives a computer running [`music-loader serve`](../docs/how-to/run-a-server.md) and follows
+the downloads there (server mode). Kotlin and Jetpack Compose with Material 3 Expressive: dynamic
+colors from the wallpaper (Android 12+), light / dark / system theme, adaptive layout (bottom bar
+on phones, navigation rail and list + details on tablets and foldables). English and Russian.
 
-## Screens
+## Table of Contents
 
-- **Download**: paste links (or share them from the Spotify / SoundCloud app
-  into Music Loader), choose the lyrics mode and options, add to the queue.
-- **Jobs**: the running job live - links and tracks progress, elapsed time,
-  active downloads with speed and ETA (no ETA for a single track) - plus the
-  queue and finished jobs; cancel and remove. One statistics block counts
-  tracks (split by service when a job has both), failures by kind (rate
-  limited, network, failed) and lyrics. The activity log scrolls inside its
-  own block and can be filtered - everything or errors only, by tag
-  (`Spotify`, `Lyrics`, ...) and by a search word. A finished job offers
-  **Retry failed (N)** - only the tracks a retry can help - and **Run again**.
-  With the *Retry automatically* option (off by default) the failed tracks are
-  queued again after 15, 30 and 60 minutes; the job shows when the next
-  attempt is due and the wait can be cancelled. The timer lives in the app
-  process: it works while the download service runs and is lost when the app
-  is killed. These actions need `music-loader` 2.2 or later on a server (the
-  app hides them for an older one).
-- **Settings**: where to download (this phone or a server); the phone's music
-  folder and storage access, or the server address and token with a
-  connection test; optional Spotify Client ID / Secret for the phone mode
-  (official API, fewer 403/429 refusals; stored encrypted with the Android
-  Keystore, never logged or sent anywhere but to Spotify); theme, dynamic colors.
-
-## Download modes
-
-### This phone (default)
-
-The app downloads, converts, tags and finds lyrics itself and saves to a
-folder on the phone (default: the shared `Music` folder; pick another one in
-Settings). The library layout is the same as on a computer.
-
-How it works:
-
-- The `music_loader` package is embedded with
-  [Chaquopy](https://chaquo.com/chaquopy/). The app starts the same server as
-  `music-loader serve` inside itself, bound to `127.0.0.1` with a fresh token,
-  and talks to it like to a remote one.
-- Android has no Python executable, so spotDL and yt-dlp run in threads of the
-  app process instead of child processes
-  ([`inprocess.py`](../cli/music_loader/inprocess.py)); cancelling stops them
-  the same way Ctrl+C does.
-- ffmpeg/ffprobe and QuickJS (the JavaScript runtime yt-dlp needs for
-  YouTube, spotDL's audio source) come from the
-  [youtubedl-android](https://github.com/yausername/youtubedl-android)
-  packages and are shipped as native libraries; the first start after
-  installing or updating unpacks them (up to a minute).
-- While the queue runs, a foreground service with a progress notification
-  keeps the app alive with the screen off. Finished tracks are handed to the
-  media scanner so players see them.
-
-Permissions:
-
-- **All files access** (Android 11+; the storage permission on older
-  versions): tracks, `.lrc` lyrics, playlists and the index files are written
-  as plain files.
-- **Notifications**: the download progress.
-
-Limits:
-
-- `arm64-v8a` devices only (practically every phone of the last years).
-- There is no `curl_cffi` for Android, so yt-dlp cannot impersonate a
-  browser: SoundCloud may refuse profile, likes and reposts listings
-  (HTTP 403); tracks and sets work. spotDL's built-in Spotify client also runs
-  without browser impersonation; if Spotify refuses it, use the server mode.
-- Spotify must be reachable from the app itself. With a VPN, the VPN app has
-  to include Music Loader (split tunneling often leaves new apps out); a
-  link then fails after a few seconds with "Cannot reach open.spotify.com".
-- Tracks SoundCloud only serves DRM-protected (or as a 30-second preview) are
-  skipped and shown as "Unavailable"; the option "Look for blocked tracks
-  elsewhere" takes the same track from YouTube Music when artist, title,
-  version and length match (off by default).
-- Jobs live in the app's memory: the list starts empty after Android ends the
-  app. The library and its indexes are on disk, so running a link again only
-  fetches what is missing.
-- The APK is large (~100 MB): Python, the packages and ffmpeg are inside.
-
-### Server
-
-A computer running `music-loader serve` downloads into its own library; the
-app queues links and follows the progress:
-
-```bash
-music-loader serve -o ~/Music
-```
-
-Enter the printed address and token in **Settings → Where to download →
-Server**, then **Test → Save**.
+- [Install](#install)
+- [Usage](#usage)
+- [Development](#development)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## Install
 
-Download `music-loader-<version>.apk` from the latest
-[`android-v*` release](https://github.com/skrpld/music-loader/releases) and
-open it on the phone (allow installing from the browser / file manager when
-asked).
+Requires Android 8.0 (API 26) or newer on an `arm64-v8a` device.
 
-APKs named `*-debug.apk` are signed with a throwaway key; uninstall the
-previous build before installing one.
+Download `music-loader-<VERSION>.apk` from the latest
+[`android-v*` release](https://github.com/skrpld/music-loader/releases) and open it on the phone
+(allow installing from the browser / file manager when asked). `<VERSION>` is the app version, for
+example `1.3.0`. Each release also has a `.sha256` checksum file.
 
-## Build
+APKs named `*-debug.apk` are signed with a throwaway key; uninstall the previous build before
+installing one.
 
-JDK 17+, the Android SDK (or Android Studio) and Python 3.13 in `PATH`
-(Chaquopy installs the app's Python packages with it):
+### Build from source
 
-```bash
-cd android
-./gradlew assembleDebug     # app/build/outputs/apk/debug/app-debug.apk
-./gradlew assembleRelease   # unsigned unless ANDROID_KEYSTORE_PATH etc. are set
+Requires JDK 17+, the Android SDK (or Android Studio) with platform 37, and Python 3.13 in `PATH`
+(Chaquopy installs the app's Python packages with it). The Gradle wrapper downloads Gradle 9.5.0.
+
+```sh
+git clone https://github.com/skrpld/music-loader
+cd music-loader/android
+./gradlew assembleDebug
+adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
-The app's Python packages are pinned in
-[`app/requirements-android.txt`](app/requirements-android.txt): pure-Python
-wheels only, installed without dependency resolution; three of them are
-prebuilt in [`app/wheels/`](app/wheels): rapidfuzz and websockets without
-their C extensions, and pykakasi patched to find its dictionaries through
-`__file__` (Chaquopy's `importlib.resources.files()` returns no file system
-path for a folder). No package is listed in Chaquopy's `extractPackages`:
-data files are extracted anyway when their package is first imported. The
-comments in the requirements file have the build commands. Stand-ins for
-packages without an Android build are in
-[`app/src/main/python/`](app/src/main/python).
+## Usage
 
-If the bundled packages are broken, the phone mode does not start and shows
-the error ("spotDL does not load: ...") instead of failing every Spotify job.
+1. On the first start, allow **All files access** (the storage permission on Android 10 and older)
+   and notifications when asked. The first start after installing or updating unpacks ffmpeg and
+   the JavaScript runtime (up to a minute).
+2. On **Download**, paste links, or share them from the Spotify / SoundCloud app into Music Loader.
+   Choose the lyrics mode and options, then add them to the queue.
+3. Follow progress on **Jobs**: links and tracks progress, active downloads with speed and ETA,
+   statistics and a filterable activity log. A finished job offers **Retry failed (N)** and
+   **Run again**; the *Retry automatically* option queues failed tracks again after 15, 30 and 60
+   minutes.
 
-Release signing reads `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`,
-`ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` from the environment; CI sets
-them from repository secrets. Versioning, signing setup and the release
-process: [docs/releasing.md](../docs/releasing.md).
+The music lands in the phone's `Music` folder; pick another folder in **Settings**.
 
-## Code map
+To download on a computer instead, run `music-loader serve -o ~/Music` there, then enter the
+printed address and token in **Settings → Where to download → Server** and tap **Test → Save**.
+Retry actions need `music-loader` 2.2 or later on the server.
 
-```
+**Settings** also holds optional Spotify Client ID / Secret for the phone mode (official API, fewer
+403/429 refusals; stored encrypted with the Android Keystore), theme and dynamic colors.
+
+How the phone mode works, its permissions and limits:
+[About the Android phone mode](../docs/explanation/android-phone-mode.md).
+
+## Development
+
+| Task | Command (from `android/`) |
+|---|---|
+| Debug APK | `./gradlew assembleDebug` (`app/build/outputs/apk/debug/app-debug.apk`) |
+| Release APK | `./gradlew assembleRelease` |
+
+`assembleRelease` signs the APK when `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`,
+`ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` are set in the environment; CI sets them from
+repository secrets. Versioning and signing setup: [Publish a release](../docs/how-to/publish-a-release.md).
+
+The app's Python packages are pinned in [`app/requirements-android.txt`](app/requirements-android.txt);
+its comments have the build commands for the prebuilt wheels in [`app/wheels/`](app/wheels). A new
+dependency of `music_loader` must be added there too, not only to `cli/pyproject.toml`.
+
+```text
 app/src/main/
 ├── java/dev/skrpld/musicloader/
 │   ├── MainActivity.kt, MusicLoaderApplication.kt
@@ -152,3 +88,16 @@ app/src/main/
 │   └── ui/        # Compose screens: download, jobs, settings; theme; view models
 └── python/        # Android-only stand-ins (curl_cffi, pymongo)
 ```
+
+UI strings are localized in English and Russian (`res/values/strings.xml`,
+`res/values-ru/strings.xml`); add new strings to both.
+
+## Contributing
+
+Questions and bug reports: [issues](https://github.com/skrpld/music-loader/issues). Pull requests
+are welcome; commits follow [Conventional Commits](https://www.conventionalcommits.org/) with a
+scope such as `android`.
+
+## License
+
+[Apache-2.0](../LICENSE) © skrpld

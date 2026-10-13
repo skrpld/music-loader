@@ -10,7 +10,7 @@ the environment or from files outside the checkout:
 | Spotify client id / secret (optional) | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET`; handed to spotdl through its environment, never on its command line |
 | Server token | `MUSIC_LOADER_TOKEN`, or `~/.config/music-loader/server-token` (mode `0600`) |
 | Server token in the app | app-private storage; backups and device transfer are disabled |
-| Android signing key | GitHub Actions secrets (see [releasing.md](releasing.md)); decoded into the runner's temp folder and removed after the build |
+| Android signing key | GitHub Actions secrets (see [Publish a release](../how-to/publish-a-release.md)); decoded into the runner's temp folder and removed after the build |
 
 `.gitignore` excludes `.env*`, keystores (`*.jks`, `*.keystore`,
 `keystore.properties`), `local.properties`, link lists (`links.txt`), logs and

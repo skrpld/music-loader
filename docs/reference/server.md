@@ -1,21 +1,14 @@
-# Server mode and API
+# Server
 
-`music-loader serve` runs Music Loader on the machine that holds the library;
-the [Android app](../android/README.md) (or any HTTP client) queues links and
-follows the downloads from another device.
+`music-loader serve` runs the download engine as an HTTP server for the
+[Android app](../../android/README.md) or any HTTP client. Setup steps:
+[Run a server for the Android app](../how-to/run-a-server.md).
 
-```bash
-music-loader serve -o /path/to/Music
+```text
+music-loader serve -o <MUSIC_FOLDER> [--host HOST] [--port PORT] [--token TOKEN] [--new-token]
 ```
 
-At startup the server prints its address and the access token:
-
-```
-Server address: http://192.168.1.10:8765
-Token: <generated token> (~/.config/music-loader/server-token)
-```
-
-Enter both in the app: **Settings → Where to download → Server**, then **Test → Save**.
+`<MUSIC_FOLDER>` is the library folder jobs download into.
 
 ## Options
 
@@ -60,42 +53,6 @@ An explicit token must be at least 16 characters of letters, digits and
 - Stopping the server (Ctrl+C, SIGTERM) cancels the running job the same way.
 - Limits: 100 queued jobs, 2000 links per job, 50 finished jobs kept,
   256 KiB request body.
-
-## Deployment
-
-The server speaks plain HTTP. Use it:
-
-- in the home network, or
-- over a VPN (Tailscale, WireGuard), or
-- behind an HTTPS reverse proxy with `--host 127.0.0.1`. The event stream
-  needs response buffering off; the server sends `X-Accel-Buffering: no` for
-  nginx.
-
-Example systemd unit (`~/.config/systemd/user/music-loader.service`):
-
-```ini
-[Unit]
-Description=Music Loader server
-After=network-online.target
-
-[Service]
-ExecStart=%h/.local/bin/music-loader serve -o %h/Music
-Restart=on-failure
-# Optional: own Spotify credentials, a fixed token
-# EnvironmentFile=%h/.config/music-loader/env
-
-[Install]
-WantedBy=default.target
-```
-
-```bash
-systemctl --user daemon-reload
-systemctl --user enable --now music-loader
-journalctl --user -u music-loader -f     # shows the address and token
-```
-
-Keep an `EnvironmentFile` with secrets readable only by its owner
-(`chmod 600`).
 
 ## HTTP API
 

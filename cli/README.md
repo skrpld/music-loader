@@ -1,138 +1,121 @@
-# music-loader (CLI and server)
+# music-loader
 
-Downloads music with full metadata from Spotify (via spotDL) and SoundCloud
-(via yt-dlp), looks up **verified** lyrics, and files everything into a
-library ready for Symfonium. Progress is shown in a live terminal dashboard;
-`music-loader serve` exposes the same engine to the Android app, which also
-embeds this package to download on the phone itself.
+Downloads music with metadata from Spotify and SoundCloud, fetches verified lyrics, prepares the library for Symfonium.
+
+Downloads Spotify links via spotDL and SoundCloud links via yt-dlp, writes full metadata and
+cover art, looks up **verified** lyrics, and files everything into one folder per album. Progress
+is shown in a live terminal dashboard. `music-loader serve` exposes the same engine to the Android
+app, which also embeds this package to download on the phone itself.
 
 Project overview: <https://github.com/skrpld/music-loader>.
 
-## Installation
+## Table of Contents
 
-**Requirements:** Python 3.10+, [ffmpeg](https://ffmpeg.org/) in `PATH`.
-spotDL, yt-dlp (with `curl-cffi`), rich, mutagen and beautifulsoup4 are
-installed as dependencies. Optional: [Deno](https://deno.com) or Node.js
-(faster, more reliable YouTube extraction for Spotify tracks).
+- [Install](#install)
+- [Usage](#usage)
+- [Development](#development)
+- [Contributing](#contributing)
+- [License](#license)
 
-```bash
-# ffmpeg
+## Install
+
+Requires Python 3.10+ and [ffmpeg](https://ffmpeg.org/) in `PATH`. The package is not on PyPI;
+install it from a GitHub release (the `.whl` asset of a `cli-v*` release):
+
+```sh
+pipx install ./music_loader-<VERSION>-py3-none-any.whl
+```
+
+`<VERSION>` is the release version, for example `2.1.0`. Or install straight from the repository:
+
+```sh
+pipx install "git+https://github.com/skrpld/music-loader#subdirectory=cli"
+```
+
+### Dependencies
+
+ffmpeg is installed by hand:
+
+```sh
 sudo apt install ffmpeg        # Debian/Ubuntu
 brew install ffmpeg            # macOS
 winget install ffmpeg          # Windows
-
-# From a GitHub release (asset of a cli-v* release)
-pipx install ./music_loader-<version>-py3-none-any.whl
-
-# From the repository
-pipx install "git+https://github.com/skrpld/music-loader#subdirectory=cli"
-
-# From a checkout (development)
-pip install -e "cli[dev]"
 ```
 
-Without installing: `cd cli && python -m music_loader ...` (the dependencies
-must be installed in that Python).
+spotDL, yt-dlp (with `curl-cffi`), rich, mutagen and beautifulsoup4 are installed as package
+dependencies. Optional: [Deno](https://deno.com) or Node.js for faster, more reliable YouTube
+extraction for Spotify tracks.
+
+### Updating
+
+Run the same `pipx install` command with `--force`, or `pipx upgrade music-loader` for an install
+from the repository.
 
 ## Usage
 
-```bash
-# A single link
-music-loader "https://open.spotify.com/album/..." -o /path/to/Music
+```sh
+music-loader "https://open.spotify.com/album/..." -o ~/Music
+```
 
-# A file with one link per line ("#" starts a comment)
-music-loader links.txt -o /path/to/Music
+The album is downloaded into `~/Music/<album artist> - <album>/`, tagged, with lyrics next to the
+tracks where a verified match exists.
 
-# Several sources at once
-music-loader links.txt "https://soundcloud.com/..." -o /path/to/Music
+### CLI
 
-# Interactive: asks for links and the target folder
+```text
+music-loader [OPTIONS] [SOURCE ...]
+music-loader serve -o <MUSIC_FOLDER> [OPTIONS]
+```
+
+A file with one link per line (`#` starts a comment), together with another link:
+
+```sh
+music-loader links.txt "https://soundcloud.com/..." -o ~/Music
+```
+
+Interactive mode, which asks for links and the target folder:
+
+```sh
 music-loader
-
-# Bring tracks downloaded by an older version up to the current rules
-music-loader links.txt -o /path/to/Music --recheck
 ```
 
-Accepted links: Spotify (`open.spotify.com/{track,album,playlist,artist}/...`,
-`spotify:...` URIs) and SoundCloud (`soundcloud.com`, `m.`,
-`on.soundcloud.com`, `snd.sc`, API URLs). Anything else is reported and
-skipped.
+Bring tracks downloaded by an older version up to the current rules:
 
-| Link | Downloads |
-|---|---|
-| Spotify track / album / playlist | that item |
-| Spotify artist | the whole discography |
-| SoundCloud track | that track |
-| SoundCloud set (`/sets/...`) | its tracks; album/EP/single sets also give album, album artist, track numbers |
-| SoundCloud profile | the artist's own albums and tracks; reposts with `--soundcloud-reposts`, likes with `--soundcloud-likes` |
-| SoundCloud profile page (`/tracks`, `/albums`, `/sets`, `/likes`, `/reposts`) | exactly that page |
-
-## Options
-
-| Option | Default | Meaning |
-|---|---|---|
-| `-o, --output` | asked | Target Music folder |
-| `--no-lyrics` | off | Do not look up lyrics |
-| `--lyrics-loose` | off | Loose lyrics matching; default is strict |
-| `--lyrics-workers N` | 2 | Parallel lyrics lookups |
-| `--recheck` | off | Check already downloaded tracks against the current rules again |
-| `--soundcloud-reposts` | off | Profile link: also download the profile's reposts |
-| `--soundcloud-likes` | off | Profile link: also download the profile's likes |
-| `--soundcloud-fallback` | off | For a track SoundCloud does not give out (DRM, preview only), take the same track from YouTube Music when artist, title, version and length match; the tags say where it came from |
-| `--soundcloud-download-workers N` | 2 | Parallel SoundCloud downloads |
-| `--soundcloud-workers N` | 4 | Parallel SoundCloud conversion/tagging workers |
-| `--spotify-threads N` | 4 | Parallel spotdl downloads |
-| `--spotify-client-id`, `--spotify-client-secret` | none | Optional own Spotify app credentials (prefer the environment variables below) |
-| `--version` | | Print the version |
-
-### Environment variables
-
-| Variable | Meaning |
-|---|---|
-| `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` | Own Spotify application credentials (<https://developer.spotify.com/dashboard>). Optional: spotDL 4.5+ works without them; with them spotdl uses the official Web API. |
-| `MUSIC_LOADER_TOKEN` | Access token for `music-loader serve` |
-
-Command-line arguments are visible to every user of the machine in the
-process list; environment variables are the safer channel for secrets.
-
-## Server mode
-
-```bash
-music-loader serve -o /path/to/Music
+```sh
+music-loader links.txt -o ~/Music --recheck
 ```
 
-Prints the server address and an access token for the Android app. Options,
-token handling, deployment and the HTTP API: [docs/server.md](https://github.com/skrpld/music-loader/blob/main/docs/server.md).
+Run as a server for the Android app (prints the address and an access token):
 
-## What ends up on disk
-
-```
-Music/
-├── <album artist> - <album>/<NN> - <title>.mp3 (+ .lrc)   # Spotify
-├── SoundCloud/
-│   ├── <album artist> - <album>/<NN> - <title>.mp3
-│   ├── <artist> - <song> - Single/01 - <song>.mp3
-│   └── *.m3u8                                              # playlists
-└── .music-loader-logs/
-    ├── failures-YYYYMMDD-HHMMSS.log
-    └── unavailable-YYYYMMDD-HHMMSS.log     # DRM / preview-only tracks that were skipped
+```sh
+music-loader serve -o ~/Music
 ```
 
-Plus a few hidden index files (`.sc_index.json`, `.spotify_index.json`, ...)
-that make re-runs fast and detect moved files. Details on metadata, lyrics
-matching and checks: [docs/how-it-works.md](https://github.com/skrpld/music-loader/blob/main/docs/how-it-works.md).
+Run `music-loader --help` for all options. Full reference: [CLI](https://github.com/skrpld/music-loader/blob/main/docs/reference/cli.md),
+[Server](https://github.com/skrpld/music-loader/blob/main/docs/reference/server.md). Naming,
+metadata and lyrics rules: [How it works](https://github.com/skrpld/music-loader/blob/main/docs/explanation/how-it-works.md).
+
+Without installing: `cd cli && python -m music_loader ...` (the dependencies must be installed in
+that Python).
 
 ## Development
 
-```bash
+```sh
 pip install -e ".[dev]"
 ruff check .
 pytest
 ```
 
-The version lives in `music_loader/__init__.py`; releases are cut by pushing
-a `cli-v<version>` tag ([docs/releasing.md](https://github.com/skrpld/music-loader/blob/main/docs/releasing.md)).
+Code stays compatible with Python 3.10 (CI tests 3.10 and 3.13). The version lives in
+`music_loader/__init__.py`; releases are cut by pushing a `cli-v<VERSION>` tag
+([Publish a release](https://github.com/skrpld/music-loader/blob/main/docs/how-to/publish-a-release.md)).
+
+## Contributing
+
+Questions and bug reports: [issues](https://github.com/skrpld/music-loader/issues). Pull requests
+are welcome; commits follow [Conventional Commits](https://www.conventionalcommits.org/) with a
+scope such as `cli`, `server`, `spotify` or `soundcloud`.
 
 ## License
 
-Apache License 2.0.
+[Apache-2.0](LICENSE) © skrpld
