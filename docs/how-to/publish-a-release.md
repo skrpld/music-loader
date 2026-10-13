@@ -1,4 +1,4 @@
-# Releasing
+# Publish a release
 
 The CLI and the Android app are versioned and released independently. A
 release is cut by pushing a tag; GitHub Actions builds, checks and publishes
@@ -6,8 +6,8 @@ it as a GitHub release.
 
 | Component | Tag | Workflow | Release assets |
 |---|---|---|---|
-| CLI / server | `cli-vX.Y.Z` | [`cli.yml`](../.github/workflows/cli.yml) | wheel, sdist, `SHA256SUMS` |
-| Android app | `android-vX.Y.Z` | [`android.yml`](../.github/workflows/android.yml) | `music-loader-X.Y.Z.apk`, `.sha256` |
+| CLI / server | `cli-vX.Y.Z` | [`cli.yml`](../../.github/workflows/cli.yml) | wheel, sdist, `SHA256SUMS` |
+| Android app | `android-vX.Y.Z` | [`android.yml`](../../.github/workflows/android.yml) | `music-loader-X.Y.Z.apk`, `.sha256` |
 
 A suffix (`cli-v2.1.0-rc.1`, `android-v1.1.0-beta.2`) publishes a
 pre-release. Release notes are generated from the pull requests and commits
@@ -15,7 +15,7 @@ since the previous tag of the same component.
 
 ## CLI
 
-1. Bump `__version__` in [`cli/music_loader/__init__.py`](../cli/music_loader/__init__.py)
+1. Bump `__version__` in [`cli/music_loader/__init__.py`](../../cli/music_loader/__init__.py)
    (the only place; `pyproject.toml` reads it).
 2. Commit and merge to `main`.
 3. Tag and push:
@@ -32,7 +32,7 @@ into a clean environment and runs it, then publishes the release.
 ## Android
 
 1. Optionally bump `appVersionName` in
-   [`android/gradle.properties`](../android/gradle.properties) (used by
+   [`android/gradle.properties`](../../android/gradle.properties) (used by
    branch builds; a tag build takes its version from the tag).
 2. Commit and merge to `main`.
 3. Tag and push:

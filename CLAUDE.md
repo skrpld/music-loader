@@ -8,7 +8,7 @@ Monorepo with two independently released components that share one Python packag
 
 - `cli/` — Python package `music-loader` (`cli/music_loader/`): command-line tool and HTTP server (`music-loader serve`). Python 3.10+, needs `ffmpeg` in `PATH` at runtime. Tests in `cli/tests/`.
 - `android/` — Android app (Kotlin, Jetpack Compose, Material 3 Expressive). It embeds `cli/music_loader` via Chaquopy (`android/app/build.gradle.kts` adds `../../cli` as a Python source dir), so **every change under `cli/music_loader/` also ships in the app** and triggers the Android workflow.
-- `docs/` — behaviour in depth (`how-it-works.md`), server API (`server.md`), releasing, security.
+- `docs/` — Diátaxis layout, index in `docs/README.md`: behaviour in depth (`explanation/how-it-works.md`), Android phone mode (`explanation/android-phone-mode.md`), security (`explanation/security.md`), CLI and server reference (`reference/cli.md`, `reference/server.md`), how-to guides (`how-to/run-a-server.md`, `how-to/publish-a-release.md`). CLI options live in `docs/reference/cli.md`, not in `cli/README.md`.
 - `.github/workflows/cli.yml`, `android.yml` — CI and tag-based releases; `.github/scripts/publish-release.sh` publishes GitHub releases.
 
 ## Commands
@@ -38,10 +38,10 @@ Android (from `android/`; JDK 17+, Android SDK, Python 3.13 in `PATH` for Chaquo
 - **Cancellation = Ctrl+C.** Server jobs are cancelled with SIGINT so the CLI's `KeyboardInterrupt` cleanup (stop tools, remove partial files, keep indexes consistent) is the single cleanup path.
 - **Android phone mode.** `android.py` is the app's entry point: it starts the same server bound to `127.0.0.1` with a fresh token. Android has no Python executable, so `process.py` hands commands starting with `inprocess.MARK` to `inprocess.py`, which runs spotDL/yt-dlp in threads with per-run stdout/stderr routing. `inprocess.py` drives spotDL internals — re-check it when bumping spotDL.
 - **Android Python deps** are pinned in `android/app/requirements-android.txt` (pure-Python wheels, installed with `--no-deps`; three prebuilt in `android/app/wheels/`, pykakasi patched for Chaquopy). Stand-ins for packages without an Android build (`curl_cffi`, `pymongo`) live in `android/app/src/main/python/`. A new dependency of `music_loader` must be added there too, not only to `cli/pyproject.toml`.
-- **Library state** lives in hidden index files in the output folder (`.sc_index.json`, `.spotify_index.json`, `.music-loader-artists.json`, lyrics attempt files); paths are relative so libraries can move. `artists.py` keeps one canonical spelling per artist; `text_utils.py`/`soundcloud_meta.py` parse SoundCloud titles into credits; `lyrics.py` does strict verified matching. Rules are documented in `docs/how-it-works.md` — update it when behaviour changes.
+- **Library state** lives in hidden index files in the output folder (`.sc_index.json`, `.spotify_index.json`, `.music-loader-artists.json`, lyrics attempt files); paths are relative so libraries can move. `artists.py` keeps one canonical spelling per artist; `text_utils.py`/`soundcloud_meta.py` parse SoundCloud titles into credits; `lyrics.py` does strict verified matching. Rules are documented in `docs/explanation/how-it-works.md` — update it when behaviour changes.
 - Tags are ID3v2.4: `TPE1` = `A, B` plus `TXXX:ARTISTS` with the real list (`tags.py`); spotDL's ID3v2.3 `A/B` output is rewritten after download.
 
-## Releasing (docs/releasing.md)
+## Releasing (docs/how-to/publish-a-release.md)
 
 CLI and Android are versioned and released independently by pushing a tag; GitHub Actions builds and publishes the release. A suffix (`-rc.1`, `-beta.2`) makes a pre-release.
 

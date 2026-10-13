@@ -2,7 +2,7 @@
 
 What Music Loader does with a link, how it names and tags files, how lyrics
 are verified, and which checks keep the library consistent. For installation
-and options see [cli/README.md](../cli/README.md).
+and options see the [CLI reference](../reference/cli.md).
 
 ## Library layout
 
@@ -32,7 +32,7 @@ artists stays together. Lyrics (`.lrc`) sit next to the audio file.
 
 ### Names
 
-[`naming.py`](../cli/music_loader/naming.py) builds every folder and file
+[`naming.py`](../../cli/music_loader/naming.py) builds every folder and file
 name, for Spotify and SoundCloud alike (spotDL writes to its own path first
 and the file is renamed right after the download):
 
@@ -237,7 +237,7 @@ spotDL's built-in client finds the query hashes of Spotify's web player by
 downloading the player's script and every chunk of it - for every track,
 album and release of an artist it looks at (about a minute per object on a
 phone). The hashes only change with the player's build, so
-[`spotify_cache.py`](../cli/music_loader/spotify_cache.py) keeps them per
+[`spotify_cache.py`](../../cli/music_loader/spotify_cache.py) keeps them per
 build in `<cache dir>/music-loader/spotify-hashes.json` (the last three
 builds; the cache dir is `$XDG_CACHE_HOME` or `~/.cache`). The first run after
 a new build of the player is still slow; the rest only ask the start page for
