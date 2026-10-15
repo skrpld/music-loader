@@ -66,8 +66,8 @@ reported and skipped.
 Music/
 ├── <album artist> - <album>/<NN> - <title>.mp3 (+ .lrc)   # Spotify
 ├── SoundCloud/
-│   ├── <album artist> - <album>/<NN> - <title>.mp3
-│   ├── <artist> - <song> - Single/01 - <song>.mp3
+│   ├── <album artist>/<album>/<NN> - <title>.mp3
+│   ├── <artist>/<song> - Single/01 - <song>.mp3
 │   └── *.m3u8                                              # playlists
 └── .music-loader-logs/
     ├── failures-YYYYMMDD-HHMMSS.log
@@ -94,7 +94,7 @@ written. The file is JSON lines, one event per line, written as the run goes (re
 |---|---|
 | `run` | `start` (version, options), every Activity line (`log`, `error`), `failure` with its category, `unavailable` with its reason, `finished` with the counters |
 | `links` | every link with its service and kind, rejected entries |
-| `soundcloud` | `resolved` (tracks of a link with id, title, uploader, length, album), `metadata` (raw yt-dlp fields: title, uploader, artist, description, length, publisher metadata, ...), `title_parsed` (raw title → artists, featured, producers, title, version markers), `final_meta` (tags, folder, file name), `retry`, `unavailable`, `fallback`, `track_result` |
+| `soundcloud` | `resolved` (tracks of a link with id, title, uploader, length, album), `metadata` (raw yt-dlp fields: title, uploader, artist, description, length, publisher metadata, ...), `title_parsed` (raw title → artists, featured, producers, title, version markers), `final_meta` (tags, `<album artist>/<album>` folder, file name, path), `layout_migration` (tracks moved from the old `Artist - Album` folders), `retry`, `unavailable`, `fallback`, `track_result` |
 | `spotify` | `resolved` (what spotDL returned per song: name, artists, album, ISRC, length, ...), `spotdl_output` (every line spotDL printed, including the match it downloaded), `track_result` (final path, title, artists, album artist) |
 | `lyrics` | `request` (artists, title, album, length), every provider `query` with its parameters and HTTP status, every `candidate` with `verdict` (`synced`, `plain`, `instrumental`, `rejected`) and `reason` (artist mismatch, title mismatch, version mismatch, length difference, ...), `provider_skipped` / `provider_error`, `result` |
 

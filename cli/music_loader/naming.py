@@ -1,11 +1,12 @@
 """One naming scheme for the whole library, whatever the source.
 
-    <album artist> - <album>/<NN> - <title>.mp3          single disc
-    <album artist> - <album>/<D>-<NN> - <title>.mp3      album with several discs
+    <album artist> - <album>/<NN> - <title>.mp3          Spotify, single disc
+    <album artist> - <album>/<D>-<NN> - <title>.mp3      Spotify, several discs
+    <album artist>/<album>/<NN> - <title>.mp3            SoundCloud
 
 SoundCloud and Spotify files go through the same functions, so the same
-characters, padding and truncation apply to both halves. Names are file
-names only: tags keep their own text.
+characters, padding and truncation apply to every path component. Names are
+file names only: tags keep their own text.
 """
 from __future__ import annotations
 
@@ -114,6 +115,15 @@ def track_filename(title: str | None, number: int, total: int = 1, disc: int = 1
 def album_folder(album_artist: str | None, album: str | None) -> str:
     artist, name = safe_name(album_artist, "Unknown Artist"), safe_name(album, "Unknown Album")
     return truncate(f"{artist} - {name}", MAX_NAME_BYTES)
+
+
+def album_path(album_artist: str | None, album: str | None) -> str:
+    """"<album artist>/<album>" (SoundCloud): one folder per artist, the
+    albums and singles inside it. Each component is sanitized and truncated
+    on its own, so neither can hold a separator."""
+    artist = truncate(safe_name(album_artist, "Unknown Artist"), MAX_NAME_BYTES)
+    name = truncate(safe_name(album, "Unknown Album"), MAX_NAME_BYTES)
+    return f"{artist}/{name}"
 
 
 def album_artist_for(album_artist: str | None, track_artists: list[list[str]]) -> str:

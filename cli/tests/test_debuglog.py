@@ -106,6 +106,8 @@ def test_soundcloud_track_run_logs_title_parsing_naming_and_lyrics_verdicts(tmp_
     assert final["tags"]["artists"] == ["Main Artist", "Guest"]
     filename = final["filename"]
     assert filename.endswith(".mp3")
+    assert final["folder"] == "Main Artist/Song - Single"
+    assert final["path"] == f"Main Artist/Song - Single/{filename}"
     (result,) = find(items, "soundcloud", "track_result")
     assert result["status"] == "downloaded" and result["path"].endswith(filename)
     assert ctx.results["123456"].name == filename

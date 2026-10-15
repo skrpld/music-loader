@@ -83,6 +83,7 @@ from .paths import move_with_sidecars, prune_empty_dirs, remove_with_sidecars
 from .playlist import apply_moves, update_soundcloud_playlist, write_named_playlist
 from .process import run_captured, run_streamed, tool_command, wait_future, ytdlp_extra_args
 from .soundcloud_index import SoundCloudArchive, get_index
+from .soundcloud_layout import migrate_layout
 from .soundcloud_meta import (
     BATCH_SIZE,
     AlbumContext,
@@ -978,6 +979,8 @@ class SoundCloudBatch:
             staging_dir = soundcloud_dir / STAGING_DIRNAME
             staging_dir.mkdir(exist_ok=True)
             _cleanup_stale_staging(staging_dir)
+            index = get_index(soundcloud_dir)
+            migrate_layout(index, self.dashboard)
             self._ctx = _Context(
                 config=config,
                 soundcloud_dir=soundcloud_dir,
@@ -988,7 +991,7 @@ class SoundCloudBatch:
                 yt=yt,
                 api=_shared_api(),
                 gate=_SHARED_GATE,
-                index=get_index(soundcloud_dir),
+                index=index,
                 archive=SoundCloudArchive(soundcloud_dir / ARCHIVE_FILENAME),
                 registry=get_registry(config.music_dir / ARTISTS_FILENAME),
                 attempts=get_attempts(soundcloud_dir / LYRICS_ATTEMPTS_FILENAME),

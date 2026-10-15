@@ -153,7 +153,7 @@ def test_same_rules_for_both_sources():
             "webpage_url": "https://soundcloud.com/a/b"}
     album = AlbumContext(title="Album: Deluxe", artist="Artist", set_type="album", position=3, total=12)
     meta = build_meta(info, album, ArtistRegistry(None))
-    assert meta.folder == naming.album_folder("Artist", "Album: Deluxe")
+    assert meta.folder == naming.album_path("Artist", "Album: Deluxe")
     assert meta.filename == naming.track_filename(meta.title, 3, 12)
     compilation = AlbumContext(title="Mix", artist="Label", set_type="compilation", position=1, total=9)
     assert build_meta(info, compilation, ArtistRegistry(None)).tags.album_artist == "Various Artists"

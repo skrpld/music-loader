@@ -27,7 +27,7 @@ from . import debuglog
 from .artists import PRIORITY_TITLE, PRIORITY_UPLOADER, ArtistRegistry
 from .config import SINGLE_ALBUM_SUFFIX
 from .links import redact_url
-from .naming import VARIOUS_ARTISTS, album_folder, track_filename
+from .naming import VARIOUS_ARTISTS, album_path, track_filename
 from .process import module_available
 from .tags import TrackTags
 from .text_utils import (
@@ -70,7 +70,7 @@ class AlbumContext:
 @dataclass
 class TrackMeta:
     tags: TrackTags
-    folder: str
+    folder: str               # "<album artist>/<album>", relative to the SoundCloud folder
     filename: str
     main_artists: list[str]
     featured: list[str]
@@ -370,10 +370,10 @@ def build_meta(
         url=redact_url(str(info.get("webpage_url") or "")),
         soundcloud_id=track_id,
     )
-    folder = album_folder(album_artist, album_title)
+    folder = album_path(album_artist, album_title)
     filename = track_filename(title, number, total)
     debuglog.event("soundcloud", "final_meta", id=track_id, tags=asdict(tags),
-                   folder=folder, filename=filename)
+                   folder=folder, filename=filename, path=f"{folder}/{filename}")
     return TrackMeta(
         tags=tags,
         folder=folder,
