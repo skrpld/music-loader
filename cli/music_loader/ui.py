@@ -36,6 +36,12 @@ from .runlog import RunLog
 
 _LOG_LINES = 10
 
+# What `record_artists` reports (accounts.py): an account that got its
+# artist's name, a name only suggested (the user decides in Artists), a
+# reuploaded track whose artist could not be determined.
+ARTIST_NOTE_KINDS = ("alias", "suggestion", "undetermined")
+_ARTIST_NOTES_KEPT = 200
+
 # What the link queue counts (see `set_queue`).
 PHASE_RESOLVING = "resolving"
 PHASE_DOWNLOADING = "downloading"
@@ -82,6 +88,7 @@ class Dashboard:
         self.stats = Stats()
         self.runlog = runlog
         self._log: deque[Text] = deque(maxlen=_LOG_LINES)
+        self.artist_notes: dict[str, list[str]] = {kind: [] for kind in ARTIST_NOTE_KINDS}
         self._lock = threading.RLock()
         self._started = False
 
@@ -185,6 +192,14 @@ class Dashboard:
         and the failure log are fed by `record_track` and `log_error`; this is
         for the server, which lets the app retry exactly the retryable ones."""
         debuglog.event("run", "failure", service=kind, category=category.value, url=url, title=title)
+
+    def record_artists(self, kind: str, text: str) -> None:
+        """An artist decision for the run summary (`ARTIST_NOTE_KINDS`)."""
+        debuglog.event("run", "artists", kind=kind, text=text)
+        with self._lock:
+            notes = self.artist_notes.get(kind)
+            if notes is not None and text not in notes and len(notes) < _ARTIST_NOTES_KEPT:
+                notes.append(text)
 
     def record_lyrics(self, found: bool) -> None:
         """Records one lyrics lookup result (found / not found)."""

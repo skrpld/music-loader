@@ -3,7 +3,12 @@
 Rules
 -----
 * Artist: SoundCloud's own artist field (set for label releases) ->
-  "Artist - Song" from the title -> the uploader. Featured artists from
+  "Artist - Song" from the title -> the uploader. An artist field that only
+  repeats the uploader is no credit (SoundCloud fills it in by itself), so
+  the title decides then. Where the uploader's name would be used, an
+  account with a confirmed artist name (accounts.py) gives that name, and a
+  track of a reupload account gets the artist of the original upload.
+  Featured artists from
   "(feat. X)", "ft. X", "w/ X" are added after the main artists (Spotify
   does the same), and every name is written in one canonical spelling.
 * Title: promotional noise ("[Free DL]", "*music video in description*"),
@@ -23,10 +28,12 @@ Rules
 """
 from __future__ import annotations
 
+import re
 import threading
+import dataclasses
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Protocol
 
 from . import debuglog
 from .artists import PRIORITY_TITLE, PRIORITY_UPLOADER, ArtistRegistry
@@ -43,7 +50,9 @@ from .text_utils import (
     parse_soundcloud_title,
     split_artist_names,
     strip_decorations,
+    unique,
     variant_markers,
+    with_featured as _with_featured,
 )
 
 # Raw yt-dlp/SoundCloud fields worth seeing in the debug log (debuglog.py).
@@ -222,6 +231,13 @@ class SoundCloudApi:
                 found[str(item["id"])] = item
         return found
 
+    def search_tracks(self, query: str, limit: int = 20) -> list[dict]:
+        """Track search (`GET /search/tracks`), one request. Raises failures
+        like `tracks` does."""
+        data = self._call("search/tracks", "search", {"q": query, "limit": str(limit)})
+        collection = data.get("collection") if isinstance(data, dict) else None
+        return [item for item in collection or [] if isinstance(item, dict)]
+
     def _playlist(self, playlist_id: str) -> dict | None:
         with self._lock:
             if playlist_id in self._playlists:
@@ -307,26 +323,117 @@ def official_artists(info: dict[str, Any]) -> list[str]:
     return names
 
 
+def credited_artists(info: dict[str, Any], uploader: str | None = None) -> list[str]:
+    """`official_artists`, unless the field only repeats the uploader: SoundCloud
+    fills it with the account name by itself ("@aquagwap" on every upload of
+    AQUAKEY), so it says nothing and the title decides. Other names (a
+    label's release) stay the official credit."""
+    official = official_artists(info)
+    owner = normalize_name(strip_decorations(info.get("uploader") if uploader is None else uploader))
+    if official and owner and all(normalize_name(name) == owner for name in official):
+        return []
+    return official
+
+
+_TAG_RE = re.compile(r'"([^"]*)"|(\S+)')
+
+
+def info_from_api(data: dict[str, Any]) -> dict[str, Any]:
+    """A track of SoundCloud's API (`SoundCloudApi.tracks`, `search_tracks`) in
+    the shape of yt-dlp's info dict, with the fields this package reads."""
+    user = data.get("user") if isinstance(data.get("user"), dict) else {}
+    publisher = data.get("publisher_metadata") if isinstance(data.get("publisher_metadata"), dict) else {}
+    tags = [first or second for first, second in _TAG_RE.findall(str(data.get("tag_list") or ""))]
+    if data.get("genre"):
+        tags.insert(0, str(data["genre"]))
+    try:
+        duration = float(data.get("full_duration") or data.get("duration") or 0) / 1000 or None
+    except (TypeError, ValueError):
+        duration = None
+    created = str(data.get("created_at") or "")
+    try:
+        timestamp = datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp() if created else None
+    except ValueError:
+        timestamp = None
+    info: dict[str, Any] = {
+        "id": str(data.get("id") or ""),
+        "title": str(data.get("title") or ""),
+        "uploader": str(user.get("username") or ""),
+        "uploader_id": str(user.get("id") or ""),
+        "uploader_url": str(user.get("permalink_url") or ""),
+        "duration": duration,
+        "tags": [tag for tag in tags if tag],
+        "description": str(data.get("description") or ""),
+        "timestamp": timestamp,
+        "webpage_url": str(data.get("permalink_url") or ""),
+    }
+    if isinstance(publisher.get("artist"), str) and publisher["artist"].strip():
+        info["artist"] = publisher["artist"]
+    return info
+
+
+class AccountRules(Protocol):
+    """What `build_meta` asks about the uploader (accounts.RunAccounts)."""
+
+    def alias(self, account_id: str) -> str | None: ...
+
+    def is_reuploader(self, account_id: str) -> bool: ...
+
+    def alias_by_name(self, name: str) -> str | None: ...
+
+    def original(self, track_id: str) -> dict[str, Any] | None: ...
+
+
+def _uses_account_name(parsed_artists: list[str], uploader: str) -> bool:
+    """True when the main artist is only the account's name: a title without
+    an artist part, or one that names the account itself."""
+    key = normalize_name(uploader)
+    return bool(key) and {normalize_name(name) for name in parsed_artists} == {key}
+
+
 def build_meta(
     info: dict[str, Any],
     album: AlbumContext | None,
     registry: ArtistRegistry,
     fmt: SoundCloudFormat | None = None,
+    accounts: AccountRules | None = None,
 ) -> TrackMeta:
     fmt = fmt or SoundCloudFormat()
     track_id = str(info.get("id") or "")
     uploader = strip_decorations(info.get("uploader") or "")
+    uploader_id = str(info.get("uploader_id") or "")
     if uploader:
         registry.register(uploader, PRIORITY_UPLOADER)
-    official = official_artists(info)
+    official = credited_artists(info, uploader)
     for name in official:
         registry.register(name, PRIORITY_UPLOADER)
+    alias = accounts.alias(uploader_id) if accounts is not None and uploader_id else None
+    if alias:
+        alias = registry.canonical(alias)
+    reuploader = accounts.is_reuploader(uploader_id) if accounts is not None and uploader_id else False
 
     hints = description_producers(str(info.get("description") or ""))
     parsed = parse_soundcloud_title(
         str(info.get("title") or ""), uploader, official, registry.is_known, registry.canonical,
         producer_hints=hints, strip_promo=fmt.strip_promo,
     )
+    main = list(parsed.artists)
+    featured = list(parsed.featured)
+    original = None
+    if not official and _uses_account_name(main, uploader):
+        original = accounts.original(track_id) if accounts is not None else None
+        if original and original.get("artists"):
+            main = [registry.canonical(name) for name in original["artists"]]
+            featured = [registry.canonical(name) for name in original.get("featured") or []] + featured
+        elif alias:
+            main = [alias]
+    elif alias:
+        key = normalize_name(uploader)
+        main = [alias if normalize_name(name) == key else name for name in main]
+        featured = [alias if normalize_name(name) == key else name for name in featured]
+    main = unique(main)
+    main_keys = {normalize_name(name) for name in main}
+    featured = [name for name in unique(featured) if normalize_name(name) not in main_keys]
     if debuglog.enabled():
         debuglog.event(
             "soundcloud", "metadata", id=track_id,
@@ -339,11 +446,14 @@ def build_meta(
             featured=parsed.featured, producers=parsed.producers, title=parsed.title,
             base_title=parsed.base_title, version_markers=variant_markers(parsed.title),
             track_number=parsed.track_number, description_producers=hints, format=asdict(fmt),
+            account_alias=alias, reupload_account=reuploader, original=original,
         )
-    for name in parsed.artists + parsed.featured:
+    for name in main + featured:
         registry.register(name, PRIORITY_TITLE)
-    main = parsed.artists or ["Unknown Artist"]
-    featured = parsed.featured
+    main = main or ["Unknown Artist"]
+    if featured != parsed.featured:
+        parsed = dataclasses.replace(parsed, featured=featured)
+        parsed.title = _with_featured(parsed.base_title, featured)
     title = parsed.title or str(info.get("title") or track_id or "Unknown Title")
     written = format_title(parsed, fmt.feat_in_title, fmt.keep_producers, fmt.keep_versions) or title
     written_base = format_title(parsed, False, fmt.keep_producers, fmt.keep_versions) or written
@@ -357,6 +467,15 @@ def build_meta(
         if owner:
             registry.register(owner, PRIORITY_UPLOADER)
         album_artist = registry.canonical(owner) if owner else main[0]
+        if owner and accounts is not None:
+            if normalize_name(owner) == normalize_name(uploader):
+                if alias:
+                    album_artist = alias
+                elif reuploader:
+                    # A reupload account's set holds other people's tracks.
+                    album_artist = VARIOUS_ARTISTS
+            else:
+                album_artist = accounts.alias_by_name(owner) or album_artist
         if album.set_type == "compilation":
             album_artist = VARIOUS_ARTISTS
         number, total = max(album.position, 1), max(album.total, album.position, 1)
