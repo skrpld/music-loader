@@ -46,7 +46,9 @@ adb install app/build/outputs/apk/debug/app-debug.apk
    and notifications when asked. The first start after installing or updating unpacks ffmpeg and
    the JavaScript runtime (up to a minute).
 2. On **Download**, paste links, or share them from the Spotify / SoundCloud app into Music Loader.
-   Choose the lyrics mode and options, then add them to the queue.
+   The **Download options** card under the links shows what is active (lyrics mode, recheck,
+   reposts, likes, …); tap it to change them in a sheet. The choices are remembered, except
+   *Recheck the library*, which applies to the next job only. Then tap **Add to queue**.
 3. Follow progress on **Jobs**: links and tracks progress, active downloads with speed and ETA,
    statistics and a filterable activity log. A finished job offers **Retry failed (N)** and
    **Run again**; the *Retry automatically* option queues failed tracks again after 15, 30 and 60

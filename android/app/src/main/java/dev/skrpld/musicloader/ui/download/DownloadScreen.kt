@@ -33,6 +33,7 @@ import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedListItem
@@ -44,12 +45,16 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.ToggleButton
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -64,6 +69,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.skrpld.musicloader.R
 import dev.skrpld.musicloader.data.Connection
 import dev.skrpld.musicloader.data.Features
+import dev.skrpld.musicloader.data.JobOptions
 import dev.skrpld.musicloader.data.LinkScan
 import dev.skrpld.musicloader.data.LyricsMode
 import dev.skrpld.musicloader.data.supports
@@ -98,6 +104,9 @@ fun DownloadScreen(
     val options by viewModel.options.collectAsStateWithLifecycle()
     val clipboard = rememberClipboardAccess()
     val scope = rememberCoroutineScope()
+    var showOptions by rememberSaveable { mutableStateOf(false) }
+    // An older server would ignore the option: do not offer what it cannot do.
+    val showAutoRetry = connection.supports(Features.AutoRetry)
 
     val messages by rememberUpdatedState(
         DownloadMessages(
@@ -149,65 +158,48 @@ fun DownloadScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
+        // The links and the submit button come first; the options live in a bottom sheet
+        // behind a one-line summary, and the button stays pinned under the scrolling part.
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
                 .consumeWindowInsets(padding)
-                .imePadding()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .imePadding(),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             val contentModifier = Modifier.widthIn(max = 640.dp).fillMaxWidth()
-            ConnectionBanner(
-                connection = connection,
-                onRetry = onRetry,
-                onOpenSettings = onOpenSettings,
-                modifier = contentModifier,
-            )
-            LinksCard(
-                text = viewModel.linksText,
-                scan = viewModel.scan,
-                onTextChange = viewModel::updateLinks,
-                onClear = viewModel::clearLinks,
-                onPaste = {
-                    scope.launch { clipboard.read()?.let(viewModel::appendText) }
-                },
-                modifier = contentModifier,
-            )
-            Column(modifier = contentModifier) {
-                SectionHeader(stringResource(R.string.lyrics_title))
-                LyricsModeSelector(selected = options.lyricsMode, onSelect = viewModel::setLyricsMode)
-                Text(
-                    text = stringResource(
-                        when (options.lyricsMode) {
-                            LyricsMode.Strict -> R.string.lyrics_strict_description
-                            LyricsMode.Loose -> R.string.lyrics_loose_description
-                            LyricsMode.Off -> R.string.lyrics_off_description
-                        },
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                ConnectionBanner(
+                    connection = connection,
+                    onRetry = onRetry,
+                    onOpenSettings = onOpenSettings,
+                    modifier = contentModifier,
                 )
-            }
-            Column(modifier = contentModifier) {
-                SectionHeader(stringResource(R.string.options_title))
-                OptionsList(
+                LinksCard(
+                    text = viewModel.linksText,
+                    scan = viewModel.scan,
+                    onTextChange = viewModel::updateLinks,
+                    onClear = viewModel::clearLinks,
+                    onPaste = {
+                        scope.launch { clipboard.read()?.let(viewModel::appendText) }
+                    },
+                    modifier = contentModifier,
+                )
+                OptionsSummary(
+                    options = options,
                     recheck = viewModel.recheck,
-                    reposts = options.soundcloudReposts,
-                    likes = options.soundcloudLikes,
-                    fallback = options.soundcloudFallback,
-                    // An older server would ignore the option: do not offer what it cannot do.
-                    showAutoRetry = connection.supports(Features.AutoRetry),
-                    autoRetry = options.autoRetry,
-                    onAutoRetryChange = viewModel::setAutoRetry,
-                    onRecheckChange = { viewModel.recheck = it },
-                    onRepostsChange = viewModel::setSoundcloudReposts,
-                    onLikesChange = viewModel::setSoundcloudLikes,
-                    onFallbackChange = viewModel::setSoundcloudFallback,
+                    showAutoRetry = showAutoRetry,
+                    onClick = { showOptions = true },
+                    modifier = contentModifier,
                 )
             }
             Button(
@@ -217,7 +209,7 @@ fun DownloadScreen(
                     connection != Connection.NotConfigured && connection != Connection.NeedsStorageAccess,
                 contentPadding = ButtonDefaults.contentPaddingFor(ButtonDefaults.MediumContainerHeight),
                 modifier = contentModifier
-                    .padding(top = 8.dp, bottom = 24.dp)
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
                     .heightIn(min = ButtonDefaults.MediumContainerHeight),
             ) {
                 if (viewModel.submitting) {
@@ -238,6 +230,119 @@ fun DownloadScreen(
                     style = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight),
                 )
             }
+        }
+    }
+
+    if (showOptions) {
+        ModalBottomSheet(
+            onDismissRequest = { showOptions = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(start = 16.dp, end = 16.dp, bottom = 24.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.download_options_title),
+                    style = MaterialTheme.typography.titleLargeEmphasized,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
+                )
+                SectionHeader(stringResource(R.string.lyrics_title))
+                LyricsModeSelector(selected = options.lyricsMode, onSelect = viewModel::setLyricsMode)
+                Text(
+                    text = stringResource(lyricsModeDescription(options.lyricsMode)),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
+                )
+                SectionHeader(stringResource(R.string.options_title))
+                OptionsList(
+                    recheck = viewModel.recheck,
+                    reposts = options.soundcloudReposts,
+                    likes = options.soundcloudLikes,
+                    fallback = options.soundcloudFallback,
+                    showAutoRetry = showAutoRetry,
+                    autoRetry = options.autoRetry,
+                    onAutoRetryChange = viewModel::setAutoRetry,
+                    onRecheckChange = { viewModel.recheck = it },
+                    onRepostsChange = viewModel::setSoundcloudReposts,
+                    onLikesChange = viewModel::setSoundcloudLikes,
+                    onFallbackChange = viewModel::setSoundcloudFallback,
+                )
+            }
+        }
+    }
+}
+
+private fun lyricsModeDescription(mode: LyricsMode): Int = when (mode) {
+    LyricsMode.Strict -> R.string.lyrics_strict_description
+    LyricsMode.Loose -> R.string.lyrics_loose_description
+    LyricsMode.Off -> R.string.lyrics_off_description
+}
+
+/** One tappable card naming the active options; it opens the options sheet. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun OptionsSummary(
+    options: JobOptions,
+    recheck: Boolean,
+    showAutoRetry: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(
+        onClick = onClick,
+        modifier = modifier,
+        shape = MaterialTheme.shapes.extraLarge,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 16.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = stringResource(R.string.download_options_title),
+                    style = MaterialTheme.typography.titleMediumEmphasized,
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Pill(
+                        text = stringResource(R.string.job_option_lyrics, lyricsModeName(options.lyricsMode)),
+                        icon = R.drawable.ic_lyrics,
+                    )
+                    if (recheck) {
+                        Pill(
+                            text = stringResource(R.string.option_short_recheck),
+                            icon = R.drawable.ic_sync,
+                            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                        )
+                    }
+                    if (options.soundcloudReposts) {
+                        Pill(text = stringResource(R.string.option_short_reposts), icon = R.drawable.ic_repeat)
+                    }
+                    if (options.soundcloudLikes) {
+                        Pill(text = stringResource(R.string.option_short_likes), icon = R.drawable.ic_favorite)
+                    }
+                    if (options.soundcloudFallback) {
+                        Pill(text = stringResource(R.string.option_short_fallback), icon = R.drawable.ic_library_music)
+                    }
+                    if (showAutoRetry && options.autoRetry) {
+                        Pill(text = stringResource(R.string.option_short_auto_retry), icon = R.drawable.ic_schedule)
+                    }
+                }
+            }
+            Icon(
+                painter = painterResource(R.drawable.ic_chevron_right),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -281,7 +386,7 @@ private fun LinksCard(
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text(stringResource(R.string.links_label)) },
                 placeholder = { Text(stringResource(R.string.links_placeholder)) },
-                minLines = 4,
+                minLines = 3,
                 maxLines = 12,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, autoCorrectEnabled = false),
                 trailingIcon = if (text.isNotEmpty()) {

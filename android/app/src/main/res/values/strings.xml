@@ -67,6 +67,12 @@
     <string name="option_fallback">Look for blocked tracks elsewhere</string>
     <string name="option_fallback_description">For tracks SoundCloud does not give out (DRM, 30-second preview), take the same track from YouTube Music when artist, title, version and length match. A different recording or master; the tags say where it came from.</string>
     <string name="option_profile_only">For profile links only</string>
+    <string name="download_options_title">Download options</string>
+    <string name="option_short_recheck">Recheck</string>
+    <string name="option_short_reposts">Reposts</string>
+    <string name="option_short_likes">Likes</string>
+    <string name="option_short_fallback">Blocked elsewhere</string>
+    <string name="option_short_auto_retry">Auto retry</string>
     <string name="download_submit">Add to queue</string>
     <string name="download_submitted">Added to the queue</string>
     <string name="download_submitted_rejected">Added to the queue; not recognized: %1$d</string>
