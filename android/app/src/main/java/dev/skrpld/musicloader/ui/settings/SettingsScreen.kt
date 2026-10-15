@@ -79,6 +79,8 @@ fun SettingsScreen(
     viewModel: SettingsViewModel,
     appVersion: String,
     dynamicColorAvailable: Boolean,
+    /** Opens Settings → Artists; null when the server has no artist decisions (older server). */
+    onOpenArtists: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
@@ -134,6 +136,10 @@ fun SettingsScreen(
                 FormattingCard(viewModel, settings, serverMode = mode == DownloadMode.Server)
                 SectionHeader(stringResource(R.string.settings_lyrics))
                 LyricsCard(viewModel, settings, serverMode = mode == DownloadMode.Server)
+                if (onOpenArtists != null) {
+                    SectionHeader(stringResource(R.string.settings_artists))
+                    ArtistsItem(onOpenArtists)
+                }
                 SectionHeader(stringResource(R.string.settings_appearance))
                 Text(
                     text = stringResource(R.string.settings_theme),
@@ -873,6 +879,20 @@ private fun DynamicColorItem(checked: Boolean, available: Boolean, onCheckedChan
         trailingContent = { Switch(checked = checked, onCheckedChange = null, enabled = available) },
     ) {
         Text(stringResource(R.string.settings_dynamic_color))
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun ArtistsItem(onClick: () -> Unit) {
+    SegmentedListItem(
+        onClick = onClick,
+        shapes = ListItemDefaults.segmentedShapes(index = 0, count = 1),
+        leadingContent = { Icon(painterResource(R.drawable.ic_person), contentDescription = null) },
+        supportingContent = { Text(stringResource(R.string.settings_artists_hint)) },
+        trailingContent = { Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null) },
+    ) {
+        Text(stringResource(R.string.settings_artists))
     }
 }
 

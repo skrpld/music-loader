@@ -21,6 +21,7 @@ import dev.skrpld.musicloader.data.DownloadMode
 import dev.skrpld.musicloader.data.ThemeMode
 import dev.skrpld.musicloader.ui.MainViewModel
 import dev.skrpld.musicloader.ui.MusicLoaderApp
+import dev.skrpld.musicloader.ui.artists.ArtistsViewModel
 import dev.skrpld.musicloader.ui.download.DownloadViewModel
 import dev.skrpld.musicloader.ui.jobs.JobsViewModel
 import dev.skrpld.musicloader.ui.settings.SettingsViewModel
@@ -35,6 +36,7 @@ class MainActivity : ComponentActivity() {
     private val downloadViewModel: DownloadViewModel by viewModels { factory }
     private val jobsViewModel: JobsViewModel by viewModels { factory }
     private val settingsViewModel: SettingsViewModel by viewModels { factory }
+    private val artistsViewModel: ArtistsViewModel by viewModels { factory }
 
     // The download progress notification of the phone mode (Android 13+).
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
@@ -67,6 +69,7 @@ class MainActivity : ComponentActivity() {
                     downloadViewModel = downloadViewModel,
                     jobsViewModel = jobsViewModel,
                     settingsViewModel = settingsViewModel,
+                    artistsViewModel = artistsViewModel,
                     appVersion = BuildConfig.VERSION_NAME,
                     dynamicColorAvailable = supportsDynamicColor,
                 )

@@ -214,6 +214,22 @@ private fun JobDetailContent(
                 }
             }
         }
+        if (!job.artists.isEmpty) {
+            val notes = job.artists.alias.map { R.drawable.ic_check_circle to R.string.job_artists_alias to it } +
+                job.artists.suggestion.map { R.drawable.ic_lightbulb to R.string.job_artists_suggestion to it } +
+                job.artists.undetermined.map { R.drawable.ic_person to R.string.job_artists_undetermined to it }
+            item(key = "artists-header") { SectionHeader(stringResource(R.string.job_artists)) }
+            itemsIndexed(notes, key = { index, _ -> "artists-$index" }) { index, (kind, text) ->
+                val (icon, label) = kind
+                SegmentedListItem(
+                    shapes = ListItemDefaults.segmentedShapes(index = index, count = notes.size),
+                    leadingContent = { Icon(painterResource(icon), contentDescription = null) },
+                    overlineContent = { Text(stringResource(label)) },
+                ) {
+                    Text(text = text, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
         if (job.log.isNotEmpty() || job.errors.isNotEmpty()) {
             item(key = "log-header") { SectionHeader(stringResource(R.string.job_activity)) }
             item(key = "log") { ActivityLog(job) }

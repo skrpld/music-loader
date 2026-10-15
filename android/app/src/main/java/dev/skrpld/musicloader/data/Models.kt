@@ -149,6 +149,9 @@ object Features {
 
     /** The lyrics job options (`lyrics_providers` ... `lyrics_retry_days`). */
     const val LyricsSettings = "lyrics_settings"
+
+    /** `GET /artists` and `POST /artists/<id>/<action>`, and the job's `artists` notes. */
+    const val Artists = "artists"
 }
 
 /** What a retry queues: every link of the job again, or only the failures worth another try. */
@@ -295,6 +298,8 @@ data class Job(
     @SerialName("retry_of") val retryOf: String? = null,
     /** When the server queues the failed tracks again (epoch ms), while it waits for that. */
     @SerialName("retry_at") val retryAt: Long? = null,
+    /** Artist decisions made during the job (needs [Features.Artists]). */
+    val artists: JobArtists = JobArtists(),
 ) {
     val status: JobStatus get() = JobStatus.fromWire(statusWire)
 
@@ -334,3 +339,70 @@ data class ErrorBody(
     val error: String = "",
     val rejected: List<String> = emptyList(),
 )
+
+/** What a job decided about SoundCloud accounts, for its summary. */
+@Serializable
+data class JobArtists(
+    /** Accounts that got an artist name. */
+    val alias: List<String> = emptyList(),
+    /** Accounts with a name waiting for the user (Settings → Artists). */
+    val suggestion: List<String> = emptyList(),
+    /** Tracks whose artist could not be determined. */
+    val undetermined: List<String> = emptyList(),
+) {
+    val isEmpty: Boolean get() = alias.isEmpty() && suggestion.isEmpty() && undetermined.isEmpty()
+}
+
+/** How an account's artist name was decided (see accounts.py). */
+enum class AccountStatus(val wire: String) {
+    Confirmed("confirmed"),
+    Suggestion("suggestion"),
+    Reuploader("reuploader"),
+    NotChecked("not_checked"),
+    Nick("nick");
+
+    companion object {
+        fun fromWire(value: String?): AccountStatus = entries.firstOrNull { it.wire == value } ?: Nick
+    }
+}
+
+/** User actions on an account, the same as `music-loader artists <action>`. */
+enum class AccountAction(val wire: String) {
+    /** Use the given artist name (needs a name). */
+    SetName("set"),
+    KeepNick("keep"),
+    Reuploader("reuploader"),
+    Accept("accept"),
+    Reject("reject"),
+    Unlock("unlock"),
+}
+
+/** A SoundCloud account and the artist name its tracks get. */
+@Serializable
+data class ArtistAccount(
+    val id: String = "",
+    val handle: String = "",
+    val permalink: String = "",
+    val url: String = "",
+    @SerialName("status") val statusWire: String = "nick",
+    val kind: String = "unknown",
+    val alias: String? = null,
+    /** library, spotify, deezer, manual or title. */
+    val source: String? = null,
+    val suggestion: String? = null,
+    val locked: Boolean = false,
+    @SerialName("checked_at") val checkedAt: String? = null,
+    val tracks: Int = 0,
+) {
+    val status: AccountStatus get() = AccountStatus.fromWire(statusWire)
+    val name: String get() = handle.ifBlank { permalink.ifBlank { id } }
+}
+
+@Serializable
+data class ArtistAccountsEnvelope(val accounts: List<ArtistAccount> = emptyList())
+
+@Serializable
+data class ArtistAccountEnvelope(val account: ArtistAccount)
+
+@Serializable
+data class ArtistNameRequest(val name: String)

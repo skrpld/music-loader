@@ -274,4 +274,43 @@
         <item quantity="other">%1$d дня</item>
     </plurals>
     <string name="settings_lyrics_retry_hint">Трек без найденного текста ищется снова через это время; «Перепроверить библиотеку» ищет в любом случае</string>
+    <string name="settings_artists">Артисты</string>
+    <string name="settings_artists_hint">Имена артистов для аккаунтов SoundCloud и аккаунты перезаливов</string>
+    <string name="artists_description">Треки аккаунта получают имя артиста, только когда его подтверждает ваша библиотека, Spotify или Deezer. Предложения ждут вашего решения; выбранное вами закрепляется, и автоматические проверки его не меняют.</string>
+    <string name="artists_empty_title">Аккаунтов пока нет</string>
+    <string name="artists_empty_body">Аккаунты появятся после загрузок с SoundCloud.</string>
+    <string name="artists_load_failed">Не удалось загрузить аккаунты</string>
+    <string name="artists_waiting">Ждут вашего решения</string>
+    <string name="artists_accounts">Аккаунты</string>
+    <string name="artists_status_confirmed">Артист: %1$s</string>
+    <string name="artists_status_suggestion">Предложено: %1$s</string>
+    <string name="artists_status_reuploader">Аккаунт перезаливов: каждый трек получает артиста оригинала</string>
+    <string name="artists_status_not_checked">Ещё не проверен: сервис был недоступен</string>
+    <string name="artists_status_nick">Треки сохраняют имя аккаунта</string>
+    <string name="artists_source_library">подтверждено библиотекой</string>
+    <string name="artists_source_spotify">подтверждено Spotify</string>
+    <string name="artists_source_deezer">подтверждено Deezer</string>
+    <string name="artists_source_manual">задано вами</string>
+    <string name="artists_source_title">из названий треков</string>
+    <plurals name="artists_tracks">
+        <item quantity="one">%1$d трек</item>
+        <item quantity="few">%1$d трека</item>
+        <item quantity="many">%1$d треков</item>
+        <item quantity="other">%1$d трека</item>
+    </plurals>
+    <string name="artists_locked">Закреплено</string>
+    <string name="artists_name">Имя артиста</string>
+    <string name="artists_set">Использовать это имя</string>
+    <string name="artists_keep">Оставить имя аккаунта</string>
+    <string name="artists_reuploader">Аккаунт перезаливов</string>
+    <string name="artists_unlock">Открепить</string>
+    <string name="artists_unlock_hint">Следующая загрузка проверит аккаунт заново</string>
+    <string name="artists_open_profile">Открыть профиль</string>
+    <string name="action_accept">Принять</string>
+    <string name="action_reject">Отклонить</string>
+    <string name="action_close">Закрыть</string>
+    <string name="job_artists">Артисты</string>
+    <string name="job_artists_alias">Имя артиста</string>
+    <string name="job_artists_suggestion">Предложение · проверьте в Настройки → Артисты</string>
+    <string name="job_artists_undetermined">Артист не определён</string>
 </resources>
