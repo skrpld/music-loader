@@ -24,7 +24,16 @@ the first start (printed at startup).
 
 Job options: {"lyrics": "strict" | "loose" | "off", "recheck": false,
 "soundcloud_reposts": false, "soundcloud_likes": false, "soundcloud_fallback": false,
-"auto_retry": false, "debug_log": false}.
+"auto_retry": false, "debug_log": false, "soundcloud_feat": "both" | "artist" | "title",
+"soundcloud_keep_producers": false, "soundcloud_keep_versions": true,
+"soundcloud_strip_promo": true, "soundcloud_filename": "{track} - {title}"}.
+
+SoundCloud formatting (the "soundcloud_feat" ... "soundcloud_filename"
+options, feature "soundcloud_format"): the same settings as the command
+line's --soundcloud-feat, --soundcloud-keep-producers,
+--soundcloud-drop-versions, --soundcloud-keep-promo and
+--soundcloud-filename. A missing option means the default; a bad file name
+template is refused with 400 and the reason.
 
 Debug log: with `debug_log` the job writes a detailed log of the run (see
 debuglog.py) to the library's log folder; the job shows its path as
@@ -90,14 +99,21 @@ from rich.markup import escape
 from . import __version__
 from .cli import _positive_int
 from .availability import FailureCategory
-from .config import LOGS_DIRNAME, LYRICS_MODE_LOOSE, LYRICS_MODE_STRICT
+from .config import (
+    FEAT_MODES,
+    LOGS_DIRNAME,
+    LYRICS_MODE_LOOSE,
+    LYRICS_MODE_STRICT,
+    SoundCloudFormat,
+    validate_filename_template,
+)
 from .deps import check_dependencies
 from .links import Link, parse_link, redact_url
 from .ui import PHASE_DOWNLOADING, PHASE_RESOLVING, Stats
 
 API_VERSION = 1
 # Optional capabilities, for clients that may talk to an older server.
-FEATURES = ("retry", "auto_retry", "debug_log")
+FEATURES = ("retry", "auto_retry", "debug_log", "soundcloud_format")
 DEFAULT_PORT = 8765
 TOKEN_ENV = "MUSIC_LOADER_TOKEN"
 TOKEN_FILENAME = "server-token"
@@ -1079,6 +1095,21 @@ def _parse_options(raw_options: Any) -> dict[str, Any]:
         if not isinstance(value, bool):
             raise _RequestError(HTTPStatus.BAD_REQUEST, f"'{key}' must be true or false")
         options[key] = value
+    default = SoundCloudFormat().options()
+    feat = raw_options.get("soundcloud_feat", default["soundcloud_feat"])
+    if feat not in FEAT_MODES:
+        raise _RequestError(HTTPStatus.BAD_REQUEST, f"'soundcloud_feat' must be one of {', '.join(FEAT_MODES)}")
+    options["soundcloud_feat"] = feat
+    for key in ("soundcloud_keep_producers", "soundcloud_keep_versions", "soundcloud_strip_promo"):
+        value = raw_options.get(key, default[key])
+        if not isinstance(value, bool):
+            raise _RequestError(HTTPStatus.BAD_REQUEST, f"'{key}' must be true or false")
+        options[key] = value
+    try:
+        options["soundcloud_filename"] = validate_filename_template(
+            raw_options.get("soundcloud_filename", default["soundcloud_filename"]))
+    except ValueError as exc:
+        raise _RequestError(HTTPStatus.BAD_REQUEST, f"'soundcloud_filename': {exc}")
     return options
 
 

@@ -230,4 +230,24 @@
     <string name="notification_downloading">Downloading music</string>
     <string name="notification_queued">Queued: %1$d</string>
     <string name="notification_waiting_retry">Waiting to retry failed tracks at %1$s</string>
+    <string name="settings_formatting">SoundCloud formatting</string>
+    <string name="settings_formatting_description">How SoundCloud titles, tags and file names are written. Applies to new downloads; turn on Recheck in a download to bring tracks already in the library up to date.</string>
+    <string name="settings_formatting_description_server">How SoundCloud titles, tags and file names are written. Applies to new downloads; turn on Recheck in a download to bring tracks already in the library up to date. Needs music-loader 2.8.0 or newer on the server.</string>
+    <string name="settings_feat">Featured artists</string>
+    <string name="settings_feat_both">Both</string>
+    <string name="settings_feat_artist">Artist tag</string>
+    <string name="settings_feat_title">Title</string>
+    <string name="settings_feat_both_hint">“Song (feat. X)”, and X is also in the artist tag</string>
+    <string name="settings_feat_artist_hint">X only in the artist tag, the title stays “Song”</string>
+    <string name="settings_feat_title_hint">“Song (feat. X)”, the artist tag keeps the main artists only</string>
+    <string name="settings_keep_versions">Version in the title</string>
+    <string name="settings_keep_versions_hint">Remix, Sped Up, Slowed, Live… stay in the title</string>
+    <string name="settings_keep_producers">Producer credits</string>
+    <string name="settings_keep_producers_hint">Adds “(prod. X)” to the title</string>
+    <string name="settings_strip_promo">Remove promo noise</string>
+    <string name="settings_strip_promo_hint">[Free DL], (Official Audio), hashtags and emoji leave the title</string>
+    <string name="settings_filename">File name</string>
+    <string name="settings_filename_hint">{track}, {title}, {artist}, {album}, {album_artist}; {track:02} sets the padding</string>
+    <string name="settings_filename_invalid">Use {title} once, only the fields listed, no / or \\</string>
+    <string name="action_reset">Reset</string>
 </resources>

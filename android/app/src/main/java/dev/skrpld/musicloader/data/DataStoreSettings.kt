@@ -44,6 +44,12 @@ class DataStoreSettings(context: Context, private val secrets: SecretBox = Secre
                     soundcloudFallback = prefs[SOUNDCLOUD_FALLBACK] ?: false,
                     autoRetry = prefs[AUTO_RETRY] ?: false,
                     debugLog = prefs[DEBUG_LOG] ?: false,
+                    soundcloudFeat = FeatPlacement.fromWire(prefs[SOUNDCLOUD_FEAT]).wire,
+                    soundcloudKeepProducers = prefs[SOUNDCLOUD_KEEP_PRODUCERS] ?: false,
+                    soundcloudKeepVersions = prefs[SOUNDCLOUD_KEEP_VERSIONS] ?: true,
+                    soundcloudStripPromo = prefs[SOUNDCLOUD_STRIP_PROMO] ?: true,
+                    soundcloudFilename = prefs[SOUNDCLOUD_FILENAME]?.takeIf(FilenameTemplate::isValid)
+                        ?: FilenameTemplate.DEFAULT,
                 ),
             )
         }
@@ -107,6 +113,11 @@ class DataStoreSettings(context: Context, private val secrets: SecretBox = Secre
             it[SOUNDCLOUD_FALLBACK] = options.soundcloudFallback
             it[AUTO_RETRY] = options.autoRetry
             it[DEBUG_LOG] = options.debugLog
+            it[SOUNDCLOUD_FEAT] = options.soundcloudFeat
+            it[SOUNDCLOUD_KEEP_PRODUCERS] = options.soundcloudKeepProducers
+            it[SOUNDCLOUD_KEEP_VERSIONS] = options.soundcloudKeepVersions
+            it[SOUNDCLOUD_STRIP_PROMO] = options.soundcloudStripPromo
+            it[SOUNDCLOUD_FILENAME] = options.soundcloudFilename
         }
     }
 
@@ -123,6 +134,11 @@ class DataStoreSettings(context: Context, private val secrets: SecretBox = Secre
         val SOUNDCLOUD_FALLBACK = booleanPreferencesKey("soundcloud_fallback")
         val AUTO_RETRY = booleanPreferencesKey("auto_retry")
         val DEBUG_LOG = booleanPreferencesKey("debug_log")
+        val SOUNDCLOUD_FEAT = stringPreferencesKey("soundcloud_feat")
+        val SOUNDCLOUD_KEEP_PRODUCERS = booleanPreferencesKey("soundcloud_keep_producers")
+        val SOUNDCLOUD_KEEP_VERSIONS = booleanPreferencesKey("soundcloud_keep_versions")
+        val SOUNDCLOUD_STRIP_PROMO = booleanPreferencesKey("soundcloud_strip_promo")
+        val SOUNDCLOUD_FILENAME = stringPreferencesKey("soundcloud_filename")
         val SPOTIFY_CLIENT_ID = stringPreferencesKey("spotify_client_id_enc")
         val SPOTIFY_CLIENT_SECRET = stringPreferencesKey("spotify_client_secret_enc")
     }

@@ -81,9 +81,16 @@ and the file is renamed right after the download):
 - An album whose tracks have no common artist (4+ tracks, nobody on more than
   40% of them), a SoundCloud *compilation* set or a Spotify "Various Artists"
   album is filed under `Various Artists`.
-- SoundCloud titles lose hashtags (`#phonk`), emoji, `OUT NOW`,
-  `BUY = FREE DL`, a trailing `| Label`, `(Explicit)` and whole-bracket years
-  (`[2019]`). Version markers (`Sped Up`, `VIP`, `Live`, ...) always stay.
+- SoundCloud titles lose hashtags (`#phonk`; one that starts the name, as in
+  the album `#J20 XTREME SPORT`, stays), emoji, `OUT NOW`, `BUY = FREE DL`,
+  trailing promo words after the title (`mv in desc`, `ALBUM OTW`,
+  `new mixtape otw`, `mv on yt`), a trailing `| Label`, `(Explicit)` and
+  whole-bracket years (`[2019]`). Version markers (`Sped Up`, `VIP`, `Live`,
+  ...) stay unless `--soundcloud-drop-versions` is set (see
+  [Formatting settings](#formatting-settings)).
+- SoundCloud file names follow `--soundcloud-filename` (default
+  `{track} - {title}`); the same character and length rules apply, and only
+  the title is shortened when the name is too long.
 
 Artist photos are never downloaded: only album/track artwork is embedded.
 
@@ -124,6 +131,21 @@ the title. Examples from the DOOM RUSHAZ collective and how they are tagged:
 | `09. Pitstop W Aquakey & Platov` (benjamingotbenz) | benjamingotbenz/Aquakey/Platov | Pitstop (feat. Aquakey, Platov) |
 | `Right Now! - Outro` (benjamingotbenz) | benjamingotbenz | Right Now! - Outro |
 
+More shapes, taken from a debug log of real runs (the full table is in
+`cli/tests/test_soundcloud_titles.py`):
+
+| Title on SoundCloud (uploader) | Artist tag | Title tag | Producers |
+|---|---|---|---|
+| `best summer  (whyjuzo)` (`platov  (@platovoplomo)`) | platov | best summer (whyjuzo) | |
+| `yung millionaire ((haru matsui + jack13))` | uploader | yung millionaire | haru matsui, jack13 |
+| `thraxx interlude ((me ft. haru matsui))` | uploader/haru matsui | thraxx interlude (feat. haru matsui) | me |
+| `1million ((cryst)) ALBUM OTW` | uploader | 1million | cryst |
+| `platov, haru matsui - diesel (playasin)`, description `prod by sg, haru matsui, playasin` | platov/haru matsui | diesel | playasin |
+| `Морозы (+elya14062001)` | uploader/elya14062001 | Морозы (feat. elya14062001) | |
+| `Mudstock feat. CODE80 (mxstrakh)` | uploader/CODE80 | Mudstock (feat. CODE80) (mxstrakh) | |
+| `TREAD-ANTHEM (feat. JUNKIE MANE x TRENCHB66F)` | uploader/JUNKIE MANE/TRENCHB66F | TREAD-ANTHEM (feat. JUNKIE MANE, TRENCHB66F) | |
+| `CAST A SPELL (🎃` | uploader | CAST A SPELL | |
+
 Rules:
 
 - **Artist**: SoundCloud's own artist field (set for label releases) →
@@ -134,10 +156,20 @@ Rules:
   without an artist part ("35 hp + хестон + platov") - count as featured
   artists only when every name is already known (from Spotify, an account
   name or another title); otherwise the title is kept as written.
+- **Account names**: a SoundCloud display name that carries the handle
+  (`platov  (@platovoplomo)`) is used without it, as artist and album
+  artist, so an artist's albums and singles share one folder.
 - **Title**: promotional noise (`[Free DL]`, `(Official Video)`,
-  `*music video in description*`), producer credits and a leading `09.` are
-  removed; `(feat. …)` is normalized; version markers (`(Sped Up)`, `hexd`,
-  `(Remix)`) stay.
+  `*music video in description*`, `mv in desc`), producer credits and a
+  leading `09.` are removed; `(feat. …)`, `(+ X)` and `feat. X (…)` become
+  one `(feat. …)` part; `x` separates guests inside it; extra spaces inside
+  brackets and a bracket left open at the end go. Version markers
+  (`(Sped Up)`, `hexd`, `(Remix)`) stay.
+- **Producers**: `(prod. X)`, `[Prod by X]`, `(p. X)`, a trailing `prod X`,
+  a double bracket `((X + Y))`, and a bracket that holds only names the
+  description credits on a `prod by …` line (`diesel (playasin)`). A plain
+  `(name)` without such a hint stays in the title: `(Skit)` or `(ACID RAIN)`
+  look the same.
 - **Album**: the album/EP/single the track belongs to - with its owner as
   album artist and the position as track number. A track from a link that
   does not say it (a single track, a playlist, likes, reposts) is looked up
@@ -152,6 +184,36 @@ Rules:
   `✦ platov ✦` are dropped.
 - The SoundCloud id is stored in the file (`TXXX:SOUNDCLOUD_ID`), and the page
   URL without a private link's secret token.
+
+### Formatting settings
+
+How SoundCloud tracks are written can be changed (command line, server job
+options, the app's settings). The defaults are the behaviour before these
+settings existed.
+
+| Setting | Command line | Job option | Default |
+|---|---|---|---|
+| Featured artists: title and artist tag / artist tag only / title only | `--soundcloud-feat both\|artist\|title` | `soundcloud_feat` | `both` |
+| `(prod. X)` in the title | `--soundcloud-keep-producers` | `soundcloud_keep_producers` | off |
+| Version markers (Remix, Sped Up, Slowed, Live…) in the title | `--soundcloud-drop-versions` | `soundcloud_keep_versions` | kept |
+| Strip promo noise and emoji | `--soundcloud-keep-promo` | `soundcloud_strip_promo` | on |
+| File name template | `--soundcloud-filename` | `soundcloud_filename` | `{track} - {title}` |
+
+The settings change what is written - the title tag, the artist tag, the
+single's album name and the file name. Lyrics and the YouTube Music fallback
+still compare the full parsed title, so a sped-up upload written without
+`(Sped Up)` is not matched against the original's lyrics. Unbracketed version
+words (`WINDRIDER REMIX`) cannot be told from the title and stay.
+
+The file name template takes `{track}` (the usual `01`, `001` for 100+
+tracks; `{track:02}` sets the padding), `{title}` (exactly once), `{artist}`
+(main artists), `{album}` and `{album_artist}`. No `/` or `\`: the folder
+layout is fixed.
+
+Settings apply to new downloads. `--recheck` (or *Recheck* in the app)
+brings tracks already in the library in line - tags, folder and file name,
+with `.sc_index.json`, the `.lrc` files and the playlists following the moved
+files.
 
 ## Lyrics
 

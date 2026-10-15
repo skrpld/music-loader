@@ -8,6 +8,9 @@ import androidx.lifecycle.viewModelScope
 import dev.skrpld.musicloader.data.ApiException
 import dev.skrpld.musicloader.data.AppSettings
 import dev.skrpld.musicloader.data.DownloadMode
+import dev.skrpld.musicloader.data.FeatPlacement
+import dev.skrpld.musicloader.data.FilenameTemplate
+import dev.skrpld.musicloader.data.JobOptions
 import dev.skrpld.musicloader.data.LocalBackend
 import dev.skrpld.musicloader.data.ServerConfig
 import dev.skrpld.musicloader.data.ServerInfo
@@ -68,6 +71,10 @@ class SettingsViewModel(
     val spotifyCredentials: StateFlow<SpotifyCredentials?> =
         settingsStore.spotifyCredentials.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
+    /** SoundCloud file name template being edited. */
+    var filenameInput by mutableStateOf("")
+        private set
+
     private var testJob: Job? = null
 
     init {
@@ -77,6 +84,7 @@ class SettingsViewModel(
             if (urlInput.isEmpty()) urlInput = stored.serverUrl
             if (tokenInput.isEmpty()) tokenInput = stored.token
             if (musicDirInput.isEmpty()) musicDirInput = stored.musicDir
+            if (filenameInput.isEmpty()) filenameInput = stored.jobOptions.soundcloudFilename
             val credentials = settingsStore.spotifyCredentials.first()
             if (spotifyIdInput.isEmpty()) spotifyIdInput = credentials.clientId
             if (spotifySecretInput.isEmpty()) spotifySecretInput = credentials.clientSecret
@@ -208,6 +216,42 @@ class SettingsViewModel(
             settingsStore.setServer(url, token)
             repository.retryNow()
         }
+    }
+
+    /** The formatting settings live with the job options and go out with every job. */
+    private fun updateJobOptions(change: (JobOptions) -> JobOptions) {
+        viewModelScope.launch {
+            settingsStore.setJobOptions(change(settingsStore.settings.first().jobOptions))
+        }
+    }
+
+    fun setFeatPlacement(placement: FeatPlacement) = updateJobOptions { it.copy(soundcloudFeat = placement.wire) }
+
+    fun setKeepProducers(keep: Boolean) = updateJobOptions { it.copy(soundcloudKeepProducers = keep) }
+
+    fun setKeepVersions(keep: Boolean) = updateJobOptions { it.copy(soundcloudKeepVersions = keep) }
+
+    fun setStripPromo(strip: Boolean) = updateJobOptions { it.copy(soundcloudStripPromo = strip) }
+
+    fun updateFilename(value: String) {
+        filenameInput = value
+    }
+
+    val filenameValid: Boolean get() = FilenameTemplate.isValid(filenameInput.trim())
+
+    fun isFilenameSaved(current: AppSettings?): Boolean =
+        current != null && current.jobOptions.soundcloudFilename == filenameInput.trim()
+
+    fun saveFilename() {
+        if (!filenameValid) return
+        val template = filenameInput.trim()
+        filenameInput = template
+        updateJobOptions { it.copy(soundcloudFilename = template) }
+    }
+
+    fun resetFilename() {
+        filenameInput = FilenameTemplate.DEFAULT
+        saveFilename()
     }
 
     fun setThemeMode(mode: ThemeMode) {

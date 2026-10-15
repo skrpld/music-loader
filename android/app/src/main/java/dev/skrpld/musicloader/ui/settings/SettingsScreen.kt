@@ -61,6 +61,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.skrpld.musicloader.R
 import dev.skrpld.musicloader.data.AppSettings
 import dev.skrpld.musicloader.data.DownloadMode
+import dev.skrpld.musicloader.data.FeatPlacement
+import dev.skrpld.musicloader.data.FilenameTemplate
+import dev.skrpld.musicloader.data.JobOptions
 import dev.skrpld.musicloader.data.ServerUrls
 import dev.skrpld.musicloader.data.ThemeMode
 import dev.skrpld.musicloader.engine.StorageAccess
@@ -123,6 +126,8 @@ fun SettingsScreen(
                         ServerCard(viewModel, settings)
                     }
                 }
+                SectionHeader(stringResource(R.string.settings_formatting))
+                FormattingCard(viewModel, settings, serverMode = mode == DownloadMode.Server)
                 SectionHeader(stringResource(R.string.settings_appearance))
                 Text(
                     text = stringResource(R.string.settings_theme),
@@ -370,6 +375,159 @@ private fun SpotifyCard(viewModel: SettingsViewModel) {
                 }
             }
         }
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun FormattingCard(viewModel: SettingsViewModel, settings: AppSettings?, serverMode: Boolean) {
+    val options = settings?.jobOptions ?: JobOptions()
+    Card(
+        shape = MaterialTheme.shapes.extraLarge,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+                text = stringResource(
+                    if (serverMode) R.string.settings_formatting_description_server else R.string.settings_formatting_description,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = stringResource(R.string.settings_feat),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            FeatSelector(selected = options.featPlacement, onSelect = viewModel::setFeatPlacement)
+            Text(
+                text = stringResource(
+                    when (options.featPlacement) {
+                        FeatPlacement.Both -> R.string.settings_feat_both_hint
+                        FeatPlacement.Artist -> R.string.settings_feat_artist_hint
+                        FeatPlacement.Title -> R.string.settings_feat_title_hint
+                    },
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
+                SwitchItem(
+                    index = 0,
+                    count = 3,
+                    checked = options.soundcloudKeepVersions,
+                    onCheckedChange = viewModel::setKeepVersions,
+                    title = stringResource(R.string.settings_keep_versions),
+                    hint = stringResource(R.string.settings_keep_versions_hint),
+                )
+                SwitchItem(
+                    index = 1,
+                    count = 3,
+                    checked = options.soundcloudKeepProducers,
+                    onCheckedChange = viewModel::setKeepProducers,
+                    title = stringResource(R.string.settings_keep_producers),
+                    hint = stringResource(R.string.settings_keep_producers_hint),
+                )
+                SwitchItem(
+                    index = 2,
+                    count = 3,
+                    checked = options.soundcloudStripPromo,
+                    onCheckedChange = viewModel::setStripPromo,
+                    title = stringResource(R.string.settings_strip_promo),
+                    hint = stringResource(R.string.settings_strip_promo_hint),
+                )
+            }
+            val templateError = !viewModel.filenameValid
+            OutlinedTextField(
+                value = viewModel.filenameInput,
+                onValueChange = viewModel::updateFilename,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text(stringResource(R.string.settings_filename)) },
+                supportingText = {
+                    Text(
+                        stringResource(
+                            if (templateError) R.string.settings_filename_invalid else R.string.settings_filename_hint,
+                        ),
+                    )
+                },
+                isError = templateError,
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, autoCorrectEnabled = false),
+                shape = MaterialTheme.shapes.large,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+            ) {
+                val saved = viewModel.isFilenameSaved(settings)
+                OutlinedButton(
+                    onClick = viewModel::resetFilename,
+                    shapes = ButtonDefaults.shapes(),
+                    enabled = viewModel.filenameInput.trim() != FilenameTemplate.DEFAULT || !saved,
+                ) {
+                    Text(stringResource(R.string.action_reset))
+                }
+                Button(
+                    onClick = viewModel::saveFilename,
+                    shapes = ButtonDefaults.shapes(),
+                    enabled = !templateError && !saved,
+                ) {
+                    Text(stringResource(if (saved) R.string.action_saved else R.string.action_save))
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun FeatSelector(selected: FeatPlacement, onSelect: (FeatPlacement) -> Unit) {
+    val placements = FeatPlacement.entries
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
+    ) {
+        placements.forEachIndexed { index, placement ->
+            val label = when (placement) {
+                FeatPlacement.Both -> R.string.settings_feat_both
+                FeatPlacement.Artist -> R.string.settings_feat_artist
+                FeatPlacement.Title -> R.string.settings_feat_title
+            }
+            ToggleButton(
+                checked = selected == placement,
+                onCheckedChange = { onSelect(placement) },
+                modifier = Modifier
+                    .weight(1f)
+                    .semantics { role = Role.RadioButton },
+                shapes = when (index) {
+                    0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                    placements.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                    else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                },
+            ) {
+                Text(text = stringResource(label), maxLines = 1)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun SwitchItem(
+    index: Int,
+    count: Int,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    title: String,
+    hint: String,
+) {
+    SegmentedListItem(
+        checked = checked,
+        onCheckedChange = onCheckedChange,
+        shapes = ListItemDefaults.segmentedShapes(index = index, count = count),
+        supportingContent = { Text(hint) },
+        trailingContent = { Switch(checked = checked, onCheckedChange = null) },
+    ) {
+        Text(title)
     }
 }
 

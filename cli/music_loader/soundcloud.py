@@ -610,7 +610,7 @@ def _fallback_download(
         return None, "no length to compare, not looked up elsewhere"
     info = dict(job.info)
     info["duration"] = duration
-    meta = build_meta(info, job.album, ctx.registry)
+    meta = build_meta(info, job.album, ctx.registry, ctx.config.soundcloud_format)
     wanted = Wanted(meta.title, tuple(meta.main_artists), duration)
     ctx.dashboard.start_file(label=f"{_FALLBACK_LABEL}: looking for '{meta.title[:50]}'", slot=slot)
     match, checked = find_match(wanted, ctx.yt, ctx.abort.is_set)
@@ -746,7 +746,7 @@ def _postprocess(job: TrackJob, raw_path: Path, info: dict[str, Any], ctx: _Cont
         ctx.archive.add(track_id)
         return _Processed(True, existing, True)
 
-    meta = build_meta(info, _album_for(job, info, ctx), ctx.registry)
+    meta = build_meta(info, _album_for(job, info, ctx), ctx.registry, ctx.config.soundcloud_format)
     if info.get(_SOURCE_KEY):
         meta.tags.extra[SOURCE_DESC] = _FALLBACK_LABEL
         meta.tags.extra[SOURCE_URL_DESC] = str(info[_SOURCE_KEY])
@@ -807,7 +807,7 @@ def _postprocess(job: TrackJob, raw_path: Path, info: dict[str, Any], ctx: _Cont
 def _retag(job: TrackJob, existing: Path, info: dict[str, Any], ctx: _Context) -> _Processed:
     """--recheck of a track that is already in the library: current tags,
     current folder/name, lyrics redone by the caller."""
-    meta = build_meta(info, _album_for(job, info, ctx), ctx.registry)
+    meta = build_meta(info, _album_for(job, info, ctx), ctx.registry, ctx.config.soundcloud_format)
     # write_tags replaces every frame it owns: keep the note of a file that
     # was taken from another source.
     for desc in (SOURCE_DESC, SOURCE_URL_DESC):

@@ -25,6 +25,11 @@ music-loader serve -o <MUSIC_FOLDER> [OPTIONS]
 | `--soundcloud-fallback` | off | For a track SoundCloud does not give out (DRM, preview only, blocked), take the same track from YouTube Music when artist, title, version and length match; the tags say where it came from |
 | `--soundcloud-download-workers N` | `2` | Parallel SoundCloud downloads. SoundCloud allows about 600 requests per 10 minutes; more workers hit that limit sooner |
 | `--soundcloud-workers N` | `4` | Parallel SoundCloud conversion/tagging workers |
+| `--soundcloud-feat MODE` | `both` | Where featured artists go: `both` = `(feat. X)` in the title and X in the artist tag; `artist` = artist tag only; `title` = title only |
+| `--soundcloud-keep-producers` | off | Keep producer credits in the title as `(prod. X)` |
+| `--soundcloud-drop-versions` | off | Remove version markers (Remix, Sped Up, Slowed, Live…) from the title; lyrics matching still compares the real version |
+| `--soundcloud-keep-promo` | off | Keep promotional noise (`[Free DL]`, `(Official Audio)`, hashtags, emoji) in the title |
+| `--soundcloud-filename TEMPLATE` | `{track} - {title}` | SoundCloud file name: `{track}` (`{track:02}` sets the padding), `{title}` (exactly once), `{artist}`, `{album}`, `{album_artist}`; no `/` or `\`. The usual file name rules and length limit apply |
 | `--debug-log [PATH]` | off | Write a detailed debug log of the run (see [Debug log](#debug-log)). Without `PATH`, or with a folder, the file is `.music-loader-logs/debug-YYYYMMDD-HHMMSS.jsonl` in the Music folder (or in that folder) |
 | `--spotify-threads N` | `4` | Parallel spotDL downloads |
 | `--spotify-client-id` | none | Own Spotify application client id |
@@ -94,7 +99,7 @@ written. The file is JSON lines, one event per line, written as the run goes (re
 |---|---|
 | `run` | `start` (version, options), every Activity line (`log`, `error`), `failure` with its category, `unavailable` with its reason, `finished` with the counters |
 | `links` | every link with its service and kind, rejected entries |
-| `soundcloud` | `resolved` (tracks of a link with id, title, uploader, length, album), `metadata` (raw yt-dlp fields: title, uploader, artist, description, length, publisher metadata, ...), `title_parsed` (raw title → artists, featured, producers, title, version markers), `final_meta` (tags, `<album artist>/<album>` folder, file name, path), `layout_migration` (tracks moved from the old `Artist - Album` folders), `retry`, `unavailable`, `fallback`, `track_result` |
+| `soundcloud` | `resolved` (tracks of a link with id, title, uploader, length, album), `metadata` (raw yt-dlp fields: title, uploader, artist, description, length, publisher metadata, ...), `title_parsed` (raw title → artists, featured, producers, title, version markers; producers named in the description; the formatting settings), `final_meta` (tags, `<album artist>/<album>` folder, file name, path), `layout_migration` (tracks moved from the old `Artist - Album` folders), `retry`, `unavailable`, `fallback`, `track_result` |
 | `spotify` | `resolved` (what spotDL returned per song: name, artists, album, ISRC, length, ...), `spotdl_output` (every line spotDL printed, including the match it downloaded), `track_result` (final path, title, artists, album artist) |
 | `lyrics` | `request` (artists, title, album, length), every provider `query` with its parameters and HTTP status, every `candidate` with `verdict` (`synced`, `plain`, `instrumental`, `rejected`) and `reason` (artist mismatch, title mismatch, version mismatch, length difference, ...), `provider_skipped` / `provider_error`, `result` |
 

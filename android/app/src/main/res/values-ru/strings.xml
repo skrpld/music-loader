@@ -230,4 +230,24 @@
     <string name="notification_downloading">Загрузка музыки</string>
     <string name="notification_queued">В очереди: %1$d</string>
     <string name="notification_waiting_retry">Ожидание повтора неудачных треков в %1$s</string>
+    <string name="settings_formatting">Оформление SoundCloud</string>
+    <string name="settings_formatting_description">Как записываются названия, теги и имена файлов треков SoundCloud. Действует на новые загрузки; включите «Перепроверить» в загрузке, чтобы обновить треки, которые уже в библиотеке.</string>
+    <string name="settings_formatting_description_server">Как записываются названия, теги и имена файлов треков SoundCloud. Действует на новые загрузки; включите «Перепроверить» в загрузке, чтобы обновить треки, которые уже в библиотеке. Нужен music-loader 2.8.0 или новее на сервере.</string>
+    <string name="settings_feat">Приглашённые артисты</string>
+    <string name="settings_feat_both">Везде</string>
+    <string name="settings_feat_artist">В артистах</string>
+    <string name="settings_feat_title">В названии</string>
+    <string name="settings_feat_both_hint">«Song (feat. X)», и X также в теге исполнителя</string>
+    <string name="settings_feat_artist_hint">X только в теге исполнителя, название остаётся «Song»</string>
+    <string name="settings_feat_title_hint">«Song (feat. X)», в теге исполнителя только основные артисты</string>
+    <string name="settings_keep_versions">Версия в названии</string>
+    <string name="settings_keep_versions_hint">Remix, Sped Up, Slowed, Live… остаются в названии</string>
+    <string name="settings_keep_producers">Продюсеры</string>
+    <string name="settings_keep_producers_hint">Добавляет «(prod. X)» к названию</string>
+    <string name="settings_strip_promo">Убирать рекламу</string>
+    <string name="settings_strip_promo_hint">[Free DL], (Official Audio), хештеги и эмодзи убираются из названия</string>
+    <string name="settings_filename">Имя файла</string>
+    <string name="settings_filename_hint">{track}, {title}, {artist}, {album}, {album_artist}; {track:02} задаёт ширину номера</string>
+    <string name="settings_filename_invalid">Нужен ровно один {title}, только эти поля, без / и \\</string>
+    <string name="action_reset">Сбросить</string>
 </resources>

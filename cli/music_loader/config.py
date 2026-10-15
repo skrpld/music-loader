@@ -1,6 +1,9 @@
 """Paths and constants shared across the project."""
-from dataclasses import dataclass
+import re
+import string
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 AUDIO_EXTENSIONS = {".mp3", ".flac", ".m4a", ".ogg", ".opus", ".webm"}
 # Source formats yt-dlp may hand over before conversion to MP3. A SoundCloud
@@ -97,6 +100,112 @@ LYRICS_MODE_STRICT = "strict"
 LYRICS_MODE_LOOSE = "loose"
 
 
+# -- SoundCloud formatting settings ---------------------------------------------------
+# Where featured artists go: "(feat. X)" in the title and X in the artist tag
+# (both), only in the artist tag, or only in the title.
+FEAT_BOTH = "both"
+FEAT_ARTIST = "artist"
+FEAT_TITLE = "title"
+FEAT_MODES = (FEAT_BOTH, FEAT_ARTIST, FEAT_TITLE)
+
+DEFAULT_FILENAME_TEMPLATE = "{track} - {title}"
+FILENAME_FIELDS = ("track", "title", "artist", "album", "album_artist")
+_MAX_TEMPLATE_LENGTH = 200
+
+
+def validate_filename_template(template: Any) -> str:
+    """Checks a file name template ("{track} - {title}"): known fields
+    only, exactly one {title}, a number format only for {track} ("{track:02}"),
+    no folder separators. Raises ValueError with a readable reason."""
+    if not isinstance(template, str) or not template.strip():
+        raise ValueError("the file name template is empty")
+    if len(template) > _MAX_TEMPLATE_LENGTH:
+        raise ValueError(f"the file name template is longer than {_MAX_TEMPLATE_LENGTH} characters")
+    if any(char in template for char in "/\\") or any(ord(char) < 32 for char in template):
+        raise ValueError("the file name template must not contain '/', '\\' or control characters")
+    try:
+        parts = list(string.Formatter().parse(template))
+    except ValueError as exc:
+        raise ValueError(f"the file name template is not valid: {exc}") from None
+    titles = 0
+    for _literal, name, spec, conversion in parts:
+        if name is None:
+            continue
+        if name not in FILENAME_FIELDS:
+            raise ValueError(f"unknown field {{{name}}} in the file name template; "
+                             f"use {', '.join('{' + item + '}' for item in FILENAME_FIELDS)}")
+        if conversion or (spec and (name != "track" or not re.fullmatch(r"0?[1-9]", spec))):
+            raise ValueError(f"{{{name}}} takes no format here; only {{track:02}} style padding is allowed")
+        titles += name == "title"
+    if titles != 1:
+        raise ValueError("the file name template must contain {title} exactly once")
+    return template
+
+
+@dataclass(frozen=True)
+class SoundCloudFormat:
+    """How SoundCloud tracks are written. The defaults are the behaviour of
+    versions before these settings existed. `--recheck` applies a change to
+    tracks already in the library."""
+    feat: str = FEAT_BOTH
+    keep_producers: bool = False      # "(prod. X)" in the title
+    keep_versions: bool = True        # "(Sped Up)", "(Remix)", "(Live)"... in the title
+    strip_promo: bool = True          # "[Free DL]", "(Official Audio)", hashtags, emoji
+    filename_template: str = DEFAULT_FILENAME_TEMPLATE
+
+    @property
+    def feat_in_title(self) -> bool:
+        return self.feat in (FEAT_BOTH, FEAT_TITLE)
+
+    @property
+    def feat_in_artists(self) -> bool:
+        return self.feat in (FEAT_BOTH, FEAT_ARTIST)
+
+    @classmethod
+    def from_args(cls, args: Any) -> "SoundCloudFormat":
+        return cls(
+            feat=args.soundcloud_feat,
+            keep_producers=args.soundcloud_keep_producers,
+            keep_versions=not args.soundcloud_drop_versions,
+            strip_promo=not args.soundcloud_keep_promo,
+            filename_template=args.soundcloud_filename,
+        )
+
+    @classmethod
+    def from_options(cls, options: dict[str, Any]) -> "SoundCloudFormat":
+        """From server job options (already validated by the server); a
+        missing or broken value means the default."""
+        default = cls()
+        feat = options.get("soundcloud_feat")
+        template = options.get("soundcloud_filename")
+        try:
+            template = validate_filename_template(template)
+        except ValueError:
+            template = default.filename_template
+
+        def flag(key: str, fallback: bool) -> bool:
+            value = options.get(key)
+            return value if isinstance(value, bool) else fallback
+
+        return cls(
+            feat=feat if feat in FEAT_MODES else default.feat,
+            keep_producers=flag("soundcloud_keep_producers", default.keep_producers),
+            keep_versions=flag("soundcloud_keep_versions", default.keep_versions),
+            strip_promo=flag("soundcloud_strip_promo", default.strip_promo),
+            filename_template=template,
+        )
+
+    def options(self) -> dict[str, Any]:
+        """The server job options for these settings."""
+        return {
+            "soundcloud_feat": self.feat,
+            "soundcloud_keep_producers": self.keep_producers,
+            "soundcloud_keep_versions": self.keep_versions,
+            "soundcloud_strip_promo": self.strip_promo,
+            "soundcloud_filename": self.filename_template,
+        }
+
+
 @dataclass
 class AppConfig:
     music_dir: Path
@@ -116,6 +225,7 @@ class AppConfig:
     # looked up on YouTube Music and taken from there when artist, title,
     # version and length all match.
     soundcloud_fallback: bool = False
+    soundcloud_format: SoundCloudFormat = field(default_factory=SoundCloudFormat)
 
     @classmethod
     def from_output_dir(cls, output_dir: Path) -> "AppConfig":
