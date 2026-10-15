@@ -214,11 +214,13 @@ Profile, likes and reposts listings need yt-dlp's browser impersonation
 
 ## Spotify
 
-A link is processed in two spotdl runs: `spotdl save` resolves it (an album,
-a playlist, a whole discography) and reports where every song goes;
-`spotdl download` then downloads that saved list without a second round of
-Spotify API calls. Before the download the library is checked (unfinished
-files, files under an older layout), after it every song is verified.
+Each link is resolved by its own `spotdl save` run (an album, a playlist, a
+whole discography), which reports where every song goes. Once every link of
+the job is resolved, one `spotdl download` downloads the saved songs of all
+Spotify links together - each song once, without a second round of Spotify
+API calls. Before the download the library is checked (unfinished files,
+files under an older layout), after it every song is verified; a link counts
+as failed when any of its songs failed.
 
 spotDL looks a song up on YouTube Music first and on YouTube when YouTube
 Music returns nothing usable (`--audio youtube-music youtube`): its answers
@@ -228,7 +230,7 @@ Both lookups go through spotDL's matching (name, artists, duration).
 Before the first spotdl run, Spotify is asked for a sign of life
 (`open.spotify.com`, or `accounts.spotify.com` and `api.spotify.com` with own
 credentials; any HTTP answer counts, two tries of 10 s). If it does not
-answer, the link fails at once with the reason and a hint (internet, VPN,
+answer, the job's Spotify links fail at once with the reason and a hint (internet, VPN,
 proxy) instead of spotdl sitting silent for minutes: its client retries every
 stalled request. While `spotdl save` is quiet for a minute, the log says that
 large artists take a while and that Spotify may be unreachable.
@@ -268,6 +270,24 @@ embedded engine in memory and are not part of any job's options.
 
 ## Parallel work
 
+A job runs in two phases:
+
+1. **Resolve.** Every link is resolved before anything is downloaded, up to
+   four at a time (at most two Spotify links: each is a whole `spotdl save`
+   run; on Android spotDL runs one at a time anyway). SoundCloud listings
+   share the rate-limit pause described above. A link that cannot be resolved
+   fails on its own and never holds up the others. The link queue counts
+   resolved links meanwhile ("Resolve" in the terminal, "Resolving links" in
+   the app).
+2. **Download.** The track total is now final: every track once, however many
+   links of the job contain it (an album that is also in a playlist). The
+   tracks of all links of a service go through one download run, so the
+   parallel workers below work across links instead of one link at a time - a
+   retry of twenty single failed tracks is one run with twenty tracks, not
+   twenty runs. Downloaded, already had, failed and unavailable add up to the
+   total. The services run one after the other, in the order their first
+   link appears in the job; the link queue counts finished links.
+
 - SoundCloud: `--soundcloud-download-workers` downloads run in parallel; a
   pool of `--soundcloud-workers` converts, tags and validates; lyrics run in
   their own pool. The hand-over is bounded, so only a few unconverted
@@ -275,8 +295,8 @@ embedded engine in memory and are not part of any job's options.
   two tracks with the same name never overwrite each other.
 - Spotify: spotdl downloads `--spotify-threads` songs at a time; lyrics run
   afterwards in `--lyrics-workers` threads.
-- Ctrl+C stops every child process (yt-dlp, spotdl) and worker, removes
-  partial files and keeps the index consistent.
+- Ctrl+C stops every child process (yt-dlp, spotdl) and worker, resolves in
+  flight included, removes partial files and keeps the index consistent.
 
 ## Failure log
 
@@ -372,7 +392,7 @@ app retries the next time it starts.
 ```
 cli/music_loader/
 ├── __main__.py           # python -m music_loader
-├── cli.py                # command-line arguments, main loop
+├── cli.py                # command-line arguments, job phases (resolve, then download)
 ├── config.py             # paths and constants
 ├── deps.py               # ffmpeg / spotdl / yt-dlp checks
 ├── links.py              # link validation and classification

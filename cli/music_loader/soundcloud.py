@@ -35,6 +35,7 @@ track is looked up on YouTube Music first (fallback.py).
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import re
@@ -168,10 +169,16 @@ class _Context:
     unavailable: dict[str, UnavailableTrack] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
     had_failure: bool = False
+    # Ids of the tracks that failed, so each link of a job gets its own result.
+    failed_ids: set[str] = field(default_factory=set)
+    # Progress row of a link being resolved (links are resolved in parallel).
+    slot: int = 0
 
-    def fail(self) -> None:
+    def fail(self, job: "TrackJob | None" = None) -> None:
         with self.lock:
             self.had_failure = True
+            if job is not None:
+                self.failed_ids.add(job.track_id)
 
 
 class _RateGate:
@@ -232,7 +239,8 @@ def _flat(url: str, ctx: _Context) -> dict[str, Any]:
 
     def on_idle(_idle: float) -> None:
         elapsed = int(time.monotonic() - started)
-        ctx.dashboard.update_file(label=f"SoundCloud: resolving {redact_url(url)[:60]} ({elapsed}s)")
+        ctx.dashboard.update_file(label=f"SoundCloud: resolving {redact_url(url)[:60]} ({elapsed}s)",
+                                  slot=ctx.slot)
 
     ctx.gate.wait(ctx.abort)
     code = run_streamed(
@@ -925,6 +933,136 @@ class _Slots:
         self._free.put(slot)
 
 
+@dataclass
+class SoundCloudPlan:
+    """One resolved link of a job."""
+    link: Link
+    jobs: list[TrackJob] = field(default_factory=list)
+    playlist_title: str = ""
+    # False: nothing to download (the link could not be resolved at all).
+    resolved: bool = False
+    # A part of the link (a set of a profile, a section) could not be listed.
+    partial: bool = False
+
+
+class SoundCloudBatch:
+    """The SoundCloud links of one job: every link is resolved first
+    (`resolve`, called from several threads at once), then all their tracks
+    go through one download pipeline (`download`), de-duplicated across
+    links."""
+
+    def __init__(self, config: AppConfig, dashboard, lyrics: LyricsService | None = None,
+                 abort: threading.Event | None = None):
+        self.config = config
+        self.dashboard = dashboard
+        self.lyrics = lyrics
+        self.abort = abort or threading.Event()
+        self._lock = threading.Lock()
+        self._ready = False
+        self._ctx: _Context | None = None
+
+    def _context(self) -> _Context | None:
+        """Shared state of the job, set up once (None: yt-dlp is missing)."""
+        with self._lock:
+            if self._ready:
+                return self._ctx
+            self._ready = True
+            yt = tool_command("yt-dlp")
+            if yt is None:
+                self.dashboard.log_error("SoundCloud", "yt-dlp is not installed")
+                return None
+            config = self.config
+            soundcloud_dir = config.soundcloud_dir
+            soundcloud_dir.mkdir(parents=True, exist_ok=True)
+            staging_dir = soundcloud_dir / STAGING_DIRNAME
+            staging_dir.mkdir(exist_ok=True)
+            _cleanup_stale_staging(staging_dir)
+            self._ctx = _Context(
+                config=config,
+                soundcloud_dir=soundcloud_dir,
+                staging_dir=staging_dir,
+                dashboard=self.dashboard,
+                lyrics=self.lyrics if config.lyrics_enabled else None,
+                abort=self.abort,
+                yt=yt,
+                api=_shared_api(),
+                gate=_SHARED_GATE,
+                index=get_index(soundcloud_dir),
+                archive=SoundCloudArchive(soundcloud_dir / ARCHIVE_FILENAME),
+                registry=get_registry(config.music_dir / ARTISTS_FILENAME),
+                attempts=get_attempts(soundcloud_dir / LYRICS_ATTEMPTS_FILENAME),
+            )
+            return self._ctx
+
+    def resolve(self, link: Link, slot: int = 0) -> SoundCloudPlan:
+        """Lists the tracks of one link. Raises DownloadAborted when the job is
+        being cancelled; every other problem fails only this link."""
+        plan = SoundCloudPlan(link)
+        ctx = self._context()
+        if ctx is None:
+            return plan
+        url = link.url
+        dashboard = self.dashboard
+        dashboard.log(f"[SoundCloud] Resolving: {redact_url(url)}")
+        dashboard.start_file(label=f"SoundCloud: resolving {redact_url(url)[:60]}", slot=slot)
+        # Own failure flag and progress row; everything else is shared.
+        own = dataclasses.replace(ctx, slot=slot, had_failure=False, lock=threading.Lock())
+        try:
+            discovery = discover(link, own)
+        except DownloadAborted:
+            raise
+        except Exception as exc:
+            dashboard.log_error("SoundCloud", f"Could not resolve '{redact_url(url)}': {exc}")
+            # The whole link failed: a retry runs the link again.
+            dashboard.record_failure("soundcloud", failure_category([str(exc)]), url)
+            return plan
+        finally:
+            dashboard.finish_file(slot)
+        plan.jobs = discovery.jobs
+        plan.playlist_title = discovery.playlist_title
+        plan.resolved = True
+        plan.partial = own.had_failure
+        dashboard.log(f"[SoundCloud] Found {len(plan.jobs)} track(s) in {redact_url(url)}")
+        return plan
+
+    @staticmethod
+    def track_count(plans: list[SoundCloudPlan]) -> int:
+        """Tracks the job will process: every track once, however many links
+        contain it."""
+        return len({job.track_id for plan in plans for job in plan.jobs})
+
+    def download(self, plans: list[SoundCloudPlan]) -> list[bool]:
+        """Downloads the tracks of every resolved link in one pipeline.
+        Returns, per plan, whether the link went through without failures."""
+        ctx = self._ctx
+        if ctx is None or not any(plan.resolved for plan in plans):
+            return [False for _ in plans]
+        jobs = _merge([plan.jobs for plan in plans])
+        if jobs:
+            _precheck(jobs, ctx)
+            try:
+                _run_pipeline(jobs, ctx)
+            finally:
+                apply_moves(ctx.soundcloud_dir, ctx.moves, self.dashboard)
+            try:
+                ctx.staging_dir.rmdir()
+            except OSError:
+                pass
+        update_soundcloud_playlist(ctx.soundcloud_dir, self.dashboard)
+        for plan in plans:
+            if plan.playlist_title and plan.jobs:
+                ordered = [ctx.results.get(job.track_id) for job in plan.jobs]
+                write_named_playlist(
+                    ctx.soundcloud_dir, plan.playlist_title,
+                    [path for path in ordered if path is not None], self.dashboard,
+                )
+        return [
+            plan.resolved and not plan.partial
+            and not any(job.track_id in ctx.failed_ids for job in plan.jobs)
+            for plan in plans
+        ]
+
+
 def download_soundcloud(
     link: Link,
     config: AppConfig,
@@ -932,75 +1070,15 @@ def download_soundcloud(
     lyrics: LyricsService | None = None,
 ) -> bool:
     """Downloads one SoundCloud link. Returns False when anything failed."""
-    url = link.url
-    dashboard.log(f"[SoundCloud] Starting: {redact_url(url)}")
-    dashboard.start_file(label="SoundCloud: resolving tracks...")
-
-    yt = tool_command("yt-dlp")
-    if yt is None:
-        dashboard.log_error("SoundCloud", "yt-dlp is not installed")
-        dashboard.finish_file()
-        return False
-
-    soundcloud_dir = config.soundcloud_dir
-    soundcloud_dir.mkdir(parents=True, exist_ok=True)
-    staging_dir = soundcloud_dir / STAGING_DIRNAME
-    staging_dir.mkdir(exist_ok=True)
-    _cleanup_stale_staging(staging_dir)
-
-    ctx = _Context(
-        config=config,
-        soundcloud_dir=soundcloud_dir,
-        staging_dir=staging_dir,
-        dashboard=dashboard,
-        lyrics=lyrics if config.lyrics_enabled else None,
-        abort=threading.Event(),
-        yt=yt,
-        api=_shared_api(),
-        gate=_SHARED_GATE,
-        index=get_index(soundcloud_dir),
-        archive=SoundCloudArchive(soundcloud_dir / ARCHIVE_FILENAME),
-        registry=get_registry(config.music_dir / ARTISTS_FILENAME),
-        attempts=get_attempts(soundcloud_dir / LYRICS_ATTEMPTS_FILENAME),
-    )
-
+    batch = SoundCloudBatch(config, dashboard, lyrics)
     try:
-        discovery = discover(link, ctx)
+        plan = batch.resolve(link)
     except DownloadAborted:
         raise KeyboardInterrupt
-    except Exception as exc:
-        dashboard.log_error("SoundCloud", f"Could not resolve '{redact_url(url)}': {exc}")
-        # The whole link failed: a retry runs the link again.
-        dashboard.record_failure("soundcloud", failure_category([str(exc)]), url)
-        dashboard.finish_file()
+    if not plan.resolved:
         return False
-
-    jobs = discovery.jobs
-    dashboard.add_tracks_total("soundcloud", len(jobs))
-    dashboard.log(f"[SoundCloud] Found {len(jobs)} track(s)")
-    dashboard.finish_file()
-    if not jobs:
-        update_soundcloud_playlist(soundcloud_dir, dashboard)
-        return not ctx.had_failure
-
-    _precheck(jobs, ctx)
-    try:
-        _run_pipeline(jobs, ctx)
-    finally:
-        apply_moves(soundcloud_dir, ctx.moves, dashboard)
-
-    try:
-        staging_dir.rmdir()
-    except OSError:
-        pass
-    update_soundcloud_playlist(soundcloud_dir, dashboard)
-    if discovery.playlist_title:
-        ordered = [ctx.results.get(job.track_id) for job in jobs]
-        write_named_playlist(
-            soundcloud_dir, discovery.playlist_title,
-            [path for path in ordered if path is not None], dashboard,
-        )
-    return not ctx.had_failure
+    dashboard.add_tracks_total("soundcloud", batch.track_count([plan]))
+    return batch.download([plan])[0]
 
 
 def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
@@ -1034,7 +1112,7 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
 
     def finished(job: TrackJob, result: _Processed, recheck: bool) -> None:
         if not result.ok or result.path is None:
-            ctx.fail()
+            ctx.fail(job)
             dashboard.record_track("soundcloud", "failed")
             _note_failure(dashboard, job, FailureCategory.FAILED)
             return
@@ -1059,7 +1137,7 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
                 result = _postprocess(job, path, info, ctx)
             finished(job, result, recheck=kind == "retag")
         except Exception as exc:
-            ctx.fail()
+            ctx.fail(job)
             dashboard.record_track("soundcloud", "failed")
             _note_failure(dashboard, job, failure_category([str(exc)]), info)
             dashboard.log_error("SoundCloud", f"Worker failed for '{info.get('title') or job.track_id}': {exc}")
@@ -1088,7 +1166,7 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
         except DownloadAborted:
             return
         except Exception as exc:
-            ctx.fail()
+            ctx.fail(job)
             dashboard.record_track("soundcloud", "failed")
             _note_failure(dashboard, job, failure_category([str(exc)]))
             dashboard.log_error("SoundCloud", f"Download failed for '{job.info.get('title') or job.track_id}': {exc}")
@@ -1144,7 +1222,7 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
             if info is None:
                 full = _fetch_full_info(job.url, ctx)
                 if full is None:
-                    ctx.fail()
+                    ctx.fail(job)
                     dashboard.record_track("soundcloud", "failed")
                     _note_failure(dashboard, job, FailureCategory.FAILED)
                     dashboard.log_error("SoundCloud", f"Recheck: could not fetch metadata for '{existing.name}'")
@@ -1184,7 +1262,7 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
                 f"try again later",
             )
         if not download.ok or download.raw_path is None:
-            ctx.fail()
+            ctx.fail(job)
             dashboard.record_track("soundcloud", "failed")
             _note_failure(dashboard, job, download.category, download.info)
             return

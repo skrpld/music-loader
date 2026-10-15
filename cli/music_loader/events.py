@@ -12,7 +12,8 @@ Events:
     {"type": "unavailable_log", "path": "..."}      (when the first unavailable track is listed)
     {"type": "failure", "service": "spotify" | "soundcloud", "category": "rate_limited" | "network" | "failed",
      "url": "...", "title": "..."}                 (a track or a whole link that failed)
-    {"type": "queue", "completed": 1, "total": 3}
+    {"type": "queue", "completed": 1, "total": 3, "phase": "resolving" | "downloading"}
+                                                    (resolved links first, then finished links)
     {"type": "stats", "stats": {...Stats fields...}}
     {"type": "log", "level": "info" | "error", "source": "Spotify" | null, "text": "..."}
     {"type": "file", "slot": 0, "visible": true, "label": "...", "percent": 42.0,
@@ -32,7 +33,7 @@ from typing import Any, Optional, TextIO
 
 from .availability import FailureCategory, UnavailableTrack
 from .runlog import RunLog, redact_secrets
-from .ui import Stats
+from .ui import PHASE_DOWNLOADING, Stats
 
 
 class EventDashboard:
@@ -66,8 +67,8 @@ class EventDashboard:
         if self.runlog is not None:
             self.runlog.record(source, message)
 
-    def set_queue(self, completed: int, total: int) -> None:
-        self.emit({"type": "queue", "completed": completed, "total": max(total, 1)})
+    def set_queue(self, completed: int, total: int, phase: str = PHASE_DOWNLOADING) -> None:
+        self.emit({"type": "queue", "completed": completed, "total": max(total, 1), "phase": phase})
 
     def add_tracks_total(self, kind: str, count: int) -> None:
         if count <= 0:

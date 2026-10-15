@@ -84,11 +84,15 @@ data class JobLink(
     val kind: String = "",
 )
 
+/** Link progress: resolved links while [resolving], then finished links. */
 @Serializable
 data class QueueProgress(
     val completed: Int = 0,
     val total: Int = 0,
-)
+    val phase: String = "",
+) {
+    val resolving: Boolean get() = phase == "resolving"
+}
 
 @Serializable
 data class JobStats(

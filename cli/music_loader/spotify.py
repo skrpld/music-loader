@@ -1,12 +1,14 @@
 """Spotify downloads via spotDL.
 
-A link is processed in two spotdl runs:
+The Spotify links of a job are processed in two steps (`SpotifyBatch`):
 
-1. `spotdl save` resolves the link (an album, a playlist, a whole artist
+1. `spotdl save` resolves each link (an album, a playlist, a whole artist
    discography) into a list of songs with their metadata and writes, through
-   `--m3u`, the exact path every song gets under the output template.
-2. `spotdl download` downloads that saved list - no second round of Spotify
-   API calls.
+   `--m3u`, the exact path every song gets under the output template. The
+   links of a job are resolved in parallel, before anything is downloaded.
+2. One `spotdl download` downloads the saved songs of all links together,
+   each song once - no second round of Spotify API calls, and spotDL's
+   `--threads` work across links instead of within one link at a time.
 
 Knowing every song and its path up front makes the run checkable:
 
@@ -44,10 +46,11 @@ import shlex
 import shutil
 import sys
 import tempfile
+import threading
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -230,8 +233,10 @@ def _unreachable(
 class _Run:
     """Line parsing and dashboard updates for one spotdl invocation."""
 
-    def __init__(self, dashboard, music_dir: Path, total: int = 0, count_tracks: bool = True):
+    def __init__(self, dashboard, music_dir: Path, total: int = 0, count_tracks: bool = True,
+                 slot: int = 0):
         self.dashboard = dashboard
+        self.slot = slot
         self.count_tracks = count_tracks
         self.music_dir = music_dir
         self.total = total
@@ -249,7 +254,7 @@ class _Run:
     def _progress(self) -> None:
         if self.total:
             processed = self.done + self.skipped + self.failed
-            self.dashboard.update_file(percent=min(100, processed * 100 / self.total))
+            self.dashboard.update_file(percent=min(100, processed * 100 / self.total), slot=self.slot)
 
     def on_line(self, line: str) -> None:
         self.first_output = True
@@ -267,7 +272,8 @@ class _Run:
             return
         status = _STATUS_RE.match(line)
         if status:
-            self.dashboard.update_file(label=f"Spotify: {status.group('name')[:50]} - {status.group('status')}")
+            self.dashboard.update_file(label=f"Spotify: {status.group('name')[:50]} - {status.group('status')}",
+                                       slot=self.slot)
             return
         if not self.count_tracks:
             return
@@ -309,7 +315,8 @@ class _Run:
                 "take a while; if nothing changes, Spotify may not be reachable (VPN / network)."
             )
         elif not self.first_output:
-            self.dashboard.update_file(label=f"Spotify: resolving the link... ({int(idle_seconds)}s)")
+            self.dashboard.update_file(label=f"Spotify: resolving the link... ({int(idle_seconds)}s)",
+                                       slot=self.slot)
         else:
             self.dashboard.log(f"[Spotify] Working, no output for {int(idle_seconds)}s...")
 
@@ -340,142 +347,240 @@ def _cleanup_unfinished(songs: list[_Song], dashboard) -> None:
                 dashboard.log(f"[Spotify] Removed unfinished file: {path.name}")
 
 
+@dataclass
+class SpotifyPlan:
+    """One resolved link of a job."""
+    link: Link
+    songs: list[_Song] = field(default_factory=list)
+    # False: nothing to download (the link could not be resolved).
+    resolved: bool = False
+
+
+@dataclass
+class _Tool:
+    base: list[str]
+    common: list[str]
+    env: dict[str, str]
+
+
+class SpotifyBatch:
+    """The Spotify links of one job: each link is resolved by its own
+    `spotdl save` run (`resolve`, called from several threads at once), then
+    every song of every link is downloaded by one `spotdl download` run
+    (`download`), each song once however many links contain it."""
+
+    def __init__(self, config: AppConfig, dashboard, abort: threading.Event | None = None):
+        self.config = config
+        self.dashboard = dashboard
+        self.abort = abort or threading.Event()
+        self._lock = threading.Lock()
+        self._ready = False
+        self._tool: _Tool | None = None
+        self._unreachable = False
+
+    def _setup(self) -> _Tool | None:
+        """spotdl's command line, and whether Spotify answers at all; checked
+        once per job (None: spotdl is missing or Spotify is not reachable)."""
+        with self._lock:
+            if self._ready:
+                return self._tool
+            self._ready = True
+            config, dashboard = self.config, self.dashboard
+            spotdl = tool_command("spotdl")
+            if spotdl is None:
+                dashboard.log_error("Spotify", "spotdl is not installed")
+                return None
+            version = spotdl_version(spotdl)
+            cred_args, env = _credential_args(config, version, spotdl)
+            # Credentials in cred_args: spotDL talks to the official API, else to the web player.
+            blocked = _unreachable(_OFFICIAL_API_URLS if cred_args else _BUILTIN_CLIENT_URLS)
+            if blocked is not None:
+                dashboard.log_error("Spotify", f"Cannot reach {blocked[0]} ({blocked[1][:150]}). {_not_reachable_hint()}")
+                self._unreachable = True
+                return None
+            common = [
+                "--output", f"{config.music_dir}/{OUTPUT_TEMPLATE}", "--format", "mp3",
+                # No spotdl lyrics: they are looked up and verified afterwards.
+                "--lyrics",
+                "--simple-tui", "--threads", str(max(1, config.spotify_threads)),
+                # YouTube Music first; a song it does not return (it answers differently
+                # by region and network) is looked up on YouTube, where spotDL applies the
+                # same name / artist / duration checks.
+                "--audio", "youtube-music", "youtube",
+            ] + cred_args
+            extra = ytdlp_extra_args()
+            if extra:
+                common += ["--yt-dlp-args", shlex.join(extra)]
+            self._tool = _Tool(_command(spotdl), common, env)
+            return self._tool
+
+    def resolve(self, link: Link, slot: int = 0) -> SpotifyPlan:
+        """`spotdl save` of one link: its songs with their metadata and the
+        path spotDL gives each. Raises KeyboardInterrupt when the job is being
+        cancelled; every other problem fails only this link."""
+        plan = SpotifyPlan(link)
+        url = link.url
+        dashboard = self.dashboard
+        dashboard.log(f"[Spotify] Resolving: {url}")
+        dashboard.start_file(label="Spotify: preparing...", slot=slot)
+        work_dir: Path | None = None
+        try:
+            if not self._ready:
+                dashboard.update_file(label="Spotify: checking the connection...", slot=slot)
+            tool = self._setup()
+            if tool is None:
+                if self._unreachable:
+                    dashboard.record_failure("spotify", FailureCategory.NETWORK, url)
+                return plan
+            dashboard.update_file(label=f"Spotify: resolving {url[:60]}", slot=slot)
+            work_dir = Path(tempfile.mkdtemp(prefix="music-loader-spotify-"))
+            save_file = work_dir / "query.spotdl"
+            m3u_file = work_dir / "paths.m3u8"
+            run = _Run(dashboard, self.config.music_dir, count_tracks=False, slot=slot)
+            code = run_streamed(
+                tool.base + ["save", url, "--save-file", str(save_file), "--m3u", str(m3u_file)] + tool.common,
+                run.on_line, on_idle=run.on_idle, timeout=SUBPROCESS_TIMEOUT_SECONDS, env=tool.env,
+                should_abort=self.abort.is_set,
+            )
+            if code == -2:
+                raise KeyboardInterrupt
+            if code != 0 or not save_file.exists():
+                reason = "timed out with no response" if code == -1 else f"spotdl exited with code {code}"
+                dashboard.log_error("Spotify", f"Could not resolve '{url}': {reason}")
+                run.report_tail()
+                _refusal_hint(run.refused, self.config, dashboard)
+                # The link as a whole failed; a retry runs it again.
+                category = (FailureCategory.RATE_LIMITED if run.refused
+                            else FailureCategory.NETWORK if code == -1
+                            else failure_category(run.tail))
+                dashboard.record_failure("spotify", category, url)
+                return plan
+            try:
+                raw = json.loads(save_file.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                dashboard.log_error("Spotify", f"Could not read spotdl's song list: {exc}")
+                return plan
+            song_data = [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
+            paths = _read_m3u(m3u_file)
+            if len(paths) != len(song_data):
+                dashboard.log("[Spotify] Could not map songs to file paths; post-download checks are limited")
+                paths = []
+            songs = [
+                _Song(data, Path(paths[index]) if paths else None)
+                for index, data in enumerate(song_data)
+            ]
+            if not songs:
+                dashboard.log_error("Spotify", f"spotdl found no tracks for '{url}'")
+                return plan
+            plan.songs = songs
+            plan.resolved = True
+            dashboard.log(f"[Spotify] Found {len(songs)} track(s) in {url}")
+            return plan
+        finally:
+            dashboard.finish_file(slot)
+            if work_dir is not None:
+                shutil.rmtree(work_dir, ignore_errors=True)
+
+    @staticmethod
+    def _unique(plans: list[SpotifyPlan]) -> list[_Song]:
+        songs: dict[str, _Song] = {}
+        for plan in plans:
+            for song in plan.songs:
+                songs.setdefault(song.url or f"#{id(song)}", song)
+        return list(songs.values())
+
+    @classmethod
+    def track_count(cls, plans: list[SpotifyPlan]) -> int:
+        """Songs the job will process: every song once, however many links
+        contain it."""
+        return len(cls._unique(plans))
+
+    def download(self, plans: list[SpotifyPlan], lyrics: LyricsService | None = None) -> list[bool]:
+        """Downloads the songs of every resolved link in one spotdl run.
+        Returns, per plan, whether the link went through without failures."""
+        songs = self._unique(plans)
+        if self._tool is None or not songs:
+            return [False for _ in plans]
+        failed = self._download(songs, lyrics)
+        if failed is None:
+            return [False for _ in plans]
+        return [plan.resolved and not any(song.url in failed for song in plan.songs) for plan in plans]
+
+    def _download(self, songs: list[_Song], lyrics: LyricsService | None) -> set[str] | None:
+        """URLs of the songs that failed; None when the whole run failed."""
+        config, dashboard, tool = self.config, self.dashboard, self._tool
+        assert tool is not None
+        music_dir = config.music_dir
+        dashboard.log(f"[Spotify] {len(songs)} track(s) to check")
+        work_dir = Path(tempfile.mkdtemp(prefix="music-loader-spotify-"))
+        save_file = work_dir / "query.spotdl"
+        try:
+            registry = get_registry(music_dir / ARTISTS_FILENAME)
+            for song in songs:
+                for artist in song.data.get("artists") or []:
+                    registry.register(str(artist), PRIORITY_SPOTIFY)
+                if song.data.get("album_artist"):
+                    registry.register(str(song.data["album_artist"]), PRIORITY_SPOTIFY)
+            registry.flush()
+            _assign_targets(songs, music_dir, registry)
+
+            # -- check what is already there ------------------------------------------------
+            existed = _prepare(songs, config, dashboard)
+
+            # -- download -----------------------------------------------------------------------
+            run = _Run(dashboard, music_dir, total=len(songs))
+            todo = _stage_for_spotdl(songs, existed, config, save_file, dashboard)
+            code = 0
+            if todo:
+                dashboard.start_file(label="Spotify: downloading...")
+                overwrite = "metadata" if config.recheck else "skip"
+                code = run_streamed(
+                    tool.base + ["download", str(save_file), "--bitrate", "320k", "--overwrite", overwrite,
+                                 "--print-errors"] + tool.common,
+                    run.on_line, on_idle=run.on_idle, timeout=SUBPROCESS_TIMEOUT_SECONDS, env=tool.env,
+                )
+                dashboard.finish_file()
+            _place_downloads(songs, config, dashboard)
+
+            # -- verify on disk -------------------------------------------------------------------
+            failed = _verify(songs, existed, run, dashboard)
+            if code != 0:
+                reason = "timed out with no response" if code == -1 else f"spotdl exited with code {code}"
+                dashboard.log_error("Spotify", f"{reason} ({len(todo)} track(s))")
+                run.report_tail()
+            if failed is None or failed or code != 0:
+                _refusal_hint(run.refused, config, dashboard)
+
+            # -- artist tags ----------------------------------------------------------------------
+            _tag_artists(songs, existed, config, registry, dashboard)
+
+            # -- lyrics ---------------------------------------------------------------------------
+            if lyrics is not None and config.lyrics_enabled:
+                _lyrics(songs, config, dashboard, lyrics)
+            return None if code != 0 else failed
+        except KeyboardInterrupt:
+            # spotDL writes straight into the final file; never leave a half
+            # converted one behind to be "skipped" next time.
+            _cleanup_unfinished(songs, dashboard)
+            raise
+        finally:
+            dashboard.finish_file()
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+
 def download_spotify(
     link: Link,
     config: AppConfig,
     dashboard,
     lyrics: LyricsService | None = None,
 ) -> bool:
-    url = link.url
-    music_dir = config.music_dir
-    dashboard.log(f"[Spotify] Starting: {url}")
-    dashboard.start_file(label="Spotify: preparing...")
-
-    spotdl = tool_command("spotdl")
-    if spotdl is None:
-        dashboard.log_error("Spotify", "spotdl is not installed")
-        dashboard.finish_file()
+    """Downloads one Spotify link. Returns False when anything failed."""
+    batch = SpotifyBatch(config, dashboard)
+    plan = batch.resolve(link)
+    if not plan.resolved:
         return False
-    version = spotdl_version(spotdl)
-    cred_args, env = _credential_args(config, version, spotdl)
-    dashboard.update_file(label="Spotify: checking the connection...")
-    # Credentials in cred_args: spotDL talks to the official API, else to the web player.
-    blocked = _unreachable(_OFFICIAL_API_URLS if cred_args else _BUILTIN_CLIENT_URLS)
-    if blocked is not None:
-        dashboard.log_error("Spotify", f"Cannot reach {blocked[0]} ({blocked[1][:150]}). {_not_reachable_hint()}")
-        dashboard.record_failure("spotify", FailureCategory.NETWORK, url)
-        dashboard.finish_file()
-        return False
-    base = _command(spotdl)
-    template = f"{music_dir}/{OUTPUT_TEMPLATE}"
-    common = [
-        "--output", template, "--format", "mp3",
-        # No spotdl lyrics: they are looked up and verified afterwards.
-        "--lyrics",
-        "--simple-tui", "--threads", str(max(1, config.spotify_threads)),
-        # YouTube Music first; a song it does not return (it answers differently
-        # by region and network) is looked up on YouTube, where spotDL applies the
-        # same name / artist / duration checks.
-        "--audio", "youtube-music", "youtube",
-    ] + cred_args
-    extra = ytdlp_extra_args()
-    if extra:
-        common += ["--yt-dlp-args", shlex.join(extra)]
-
-    work_dir = Path(tempfile.mkdtemp(prefix="music-loader-spotify-"))
-    save_file = work_dir / "query.spotdl"
-    m3u_file = work_dir / "paths.m3u8"
-    songs: list[_Song] = []
-    try:
-        # -- 1. resolve --------------------------------------------------------------
-        resolve = _Run(dashboard, music_dir, count_tracks=False)
-        code = run_streamed(
-            base + ["save", url, "--save-file", str(save_file), "--m3u", str(m3u_file)] + common,
-            resolve.on_line, on_idle=resolve.on_idle, timeout=SUBPROCESS_TIMEOUT_SECONDS, env=env,
-        )
-        if code != 0 or not save_file.exists():
-            reason = "timed out with no response" if code == -1 else f"spotdl exited with code {code}"
-            dashboard.log_error("Spotify", f"Could not resolve '{url}': {reason}")
-            resolve.report_tail()
-            _refusal_hint(resolve.refused, config, dashboard)
-            # The link as a whole failed; a retry runs it again.
-            category = (FailureCategory.RATE_LIMITED if resolve.refused
-                        else FailureCategory.NETWORK if code == -1
-                        else failure_category(resolve.tail))
-            dashboard.record_failure("spotify", category, url)
-            return False
-        try:
-            raw = json.loads(save_file.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            dashboard.log_error("Spotify", f"Could not read spotdl's song list: {exc}")
-            return False
-        song_data = [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
-        paths = _read_m3u(m3u_file)
-        if len(paths) != len(song_data):
-            dashboard.log("[Spotify] Could not map songs to file paths; post-download checks are limited")
-            paths = []
-        songs = [
-            _Song(data, Path(paths[index]) if paths else None)
-            for index, data in enumerate(song_data)
-        ]
-        if not songs:
-            dashboard.log_error("Spotify", f"spotdl found no tracks for '{url}'")
-            return False
-        dashboard.add_tracks_total("spotify", len(songs))
-        dashboard.log(f"[Spotify] {len(songs)} track(s) to check")
-
-        registry = get_registry(music_dir / ARTISTS_FILENAME)
-        for song in songs:
-            for artist in song.data.get("artists") or []:
-                registry.register(str(artist), PRIORITY_SPOTIFY)
-            if song.data.get("album_artist"):
-                registry.register(str(song.data["album_artist"]), PRIORITY_SPOTIFY)
-        registry.flush()
-        _assign_targets(songs, music_dir, registry)
-
-        # -- 2. check what is already there --------------------------------------------
-        existed = _prepare(songs, config, dashboard)
-
-        # -- 3. download -----------------------------------------------------------------
-        run = _Run(dashboard, music_dir, total=len(songs))
-        todo = _stage_for_spotdl(songs, existed, config, save_file, dashboard)
-        code = 0
-        if todo:
-            dashboard.start_file(label="Spotify: downloading...")
-            overwrite = "metadata" if config.recheck else "skip"
-            code = run_streamed(
-                base + ["download", str(save_file), "--bitrate", "320k", "--overwrite", overwrite,
-                        "--print-errors"] + common,
-                run.on_line, on_idle=run.on_idle, timeout=SUBPROCESS_TIMEOUT_SECONDS, env=env,
-            )
-            dashboard.finish_file()
-        _place_downloads(songs, config, dashboard)
-
-        # -- 4. verify on disk ------------------------------------------------------------
-        ok = _verify(songs, existed, run, dashboard)
-        if code != 0:
-            ok = False
-            reason = "timed out with no response" if code == -1 else f"spotdl exited with code {code}"
-            dashboard.log_error("Spotify", f"{reason} for '{url}'")
-            run.report_tail()
-        if not ok:
-            _refusal_hint(run.refused, config, dashboard)
-
-        # -- 5. artist tags ---------------------------------------------------------------
-        _tag_artists(songs, existed, config, registry, dashboard)
-
-        # -- 6. lyrics --------------------------------------------------------------------
-        if lyrics is not None and config.lyrics_enabled:
-            _lyrics(songs, config, dashboard, lyrics)
-        return ok
-    except KeyboardInterrupt:
-        # spotDL writes straight into the final file; never leave a half
-        # converted one behind to be "skipped" next time.
-        _cleanup_unfinished(songs, dashboard)
-        raise
-    finally:
-        dashboard.finish_file()
-        shutil.rmtree(work_dir, ignore_errors=True)
+    dashboard.add_tracks_total("spotify", batch.track_count([plan]))
+    return batch.download([plan], lyrics)[0]
 
 
 def _assign_targets(songs: list[_Song], music_dir: Path, registry) -> None:
@@ -637,22 +742,36 @@ def _tag_artists(songs: list[_Song], existed: set[str], config: AppConfig,
         dashboard.log(f"[Spotify] Artist tags written for {changed} file(s)")
 
 
-def _verify(songs: list[_Song], existed: set[str], run: _Run, dashboard) -> bool:
+def _verify(songs: list[_Song], existed: set[str], run: _Run, dashboard) -> set[str] | None:
+    """Checks every song on disk and replaces the live counts with the exact
+    result. Returns the URLs of the songs that failed; None when songs failed
+    that cannot be told apart (no path mapping at all)."""
     if not any(song.path for song in songs):
         # No path mapping: fall back to what spotdl printed.
         for track_url, reason in run.errors.items():
             dashboard.record_failure("spotify", _song_category(reason, run), track_url)
-        return run.failed == 0 and not run.errors
-    done = skipped = failed = 0
+        return None if run.failed and not run.errors else set(run.errors)
+    done = skipped = 0
+    failed: set[str] = set()
     for song in songs:
-        if song.path is not None and song.path.exists() and _is_complete(song.path, song.url):
+        if song.path is None:
+            # A link whose paths could not be mapped: only spotdl's word is left.
+            if song.url in run.errors:
+                failed.add(song.url)
+                dashboard.log_error("Spotify", f"{song.name}: {run.errors[song.url][:300]}")
+                dashboard.record_failure("spotify", _song_category(run.errors[song.url], run),
+                                         song.url, song.name)
+            else:
+                done += 1
+            continue
+        if song.path.exists() and _is_complete(song.path, song.url):
             if song.url in existed:
                 skipped += 1
             else:
                 done += 1
             continue
-        failed += 1
-        state = _is_complete(song.path, song.url) if song.path is not None and song.path.exists() else False
+        failed.add(song.url)
+        state = _is_complete(song.path, song.url) if song.path.exists() else False
         if song.url in run.errors:
             reason = run.errors[song.url]
         elif state is None:
@@ -662,14 +781,14 @@ def _verify(songs: list[_Song], existed: set[str], run: _Run, dashboard) -> bool
         dashboard.log_error("Spotify", f"{song.name}: {reason[:300]}")
         dashboard.record_failure("spotify", _song_category(reason, run, missing=song.url not in run.errors),
                                  song.url, song.name)
-        if song.path is not None and song.path.exists() and state is False:
+        if song.path.exists() and state is False:
             remove_with_sidecars(song.path)
     # Replace the live estimate with the exact result.
     dashboard.record_track("spotify", "done", done - run.done)
     dashboard.record_track("spotify", "skipped", skipped - run.skipped)
-    dashboard.record_track("spotify", "failed", failed - run.failed)
-    dashboard.log(f"[Spotify] Done: {done} downloaded, {skipped} already had, {failed} failed")
-    return failed == 0
+    dashboard.record_track("spotify", "failed", len(failed) - run.failed)
+    dashboard.log(f"[Spotify] Done: {done} downloaded, {skipped} already had, {len(failed)} failed")
+    return failed
 
 
 def _song_category(reason: str, run: "_Run", missing: bool = False) -> FailureCategory:
