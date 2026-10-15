@@ -25,7 +25,7 @@ def test_job_request_splits_validates_and_deduplicates():
     assert [link.url for link in links] == [SPOTIFY]
     assert rejected == ["junk"]
     assert options == {"lyrics": "off", "recheck": True, "soundcloud_reposts": False, "soundcloud_likes": False,
-                       "soundcloud_fallback": False, "auto_retry": False}
+                       "soundcloud_fallback": False, "auto_retry": False, "debug_log": False}
 
 
 @pytest.mark.parametrize(

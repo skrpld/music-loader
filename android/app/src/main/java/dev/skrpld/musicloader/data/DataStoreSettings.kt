@@ -43,6 +43,7 @@ class DataStoreSettings(context: Context, private val secrets: SecretBox = Secre
                     soundcloudLikes = prefs[SOUNDCLOUD_LIKES] ?: false,
                     soundcloudFallback = prefs[SOUNDCLOUD_FALLBACK] ?: false,
                     autoRetry = prefs[AUTO_RETRY] ?: false,
+                    debugLog = prefs[DEBUG_LOG] ?: false,
                 ),
             )
         }
@@ -105,6 +106,7 @@ class DataStoreSettings(context: Context, private val secrets: SecretBox = Secre
             it[SOUNDCLOUD_LIKES] = options.soundcloudLikes
             it[SOUNDCLOUD_FALLBACK] = options.soundcloudFallback
             it[AUTO_RETRY] = options.autoRetry
+            it[DEBUG_LOG] = options.debugLog
         }
     }
 
@@ -120,6 +122,7 @@ class DataStoreSettings(context: Context, private val secrets: SecretBox = Secre
         val SOUNDCLOUD_LIKES = booleanPreferencesKey("soundcloud_likes")
         val SOUNDCLOUD_FALLBACK = booleanPreferencesKey("soundcloud_fallback")
         val AUTO_RETRY = booleanPreferencesKey("auto_retry")
+        val DEBUG_LOG = booleanPreferencesKey("debug_log")
         val SPOTIFY_CLIENT_ID = stringPreferencesKey("spotify_client_id_enc")
         val SPOTIFY_CLIENT_SECRET = stringPreferencesKey("spotify_client_secret_enc")
     }

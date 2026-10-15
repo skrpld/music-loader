@@ -8,7 +8,10 @@ import dev.skrpld.musicloader.data.Job
 import dev.skrpld.musicloader.data.RetryScope
 import dev.skrpld.musicloader.data.ServerRepository
 import dev.skrpld.musicloader.data.serverState
+import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,6 +24,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** The job shown in the detail pane. */
 data class SelectedJob(
@@ -35,6 +39,9 @@ data class SelectedJob(
 
 sealed interface JobsEvent {
     data class ActionFailed(val message: String?) : JobsEvent
+
+    /** The job's debug log was saved to [file] and can be handed to the share sheet. */
+    data class ShareDebugLog(val file: File) : JobsEvent
 }
 
 class JobsViewModel(private val repository: ServerRepository) : ViewModel() {
@@ -117,6 +124,27 @@ class JobsViewModel(private val repository: ServerRepository) : ViewModel() {
         if (selectedId.value == id) selectedId.value = null
     }
 
+    /**
+     * Fetches the job's debug log into [directory] (the app's cache, shared through its
+     * FileProvider) and asks the screen to share it. Older copies are removed first.
+     */
+    fun shareDebugLog(job: Job, directory: File) = action {
+        val name = job.debugLog?.substringAfterLast('/')?.substringAfterLast('\\')
+            ?.takeIf { it.matches(DEBUG_LOG_NAME) } ?: "debug-${job.id}.jsonl"
+        val file = withContext(Dispatchers.IO) {
+            directory.mkdirs()
+            directory.listFiles()?.forEach { it.delete() }
+            File(directory, name)
+        }
+        try {
+            repository.downloadDebugLog(job.id, file)
+        } catch (e: Exception) {
+            withContext(NonCancellable + Dispatchers.IO) { file.delete() }
+            throw e
+        }
+        _events.send(JobsEvent.ShareDebugLog(file))
+    }
+
     private fun action(block: suspend () -> Unit) {
         viewModelScope.launch {
             try {
@@ -130,4 +158,8 @@ class JobsViewModel(private val repository: ServerRepository) : ViewModel() {
     }
 
     private data class DetailKey(val id: String?, val status: String?, val finishedAt: Long?)
+
+    private companion object {
+        val DEBUG_LOG_NAME = Regex("debug-[A-Za-z0-9_-]+\\.jsonl")
+    }
 }

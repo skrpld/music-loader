@@ -12,7 +12,7 @@ Job spec:
     {"links": ["https://open.spotify.com/album/..."], "output": "/srv/Music",
      "lyrics": "strict" | "loose" | "off", "recheck": false,
      "soundcloud_reposts": false, "soundcloud_likes": false,
-     "soundcloud_fallback": false,
+     "soundcloud_fallback": false, "debug_log": false,
      "spotify_threads": 4, "soundcloud_download_workers": 2,
      "soundcloud_workers": 4, "lyrics_workers": 2}
 
@@ -35,6 +35,7 @@ from .config import (
     SPOTIFY_CLIENT_SECRET_ENV,
     AppConfig,
 )
+from . import debuglog
 from .events import EventDashboard
 from .links import Link, parse_link
 from .runlog import RunLog
@@ -111,12 +112,26 @@ def run(spec: dict[str, Any], events: EventDashboard) -> int:
     except OSError as exc:
         events.log(f"[Server] Could not create the failure log: {exc}")
 
+    debug = None
+    if spec.get("debug_log") is True:
+        try:
+            debug = debuglog.DebugLog.in_directory(config.music_dir / LOGS_DIRNAME)
+            events.emit({"type": "debug_log", "path": str(debug.path)})
+        except OSError as exc:
+            events.log(f"[Server] Could not create the debug log: {exc}")
+
+    debuglog.activate(debug)
     try:
+        debuglog.log_start("server", links, config)
         process_links(links, config, events)
+        debuglog.event("run", "finished", status="completed", stats=vars(events.stats))
     except KeyboardInterrupt:
+        debuglog.event("run", "finished", status="cancelled")
         events.finish_file(None)
         events.emit({"type": "finished", "status": "cancelled", "message": None})
         return 130
+    finally:
+        debuglog.deactivate()
     events.emit({"type": "finished", "status": "completed", "message": None})
     return 0
 

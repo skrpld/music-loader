@@ -44,6 +44,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
+from . import debuglog
 from .config import (
     LYRICS_LOOSE_DURATION_TOLERANCE,
     LYRICS_MODE_LOOSE,
@@ -138,13 +139,28 @@ class Verdict:
     synced: bool = False
     plain: bool = False
     instrumental: bool = False
+    # Why the candidate was rejected, or why only part of it is usable
+    # (for the debug log); empty for a full match.
+    reason: str = ""
+
+    @property
+    def label(self) -> str:
+        if self.instrumental:
+            return "instrumental"
+        if self.synced:
+            return "synced"
+        return "plain" if self.plain else "rejected"
+
+
+def _diff_text(diff: float | None) -> str:
+    return "unknown length" if diff is None else f"length differs by {diff:.1f}s"
 
 
 def evaluate(request: LyricsRequest, candidate: Candidate, mode: str) -> Verdict:
     """Decides what (if anything) may be taken from a candidate."""
     ours = [normalize_name(name) for name in request.artists if normalize_name(name)]
     if not ours:
-        return Verdict()
+        return Verdict(reason="track has no artist")
     primary = normalize_name(request.main_artists[0]) if request.main_artists else ours[0]
     theirs_names = split_artist_names(candidate.artist or "")
     theirs = [normalize_name(name) for name in theirs_names if normalize_name(name)]
@@ -152,7 +168,7 @@ def evaluate(request: LyricsRequest, candidate: Candidate, mode: str) -> Verdict
     if whole and whole not in theirs:
         theirs.append(whole)
     if not theirs:
-        return Verdict()
+        return Verdict(reason="candidate has no artist")
 
     strict_artist = primary in theirs or theirs[0] in set(ours)
     our_title, their_title = request.title, candidate.title
@@ -163,36 +179,87 @@ def evaluate(request: LyricsRequest, candidate: Candidate, mode: str) -> Verdict
     if request.duration and candidate.duration:
         diff = abs(float(request.duration) - float(candidate.duration))
 
+    has_text = bool(candidate.plain or candidate.synced)
     if mode == LYRICS_MODE_STRICT:
-        if not (strict_artist and strict_title and same_versions):
-            return Verdict()
+        if not strict_artist:
+            return Verdict(reason="artist mismatch")
+        if not same_versions and _same_song(our_title, their_title):
+            return Verdict(reason=_version_text(our_title, their_title))
+        if not strict_title:
+            return Verdict(reason="title mismatch")
+        if not same_versions:
+            return Verdict(reason=_version_text(our_title, their_title))
         if candidate.instrumental:
-            return Verdict(instrumental=diff is None or diff <= LYRICS_STRICT_DURATION_TOLERANCE)
+            ok = diff is None or diff <= LYRICS_STRICT_DURATION_TOLERANCE
+            return Verdict(instrumental=ok, reason="" if ok else f"instrumental, {_diff_text(diff)}")
         timing_ok = diff is not None and diff <= LYRICS_STRICT_DURATION_TOLERANCE
-        return Verdict(
+        verdict = Verdict(
             synced=_is_synced(candidate.synced) and timing_ok,
-            plain=bool((candidate.plain or candidate.synced)) and (diff is None or timing_ok),
+            plain=has_text and (diff is None or timing_ok),
         )
+        if not has_text:
+            verdict.reason = "no lyrics text"
+        elif diff is not None and not timing_ok:
+            verdict.reason = _diff_text(diff)
+        elif not verdict.synced:
+            verdict.reason = ("no synced lyrics" if not _is_synced(candidate.synced)
+                              else f"synced needs a known length ({_diff_text(diff)})")
+        return verdict
 
     # loose
     artist_ok = strict_artist or any(_similar(a, b) >= 0.85 for a in ours for b in theirs)
     loose_title = _similar(
         title_key(strip_variants(our_title)), title_key(strip_variants(their_title))
     ) >= 0.85
-    if not (artist_ok and (strict_title or loose_title)):
-        return Verdict()
+    if not artist_ok:
+        return Verdict(reason="artist mismatch")
+    if not (strict_title or loose_title):
+        return Verdict(reason="title mismatch")
     if not same_versions:
         # A sped-up/slowed/remixed upload of a known song: the words are the
         # same, the length is not - plain text only.
-        return Verdict(plain=bool(candidate.plain or candidate.synced) and not candidate.instrumental)
+        return Verdict(plain=has_text and not candidate.instrumental,
+                       reason=f"{_version_text(our_title, their_title)}, plain text only")
     if diff is not None and diff > LYRICS_LOOSE_DURATION_TOLERANCE:
-        return Verdict()
+        return Verdict(reason=f"{_diff_text(diff)} (more than {LYRICS_LOOSE_DURATION_TOLERANCE:.0f}s)")
     if candidate.instrumental:
         return Verdict(instrumental=same_versions)
     exact_timing = diff is not None and diff <= LYRICS_STRICT_DURATION_TOLERANCE
-    return Verdict(
+    verdict = Verdict(
         synced=_is_synced(candidate.synced) and exact_timing and same_versions,
-        plain=bool(candidate.plain or candidate.synced),
+        plain=has_text,
+    )
+    if not has_text:
+        verdict.reason = "no lyrics text"
+    elif not verdict.synced:
+        verdict.reason = ("no synced lyrics" if not _is_synced(candidate.synced)
+                          else f"synced needs ±{LYRICS_STRICT_DURATION_TOLERANCE:.0f}s ({_diff_text(diff)})")
+    return verdict
+
+
+def _same_song(ours: str, theirs: str) -> bool:
+    """Same title once the version markers are left out (for the reason only)."""
+    key = title_key(strip_variants(ours))
+    return bool(key) and key == title_key(strip_variants(theirs))
+
+
+def _version_text(ours: str, theirs: str) -> str:
+    def markers(title: str) -> str:
+        return ", ".join(sorted(variant_markers(title))) or "original"
+    return f"version mismatch ({markers(ours)} vs {markers(theirs)})"
+
+
+def log_candidate(request: LyricsRequest, candidate: Candidate, verdict: Verdict,
+                  stage: str = "checked") -> None:
+    """One candidate and its verdict in the debug log (see debuglog.py)."""
+    if not debuglog.enabled():
+        return
+    debuglog.event(
+        "lyrics", "candidate",
+        track=request.audio_path.name, provider=candidate.provider, stage=stage,
+        artist=candidate.artist, title=candidate.title, duration=candidate.duration,
+        has_synced=_is_synced(candidate.synced), has_plain=bool(candidate.plain),
+        instrumental=candidate.instrumental, verdict=verdict.label, reason=verdict.reason,
     )
 
 
@@ -236,7 +303,11 @@ class _Provider:
             response = http_get(url, **kwargs)
         except OSError as exc:
             self._failed(f"network error: {exc}")
+            debuglog.event("lyrics", "query", provider=self.name, url=url,
+                           params=kwargs.get("params"), error=str(exc))
             raise ProviderError(str(exc)) from exc
+        debuglog.event("lyrics", "query", provider=self.name, url=url,
+                       params=kwargs.get("params"), status=response.status)
         if response.status == 429 or response.status >= 500:
             self._failed(f"HTTP {response.status}")
             raise ProviderError(f"HTTP {response.status}")
@@ -365,7 +436,9 @@ class Musixmatch(_Provider):
             )
             # Only fetch the subtitles for a candidate that can be accepted.
             probe = Candidate(**{**candidate.__dict__, "synced": "[00:00.00]a\n[00:01.00]b\n[00:02.00]c"})
-            if not evaluate(request, probe, mode).synced and not candidate.instrumental:
+            probe_verdict = evaluate(request, probe, mode)
+            if not probe_verdict.synced and not candidate.instrumental:
+                log_candidate(request, candidate, probe_verdict, stage="search result")
                 continue
             if track.get("has_subtitles") and not candidate.instrumental:
                 sub = self._call("track.subtitle.get", {
@@ -415,10 +488,13 @@ class Genius(_Provider):
                     instrumental=bool(result.get("instrumental")),
                 )
                 if result.get("lyrics_state") not in {None, "complete"} and not candidate.instrumental:
+                    log_candidate(request, candidate, Verdict(
+                        reason=f"lyrics state '{result.get('lyrics_state')}'"), stage="search result")
                     continue
                 probe = Candidate(**{**candidate.__dict__, "plain": "x"})
                 verdict = evaluate(request, probe, mode)
                 if not (verdict.plain or verdict.instrumental):
+                    log_candidate(request, candidate, verdict, stage="search result")
                     continue
                 if not candidate.instrumental:
                     candidate.plain = self._page_lyrics(str(result["url"]))
@@ -548,10 +624,17 @@ class LyricsService:
             return LyricsOutcome("skipped", "run interrupted")
         if not self._claim(path):
             return LyricsOutcome("skipped", "already being processed")
+        debuglog.event(
+            "lyrics", "request", track=path.name, mode=self.mode, artists=request.main_artists,
+            featured=request.featured, title=request.title, album=request.album,
+            duration=request.duration, force=request.force,
+        )
         try:
             outcome = self._process(request, attempts, dashboard, abort)
         finally:
             self._release(path)
+        debuglog.event("lyrics", "result", track=path.name, status=outcome.status,
+                       provider=outcome.provider, detail=outcome.detail)
         if outcome.status in {"synced", "plain"}:
             dashboard.record_lyrics(True)
         elif outcome.status == "not_found":
@@ -593,12 +676,17 @@ class LyricsService:
                 return LyricsOutcome("skipped", "run interrupted")
             if provider.disabled:
                 self._report_disabled(provider, dashboard)
+                debuglog.event("lyrics", "provider_skipped", track=path.name, provider=provider.name,
+                               reason=f"switched off: {provider.disabled_reason}")
                 continue
             if best_plain is not None and isinstance(provider, Genius):
+                debuglog.event("lyrics", "provider_skipped", track=path.name, provider=provider.name,
+                               reason="plain lyrics already found")
                 continue
             try:
                 for candidate in provider.candidates(request, self.mode):
                     verdict = evaluate(request, candidate, self.mode)
+                    log_candidate(request, candidate, verdict)
                     if verdict.instrumental:
                         if attempts is not None:
                             attempts.record(request.key, self.mode)
@@ -610,11 +698,15 @@ class LyricsService:
                         return LyricsOutcome("synced", provider=candidate.provider)
                     if verdict.plain and best_plain is None:
                         best_plain = candidate
-            except ProviderError:
+            except ProviderError as exc:
                 self._report_disabled(provider, dashboard)
+                debuglog.event("lyrics", "provider_error", track=path.name, provider=provider.name,
+                               error=str(exc))
                 continue
             except Exception as exc:  # a provider bug must not cost the track
                 dashboard.log(f"[Lyrics] {provider.name} failed for '{path.name}': {exc}")
+                debuglog.event("lyrics", "provider_error", track=path.name, provider=provider.name,
+                               error=f"{type(exc).__name__}: {exc}")
                 continue
 
         if best_plain is not None:

@@ -1,5 +1,7 @@
 package dev.skrpld.musicloader.ui.jobs
 
+import android.content.Context
+import android.content.Intent
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
@@ -31,9 +33,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.skrpld.musicloader.R
 import dev.skrpld.musicloader.data.Features
@@ -41,10 +45,26 @@ import dev.skrpld.musicloader.data.Job
 import dev.skrpld.musicloader.data.JobStatus
 import dev.skrpld.musicloader.data.supports
 import dev.skrpld.musicloader.ui.components.EmptyState
+import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
 
 /** Width from which the job list and the job details are shown side by side. */
 private val TwoPaneMinWidth = 840.dp
+
+/** Cache subfolder for shared debug logs; must match res/xml/shared_files.xml. */
+private const val DEBUG_LOG_CACHE_DIR = "debug-logs"
+
+/** Hands [file] to the share sheet through the app's FileProvider. */
+private fun shareFile(context: Context, file: File, title: String) {
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = "application/json"
+        putExtra(Intent.EXTRA_STREAM, uri)
+        putExtra(Intent.EXTRA_SUBJECT, file.name)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(Intent.createChooser(send, title))
+}
 
 /**
  * The jobs destination: the list, and the details of the selected job either on top of it
@@ -65,11 +85,14 @@ fun JobsPane(
     var confirmCancel by remember { mutableStateOf<Job?>(null) }
     var confirmDelete by remember { mutableStateOf<Job?>(null) }
 
+    val context = LocalContext.current
     val failedFormat by rememberUpdatedState(stringResource(R.string.action_failed))
+    val shareTitle by rememberUpdatedState(stringResource(R.string.job_debug_log_share_title))
     LaunchedEffect(viewModel, snackbarHostState) {
         viewModel.events.collect { event ->
             when (event) {
                 is JobsEvent.ActionFailed -> snackbarHostState.showSnackbar(failedFormat.format(event.message.orEmpty()))
+                is JobsEvent.ShareDebugLog -> shareFile(context, event.file, shareTitle)
             }
         }
     }
@@ -101,6 +124,8 @@ fun JobsPane(
             canRetry = connection.supports(Features.Retry),
             onRetry = { job, scope -> viewModel.retryJob(job.id, scope) },
             onCancelRetryWait = { viewModel.cancel(it.id) },
+            canShareDebugLog = connection.supports(Features.DebugLog),
+            onShareDebugLog = { viewModel.shareDebugLog(it, File(context.cacheDir, DEBUG_LOG_CACHE_DIR)) },
             modifier = detailModifier,
         )
     }

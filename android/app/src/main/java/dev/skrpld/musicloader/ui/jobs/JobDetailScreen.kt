@@ -65,6 +65,9 @@ fun JobDetailScreen(
     canRetry: Boolean,
     onRetry: (Job, RetryScope) -> Unit,
     onCancelRetryWait: (Job) -> Unit,
+    /** The server can send debug logs; false for an older server. */
+    canShareDebugLog: Boolean,
+    onShareDebugLog: (Job) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val job = selected?.job
@@ -127,6 +130,8 @@ fun JobDetailScreen(
                 canRetry = canRetry,
                 onRetry = onRetry,
                 onCancelRetryWait = onCancelRetryWait,
+                canShareDebugLog = canShareDebugLog,
+                onShareDebugLog = onShareDebugLog,
             )
         }
     }
@@ -140,6 +145,8 @@ private fun JobDetailContent(
     canRetry: Boolean,
     onRetry: (Job, RetryScope) -> Unit,
     onCancelRetryWait: (Job) -> Unit,
+    canShareDebugLog: Boolean,
+    onShareDebugLog: (Job) -> Unit,
 ) {
     val clipboard = rememberClipboardAccess()
     val scope = rememberCoroutineScope()
@@ -228,6 +235,32 @@ private fun JobDetailContent(
                     },
                 ) {
                     Text(unavailableLogLabel)
+                }
+            }
+        }
+        if (canShareDebugLog && job.debugLog != null) {
+            item(key = "debug-log") {
+                SegmentedListItem(
+                    onClick = { onShareDebugLog(job) },
+                    shapes = ListItemDefaults.segmentedShapes(index = 0, count = 1),
+                    modifier = Modifier.padding(top = 12.dp),
+                    leadingContent = { Icon(painterResource(R.drawable.ic_info), contentDescription = null) },
+                    supportingContent = {
+                        Text(
+                            stringResource(
+                                if (job.status.isFinished) R.string.job_debug_log_description
+                                else R.string.job_debug_log_description_running,
+                            ),
+                        )
+                    },
+                    trailingContent = {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_share),
+                            contentDescription = stringResource(R.string.action_share),
+                        )
+                    },
+                ) {
+                    Text(stringResource(R.string.job_debug_log))
                 }
             }
         }
@@ -378,5 +411,6 @@ private fun OptionPills(job: Job) {
         if (options.soundcloudLikes) Pill(text = stringResource(R.string.option_likes), icon = R.drawable.ic_favorite)
         if (options.soundcloudFallback) Pill(text = stringResource(R.string.option_fallback), icon = R.drawable.ic_library_music)
         if (options.autoRetry) Pill(text = stringResource(R.string.option_auto_retry), icon = R.drawable.ic_schedule)
+        if (options.debugLog) Pill(text = stringResource(R.string.option_debug_log), icon = R.drawable.ic_info)
     }
 }

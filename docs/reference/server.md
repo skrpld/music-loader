@@ -48,7 +48,8 @@ An explicit token must be at least 16 characters of letters, digits and
   SoundCloud reposts and likes, `soundcloud_fallback` (look for tracks
   SoundCloud does not give out on YouTube Music, off by default) and
   `auto_retry` (queue failed tracks again after a cooldown, off by
-  default).
+  default) and `debug_log` (write a detailed debug log of the job, off by
+  default; see [Debug log](#debug-log)).
 - Cancelling a job goes through the same cleanup as Ctrl+C: child processes
   stop and unfinished files are removed. A worker that does not finish its
   cleanup within 60 s is killed.
@@ -93,6 +94,7 @@ JSON over HTTP, `Authorization: Bearer <token>` on every request.
 | `GET /api/v1/jobs/<id>` | one job with its log, errors and active downloads |
 | `POST /api/v1/jobs/<id>/cancel` | cancel a queued or running job; on a finished job it cancels the pending automatic retry |
 | `POST /api/v1/jobs/<id>/retry` | queue a finished job again (body below); `201` with the new job |
+| `GET /api/v1/jobs/<id>/debug-log` | the job's debug log file (`application/x-ndjson`); `404` when the job has none |
 | `DELETE /api/v1/jobs/<id>` | remove a finished job (`409` while it runs) |
 | `GET /api/v1/events` | Server-Sent Events: a `state` event after every change, keep-alive comments every 15 s |
 
@@ -102,7 +104,7 @@ Queue request:
 {
   "links": ["https://open.spotify.com/album/...", "https://soundcloud.com/..."],
   "options": {"lyrics": "strict", "recheck": false, "soundcloud_reposts": false, "soundcloud_likes": false,
-              "soundcloud_fallback": false, "auto_retry": false}
+              "soundcloud_fallback": false, "auto_retry": false, "debug_log": false}
 }
 ```
 
@@ -148,8 +150,25 @@ stops the wait. The timer is saved with the job history, so it survives a
 restart (see [History across restarts](#history-across-restarts)).
 
 `GET /api/v1/info` and every `state` event carry `features`
-(`["retry", "auto_retry"]`). An older server has no such list; the Android app
-then hides the retry actions.
+(`["retry", "auto_retry", "debug_log"]`). An older server has no such list (or
+lacks an entry); the Android app then hides the retry actions or the debug
+log switch.
+
+### Debug log
+
+With the job option `debug_log` the worker writes the same debug log as the
+CLI's `--debug-log` (format and contents: [CLI reference](cli.md#debug-log))
+to `.music-loader-logs/debug-YYYYMMDD-HHMMSS.jsonl` in the library. The job
+detail carries its path as `debug_log` (kept in the job history), and
+`GET /api/v1/jobs/<id>/debug-log` sends the file as it is at that moment, so a
+client on another device can save or share it, also while the job runs. Only
+a `debug-*` file in the library's log folder is ever sent. Secrets are masked
+in the file; a retry of the job keeps the option and writes a new log.
+
+```bash
+curl -H "Authorization: Bearer $MUSIC_LOADER_TOKEN" -o debug.jsonl \
+     http://192.168.1.10:8765/api/v1/jobs/<id>/debug-log
+```
 
 `links` entries may hold several whitespace-separated links. Entries that are
 not Spotify/SoundCloud links are returned in `rejected`; a request without a

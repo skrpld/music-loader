@@ -31,6 +31,10 @@ process list; prefer the environment variables.
 - Covers are fetched over http(s) only, with a size limit.
 - Private SoundCloud links: the secret token is not written into tags,
   playlists or the failure log.
+- The optional debug log (`--debug-log`, job option `debug_log`) masks
+  private SoundCloud tokens, client ids, user tokens, passwords and
+  `Authorization` values, and never records the Spotify credentials, so it can
+  be attached to an issue.
 - All child output is decoded as UTF-8, and remote text is escaped before it
   reaches the terminal UI.
 

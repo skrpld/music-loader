@@ -33,6 +33,8 @@ data class JobOptions(
     @SerialName("soundcloud_fallback") val soundcloudFallback: Boolean = false,
     /** The server queues failed tracks again after a cooldown (needs [Features.AutoRetry]). */
     @SerialName("auto_retry") val autoRetry: Boolean = false,
+    /** The job writes a detailed debug log (needs [Features.DebugLog]). */
+    @SerialName("debug_log") val debugLog: Boolean = false,
 ) {
     val lyricsMode: LyricsMode get() = LyricsMode.fromWire(lyrics)
 }
@@ -56,6 +58,9 @@ object Features {
 
     /** The `auto_retry` job option. */
     const val AutoRetry = "auto_retry"
+
+    /** The `debug_log` job option and `GET /jobs/<id>/debug-log`. */
+    const val DebugLog = "debug_log"
 }
 
 /** What a retry queues: every link of the job again, or only the failures worth another try. */
@@ -191,6 +196,8 @@ data class Job(
     val errors: List<LogEntry> = emptyList(),
     val runlog: String? = null,
     @SerialName("unavailable_log") val unavailableLog: String? = null,
+    /** Path of the job's debug log on the server, once the job has started writing it. */
+    @SerialName("debug_log") val debugLog: String? = null,
     @SerialName("failed_counts") val failedCounts: Map<String, Int> = emptyMap(),
     @SerialName("retryable_count") val retryableCount: Int = 0,
     @SerialName("failed_items") val failedItems: List<FailedItem> = emptyList(),

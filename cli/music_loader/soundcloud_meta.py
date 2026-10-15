@@ -19,17 +19,33 @@ Rules
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from . import debuglog
 from .artists import PRIORITY_TITLE, PRIORITY_UPLOADER, ArtistRegistry
 from .config import SINGLE_ALBUM_SUFFIX
 from .links import redact_url
 from .naming import VARIOUS_ARTISTS, album_folder, track_filename
 from .process import module_available
 from .tags import TrackTags
-from .text_utils import clean_promo, normalize_name, parse_soundcloud_title, split_artist_names, strip_decorations
+from .text_utils import (
+    clean_promo,
+    normalize_name,
+    parse_soundcloud_title,
+    split_artist_names,
+    strip_decorations,
+    variant_markers,
+)
+
+# Raw yt-dlp/SoundCloud fields worth seeing in the debug log (debuglog.py).
+_DEBUG_FIELDS = (
+    "id", "title", "uploader", "uploader_id", "uploader_url", "artist", "artists", "track",
+    "album", "album_artist", "album_type", "description", "duration", "genre", "genres", "tags",
+    "license", "release_timestamp", "timestamp", "upload_date", "webpage_url",
+    "publisher_metadata", "track_number",
+)
 
 ALBUM_SET_TYPES = {"album", "ep", "single", "compilation"}
 _SET_TYPE_RANK = {"album": 0, "ep": 1, "compilation": 2, "single": 3}
@@ -300,6 +316,19 @@ def build_meta(
     parsed = parse_soundcloud_title(
         str(info.get("title") or ""), uploader, official, registry.is_known, registry.canonical,
     )
+    if debuglog.enabled():
+        debuglog.event(
+            "soundcloud", "metadata", id=track_id,
+            raw={key: info.get(key) for key in _DEBUG_FIELDS if info.get(key) not in (None, "", [])},
+            album_context=asdict(album) if album is not None else None,
+        )
+        debuglog.event(
+            "soundcloud", "title_parsed", id=track_id, raw_title=info.get("title"),
+            uploader=uploader, official_artists=official, artists=parsed.artists,
+            featured=parsed.featured, producers=parsed.producers, title=parsed.title,
+            base_title=parsed.base_title, version_markers=variant_markers(parsed.title),
+            track_number=parsed.track_number,
+        )
     for name in parsed.artists + parsed.featured:
         registry.register(name, PRIORITY_TITLE)
     main = parsed.artists or ["Unknown Artist"]
@@ -341,10 +370,14 @@ def build_meta(
         url=redact_url(str(info.get("webpage_url") or "")),
         soundcloud_id=track_id,
     )
+    folder = album_folder(album_artist, album_title)
+    filename = track_filename(title, number, total)
+    debuglog.event("soundcloud", "final_meta", id=track_id, tags=asdict(tags),
+                   folder=folder, filename=filename)
     return TrackMeta(
         tags=tags,
-        folder=album_folder(album_artist, album_title),
-        filename=track_filename(title, number, total),
+        folder=folder,
+        filename=filename,
         main_artists=main,
         featured=featured,
         title=title,

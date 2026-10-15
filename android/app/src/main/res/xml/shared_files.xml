@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Files the app may share through its FileProvider: debug logs fetched into the cache. -->
+<paths>
+    <cache-path name="debug_logs" path="debug-logs/" />
+</paths>
