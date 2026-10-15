@@ -195,9 +195,9 @@ def test_rate_limit_wins_over_unavailable():
 
 
 # -- categories -------------------------------------------------------------------------------
-def test_only_transient_categories_are_retryable():
+def test_every_failure_but_an_unavailable_track_is_retryable():
     assert {category for category in FailureCategory if category.retryable} == {
-        FailureCategory.RATE_LIMITED, FailureCategory.NETWORK,
+        FailureCategory.FAILED, FailureCategory.RATE_LIMITED, FailureCategory.NETWORK,
     }
     assert not FailureCategory.UNAVAILABLE.retryable
     assert [category.value for category in FailureCategory] == ["failed", "unavailable", "rate_limited", "network"]

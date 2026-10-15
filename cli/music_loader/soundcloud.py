@@ -416,7 +416,7 @@ class _Download:
     rate_limited: bool = False
     # Set when the track cannot be downloaded at all (DRM, preview, ...).
     unavailable: Reason | None = None
-    # Why a failed download failed; the retryable ones can be tried again later.
+    # Why a failed download failed (every failure can be tried again later).
     category: FailureCategory = FailureCategory.FAILED
 
 

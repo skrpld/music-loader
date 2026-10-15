@@ -159,7 +159,7 @@
     <string name="failure_failed">Ошибка</string>
     <string name="failure_unavailable">Недоступны</string>
     <string name="option_auto_retry">Повторять автоматически</string>
-    <string name="option_auto_retry_description">После лимита запросов или сетевых ошибок самостоятельно повторять неудачные треки: через 15, 30 и 60 минут (не более 3 попыток). Работает, пока запущено приложение или сервер.</string>
+    <string name="option_auto_retry_description">Самостоятельно повторять неудачные треки, какой бы ни была ошибка: через 15, 30 и 60 минут (не более 3 попыток). Недоступные треки не повторяются. Работает, пока запущено приложение или сервер.</string>
 
     <!-- Settings -->
     <string name="settings_mode">Куда скачивать</string>

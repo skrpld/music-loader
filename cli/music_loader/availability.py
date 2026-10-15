@@ -9,9 +9,12 @@ Every track that is not saved ends in exactly one category:
 * ``failed`` - something went wrong that is worth looking at. The job is
   marked as having failures.
 * ``rate_limited`` and ``network`` - transient: the same download may work a
-  little later. They are reported like ``failed`` today; they exist as their
-  own categories so that a retry can pick exactly these (see
-  `FailureCategory.retryable`) and never an unavailable track.
+  little later. They are reported like ``failed``; they exist as their own
+  categories so the cause is visible in stats and logs.
+
+Every failure is retryable (see `FailureCategory.retryable`): many plain
+failures succeed on a second attempt too. Only an unavailable track is never
+retried, because that verdict is made on solid evidence alone.
 
 SoundCloud serves some tracks (mostly label uploads) only as encrypted
 streams (``ctr-encrypted-hls`` / ``cbc-encrypted-hls``). yt-dlp does not
@@ -65,9 +68,10 @@ class FailureCategory(str, Enum):
 
     @property
     def retryable(self) -> bool:
-        """True for failures that may disappear on their own. An unavailable
-        track is never retryable; a plain failure is left to the user."""
-        return self in {FailureCategory.RATE_LIMITED, FailureCategory.NETWORK}
+        """True for every failure: a track that failed for any reason may
+        come down on another try. Only an unavailable track (DRM, preview,
+        blocked, removed - a reliably permanent verdict) is never retried."""
+        return self is not FailureCategory.UNAVAILABLE
 
 
 class Reason(str, Enum):

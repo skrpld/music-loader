@@ -179,11 +179,11 @@ def test_failures_are_recorded_with_their_category():
         server.JobManager._apply(job, event)
     summary = job.summary()
     assert summary["failed_counts"] == {"rate_limited": 1, "network": 1, "failed": 1}
-    # Only rate limits and network trouble are worth another try.
-    assert summary["retryable_count"] == 2
+    # Every failure is worth another try, whatever its category.
+    assert summary["retryable_count"] == 3
     items = {item["url"]: item for item in job.detail()["failed_items"]}
     assert items[TRACK_A]["retryable"] is True and items[TRACK_A]["title"] == "A"
-    assert items[TRACK_C]["retryable"] is False
+    assert items[TRACK_C]["retryable"] is True
 
 
 def test_unavailable_tracks_and_bad_events_are_never_failures():
@@ -193,10 +193,10 @@ def test_unavailable_tracks_and_bad_events_are_never_failures():
     server.JobManager._apply(job, failure("", "network"))
     server.JobManager._apply(job, failure("-rf", "network"))
     assert job.failed == {}
-    # An unknown category is a plain failure, not retryable.
+    # An unknown category is a plain failure, retried like any other.
     server.JobManager._apply(job, failure(TRACK_B, "something-new"))
     assert job.summary()["failed_counts"] == {"failed": 1}
-    assert job.summary()["retryable_count"] == 0
+    assert job.summary()["retryable_count"] == 1
 
 
 def test_a_failed_track_is_listed_once_and_the_list_is_capped(monkeypatch):
@@ -301,24 +301,24 @@ def test_retry_all_also_works_for_a_job_without_failures_or_a_cancelled_one(api)
     assert api("POST", f"/jobs/{job_id}/retry", {"scope": "all"})[0] == 201
 
 
-def test_retry_failed_queues_only_the_retryable_tracks(api):
+def test_retry_failed_queues_every_failed_track_but_no_unavailable_one(api):
     job_id = queue(api, links=[SPOTIFY, SC_TRACK])
     finish(api.manager, job_id, failures=[
         failure(TRACK_A, "rate_limited"),
         failure(TRACK_B, "network"),
-        failure(TRACK_C, "failed"),                       # a permanent error
+        failure(TRACK_C, "failed"),                       # a plain failure is retried too
         failure("https://soundcloud.com/a/drm", "unavailable", service="soundcloud"),   # never retried
     ])
     status, body = api("POST", f"/jobs/{job_id}/retry", {"scope": "failed"})
     assert status == 201
-    assert [link["url"] for link in body["job"]["links"]] == [TRACK_A, TRACK_B]
+    assert [link["url"] for link in body["job"]["links"]] == [TRACK_A, TRACK_B, TRACK_C]
     # The first job is untouched and can be retried again.
-    assert api("GET", f"/jobs/{job_id}")[1]["job"]["retryable_count"] == 2
+    assert api("GET", f"/jobs/{job_id}")[1]["job"]["retryable_count"] == 3
 
 
-def test_retry_failed_without_retryable_tracks_is_refused(api):
+def test_retry_failed_without_failed_tracks_is_refused(api):
     job_id = queue(api)
-    finish(api.manager, job_id, failures=[failure(TRACK_A, "failed")])
+    finish(api.manager, job_id, failures=[failure(TRACK_A, "unavailable")])
     status, body = api("POST", f"/jobs/{job_id}/retry", {"scope": "failed"})
     assert status == 409 and "retried" in body["error"]
     assert len(api("GET", "/jobs")[1]["jobs"]) == 1
@@ -389,10 +389,11 @@ def test_auto_retry_schedule_is_15_30_60_minutes_and_three_attempts(timed, attem
     assert job.retry_at == (None if delay is None else int((clock.now + delay) * 1000))
 
 
-def test_auto_retry_waits_for_the_cooldown_then_queues_only_the_retryable_tracks(timed):
+def test_auto_retry_waits_for_the_cooldown_then_queues_the_failed_tracks(timed):
     manager, clock = timed
     job = submit(manager)
-    end(manager, job, failures=[failure(TRACK_A, "rate_limited"), failure(TRACK_B, "failed")])
+    end(manager, job, failures=[failure(TRACK_A, "rate_limited"), failure(TRACK_B, "failed"),
+                                failure(TRACK_C, "unavailable")])
     clock.advance(15 * 60 - 1)
     assert manager.tick() == []
     assert job.retry_at is not None
@@ -401,9 +402,37 @@ def test_auto_retry_waits_for_the_cooldown_then_queues_only_the_retryable_tracks
     new = manager._jobs[new_id]
     assert job.retry_at is None
     assert new.attempt == 1 and new.retry_of == job.id and new.status == "queued"
-    assert [link.url for link in new.links] == [TRACK_A]
+    assert [link.url for link in new.links] == [TRACK_A, TRACK_B]
     assert new.options == job.options                     # keeps auto_retry on
     assert manager.tick() == []                           # fires once
+
+
+def test_auto_retry_requeues_a_track_that_failed_for_any_reason(timed):
+    manager, clock = timed
+    job = submit(manager)
+    end(manager, job, failures=[failure(TRACK_C, "failed")])
+    assert job.retry_at == int((clock.now + 15 * 60) * 1000)
+    clock.advance(15 * 60)
+    (new_id,) = manager.tick()
+    assert [link.url for link in manager._jobs[new_id].links] == [TRACK_C]
+
+
+def test_auto_retry_of_plain_failures_stops_after_the_last_attempt(timed):
+    manager, clock = timed
+    job = submit(manager)
+    attempts = 0
+    while True:
+        end(manager, job, failures=[failure(TRACK_C, "failed")])
+        if job.retry_at is None:
+            break
+        clock.advance(job.retry_at / 1000 - clock.now)
+        (new_id,) = manager.tick()
+        job = manager._jobs[new_id]
+        attempts += 1
+        assert attempts <= len(server._AUTO_RETRY_DELAYS)
+    assert attempts == len(server._AUTO_RETRY_DELAYS) == job.attempt
+    clock.advance(24 * 60 * 60)
+    assert manager.tick() == []
 
 
 def test_auto_retry_chain_ends_after_three_attempts(timed):
@@ -427,7 +456,6 @@ def test_auto_retry_chain_ends_after_three_attempts(timed):
     [
         {"auto_retry": False},                                                  # the option is off
         {"status": "cancelled"},                                                # a person stopped it
-        {"failures": [failure(TRACK_A, "failed")]},                             # nothing worth retrying
         {"failures": []},
         {"failures": [failure(TRACK_A, "unavailable")]},
     ],
@@ -526,7 +554,7 @@ def test_the_runner_queues_the_automatic_retry_when_it_is_due(tmp_path, monkeypa
         if len(runs) == 1:
             with self._cond:
                 self._apply(job, failure(TRACK_A, "rate_limited"))
-                self._apply(job, failure(TRACK_B, "failed"))
+                self._apply(job, failure(TRACK_B, "unavailable"))
         return "completed", None
 
     monkeypatch.setattr(server.JobManager, "_execute", fake_execute)
@@ -599,12 +627,12 @@ def test_finished_job_survives_a_restart_with_its_details(tmp_path, monkeypatch)
     assert restored == before
     assert [summary["id"] for summary in after.jobs()] == [job.id]
     assert restored["status"] == "failed" and restored["stats"]["spotify_ok"] == 3
-    assert restored["retryable_count"] == 2 and restored["error_count"] == 1
+    assert restored["retryable_count"] == 3 and restored["error_count"] == 1
     assert restored["options"]["recheck"] is True and restored["rejected"] == ["nope"]
     assert "s-Hidden" not in json.dumps(after.jobs()) + json.dumps(restored)
 
     new = after.retry(job.id, "failed")                  # /retry works for a restored job
-    assert sorted(link.url for link in new.links) == sorted([TRACK_A, PRIVATE])
+    assert sorted(link.url for link in new.links) == sorted([TRACK_A, PRIVATE, TRACK_B])
     assert new.retry_of == job.id and new.options == job.options
 
 
