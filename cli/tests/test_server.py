@@ -551,3 +551,200 @@ def test_auto_retry_option_must_be_a_boolean():
     assert options["auto_retry"] is True
     with pytest.raises(server._RequestError):
         server._parse_job_request({"links": [SPOTIFY], "options": {"auto_retry": "yes"}})
+
+
+# -- job history (jobs file in the state folder) ------------------------------------------
+PRIVATE = "https://soundcloud.com/a/sets/b?secret_token=s-Hidden"
+
+
+def stored(state_dir, clock=None):
+    """A manager on `state_dir`, as a restarted server would create it."""
+    kwargs = {"clock": clock} if clock is not None else {}
+    return server.JobManager(state_dir, {}, Console(file=io.StringIO()), state_dir=state_dir, **kwargs)
+
+
+def run_one(manager, monkeypatch, status="completed", events=()):
+    """Runs one job through the real runner with a fake worker."""
+    def fake_execute(self, job):
+        with self._cond:
+            for event in events:
+                self._apply(job, event)
+        return status, "done" if status == "completed" else "it broke"
+
+    monkeypatch.setattr(server.JobManager, "_execute", fake_execute)
+    manager.start()
+    try:
+        options = server._parse_options({"lyrics": "off", "recheck": True})
+        job = manager.submit([server.parse_link(SPOTIFY)], options, ["nope"])
+        wait_until(manager, lambda: job.finished)
+    finally:
+        manager.shutdown(timeout=5)
+    return job
+
+
+def test_finished_job_survives_a_restart_with_its_details(tmp_path, monkeypatch):
+    events = [
+        {"type": "log", "level": "error", "source": "spotify", "text": "boom"},
+        {"type": "stats", "stats": {"spotify_ok": 3, "spotify_fail": 2}},
+        {"type": "queue", "completed": 1, "total": 1},
+        failure(TRACK_A, "rate_limited", title="A"),
+        failure(PRIVATE, "network", service="soundcloud"),
+        failure(TRACK_B, "failed"),
+    ]
+    job = run_one(stored(tmp_path), monkeypatch, status="failed", events=events)
+    before = job.detail()
+
+    after = stored(tmp_path)
+    restored = after.job(job.id)
+    assert restored == before
+    assert [summary["id"] for summary in after.jobs()] == [job.id]
+    assert restored["status"] == "failed" and restored["stats"]["spotify_ok"] == 3
+    assert restored["retryable_count"] == 2 and restored["error_count"] == 1
+    assert restored["options"]["recheck"] is True and restored["rejected"] == ["nope"]
+    assert "s-Hidden" not in json.dumps(after.jobs()) + json.dumps(restored)
+
+    new = after.retry(job.id, "failed")                  # /retry works for a restored job
+    assert sorted(link.url for link in new.links) == sorted([TRACK_A, PRIVATE])
+    assert new.retry_of == job.id and new.options == job.options
+
+
+def test_retry_endpoint_works_after_a_restart(tmp_path, monkeypatch):
+    job = run_one(stored(tmp_path), monkeypatch)
+    manager = stored(tmp_path)
+    httpd = server.make_server("127.0.0.1", 0, manager, TOKEN)
+    threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{httpd.server_address[1]}/api/v1/jobs/{job.id}/retry",
+            data=json.dumps({"scope": "all"}).encode(), method="POST")
+        request.add_header("Authorization", f"Bearer {TOKEN}")
+        with urllib.request.urlopen(request, timeout=10) as response:
+            body = json.loads(response.read())
+        assert response.status == 201 and body["job"]["retry_of"] == job.id
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_running_and_queued_jobs_come_back_interrupted_not_run_again(tmp_path, monkeypatch):
+    release = threading.Event()
+
+    def fake_execute(self, job):
+        release.wait(10)
+        return "completed", None
+
+    monkeypatch.setattr(server.JobManager, "_execute", fake_execute)
+    first = stored(tmp_path)
+    first.start()
+    try:
+        running = first.submit([server.parse_link(SPOTIFY)], {"lyrics": "off"}, [])
+        waiting = first.submit([server.parse_link(TRACK_A)], {"lyrics": "off"}, [])
+        wait_until(first, lambda: running.status == "running")
+
+        # The process dies here: a new server reads what the file says.
+        second = stored(tmp_path)
+        jobs = {job["id"]: job for job in second.jobs()}
+        assert jobs[running.id]["status"] == "failed"
+        assert jobs[running.id]["message"] == server._INTERRUPTED_RUNNING
+        assert jobs[running.id]["started_at"] is not None and jobs[running.id]["finished_at"] is not None
+        assert jobs[waiting.id]["status"] == "cancelled"
+        assert jobs[waiting.id]["message"] == server._INTERRUPTED_QUEUED
+        assert not second._pending and second.info()["busy"] is False
+        assert second.retry(running.id, "all").retry_of == running.id
+    finally:
+        release.set()
+        first.shutdown(timeout=5)
+
+
+def test_a_clean_shutdown_keeps_the_cancelled_job(tmp_path):
+    manager = stored(tmp_path)
+    job = manager.submit([server.parse_link(SPOTIFY)], {"lyrics": "off"}, [])
+    manager.shutdown(timeout=1)
+    assert stored(tmp_path).job(job.id)["status"] == "cancelled"
+
+
+def test_a_pending_automatic_retry_is_restored(tmp_path):
+    clock = Clock()
+    manager = stored(tmp_path, clock)
+    job = submit(manager)
+    end(manager, job)
+    with manager._cond:
+        manager._save()
+    retry_at = job.retry_at
+    assert retry_at is not None
+
+    restarted = stored(tmp_path, clock)
+    assert restarted.job(job.id)["retry_at"] == retry_at
+    assert restarted.tick() == []
+    clock.advance(15 * 60)
+    (new_id,) = restarted.tick()
+    assert restarted._jobs[new_id].attempt == 1 and restarted.job(job.id)["retry_at"] is None
+    # ...and the dropped timer is saved too.
+    assert stored(tmp_path, clock).job(job.id)["retry_at"] is None
+
+
+def test_shutdown_does_not_drop_a_pending_automatic_retry(tmp_path):
+    clock = Clock()
+    manager = stored(tmp_path, clock)
+    job = submit(manager)
+    end(manager, job)
+    manager.shutdown(timeout=1)
+    clock.advance(24 * 3600)
+    assert manager.tick() == []
+    assert stored(tmp_path, clock).job(job.id)["retry_at"] == job.retry_at
+
+
+def test_the_restored_history_is_trimmed(tmp_path, monkeypatch):
+    manager = stored(tmp_path)
+    jobs = [manager.submit([server.parse_link(SPOTIFY)], {"lyrics": "off"}, []) for _ in range(5)]
+    for job in jobs:
+        manager.cancel(job.id)
+    monkeypatch.setattr(server, "_MAX_FINISHED_JOBS", 2)
+    assert [job["id"] for job in stored(tmp_path).jobs()] == [jobs[4].id, jobs[3].id]
+
+
+@pytest.mark.parametrize("content", [
+    "{not json", "[]", '{"version": 99, "jobs": []}', '{"version": 1, "jobs": {}}', "\udcff",
+])
+def test_an_unreadable_jobs_file_is_ignored(tmp_path, content):
+    (tmp_path / server.JOBS_FILENAME).write_bytes(content.encode("utf-8", "surrogateescape"))
+    manager = stored(tmp_path)
+    assert manager.jobs() == []
+    manager.submit([server.parse_link(SPOTIFY)], {"lyrics": "off"}, [])  # and is replaced
+    assert len(stored(tmp_path).jobs()) == 1
+
+
+def test_broken_entries_are_skipped(tmp_path):
+    good = {"id": "abc123", "links": [SPOTIFY], "options": {"lyrics": "off"}, "created_at": 1,
+            "status": "completed", "failed": [{"url": "x"}, "y"], "log": [1, {"text": "ok"}]}
+    entries = [
+        good, dict(good),                                  # a duplicate id
+        {**good, "id": "../x"}, {**good, "id": "def456", "links": ["https://example.com"]},
+        {**good, "id": "def457", "status": "exploded"}, {**good, "id": "def458", "options": {"lyrics": 1}},
+        {**good, "id": "def459", "created_at": "soon"}, "junk", None,
+    ]
+    (tmp_path / server.JOBS_FILENAME).write_text(json.dumps({"version": 1, "jobs": entries}))
+    (job,) = stored(tmp_path).jobs()
+    assert job["id"] == "abc123" and job["finished_at"] == 1 and job["failed_counts"] == {}
+    assert [entry["text"] for entry in stored(tmp_path).job("abc123")["log"]] == ["ok"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
+def test_jobs_file_is_private_and_written_atomically(tmp_path):
+    manager = stored(tmp_path)
+    manager.submit([server.parse_link(PRIVATE)], {"lyrics": "off"}, [])
+    path = tmp_path / server.JOBS_FILENAME
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert "s-Hidden" in path.read_text()                # the next server needs the real link
+    assert [p.name for p in tmp_path.iterdir()] == [server.JOBS_FILENAME]
+
+
+def test_without_a_state_dir_nothing_is_written(tmp_path):
+    manager = server.JobManager(tmp_path, {}, Console(file=io.StringIO()))
+    manager.submit([server.parse_link(SPOTIFY)], {"lyrics": "off"}, [])
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_serve_keeps_the_history_next_to_the_token_unless_told_otherwise():
+    assert server.parse_args(["-o", "x"]).state_dir is None
+    assert server.parse_args(["-o", "x", "--state-dir", "/srv/state"]).state_dir == "/srv/state"

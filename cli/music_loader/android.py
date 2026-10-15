@@ -163,7 +163,8 @@ def start(native_dir: str, files_dir: str, cache_dir: str, music_dir: str) -> st
         inprocess.check_spotdl()
         # The server's own messages end up in the app log (logcat).
         console = Console(file=sys.stderr, force_terminal=False, width=200)
-        manager = JobManager(Path(music_dir), {}, console, in_process=True)
+        # The job history survives the app process in its private storage.
+        manager = JobManager(Path(music_dir), {}, console, in_process=True, state_dir=files)
         token = secrets.token_urlsafe(32)
         server = make_server("127.0.0.1", 0, manager, token)
         manager.start()

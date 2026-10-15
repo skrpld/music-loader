@@ -6,6 +6,7 @@
 
 ```text
 music-loader serve -o <MUSIC_FOLDER> [--host HOST] [--port PORT] [--token TOKEN] [--new-token]
+                   [--state-dir DIR]
 ```
 
 `<MUSIC_FOLDER>` is the library folder jobs download into.
@@ -19,6 +20,7 @@ music-loader serve -o <MUSIC_FOLDER> [--host HOST] [--port PORT] [--token TOKEN]
 | `--port` | 8765 | Port |
 | `--token` | stored token | Access token; prefer `MUSIC_LOADER_TOKEN` |
 | `--new-token` | off | Generate a new stored token (the app has to be paired again) |
+| `--state-dir` | token folder | Folder for the job history (`server-jobs.json`); give each server its own when several run on one machine |
 | `--spotify-threads`, `--soundcloud-download-workers`, `--soundcloud-workers`, `--lyrics-workers` | as in the CLI | Parallel work for every job |
 
 Spotify credentials are read from `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET`
@@ -53,6 +55,31 @@ An explicit token must be at least 16 characters of letters, digits and
 - Stopping the server (Ctrl+C, SIGTERM) cancels the running job the same way.
 - Limits: 100 queued jobs, 2000 links per job, 50 finished jobs kept,
   256 KiB request body.
+
+### History across restarts
+
+The job list is saved to `server-jobs.json` in the state folder
+(`--state-dir`, by default the folder of the stored token:
+`~/.config/music-loader` or `%APPDATA%\music-loader`) whenever a job is queued,
+starts, ends, is cancelled or deleted, and its retry timer changes. The file
+is replaced atomically and created with mode `0600`: it holds the full links,
+private SoundCloud tokens included, because a restored job must still be
+retryable. API responses stay redacted as before.
+
+On start the server restores the saved jobs (at most the 50 newest finished
+ones, plus any waiting for an automatic retry) with their status, counters,
+log, errors, failures and options, so the job detail and `/retry` keep
+working:
+
+- Finished jobs (`completed`, `failed`, `cancelled`) come back as they were.
+- A job that was `running` when the process died comes back as `failed`, one
+  that was `queued` as `cancelled`, both with a message starting with
+  `Interrupted:`. Neither is run again by itself; `/retry` queues it again. A
+  clean stop (Ctrl+C, SIGTERM) still cancels the running job first.
+- A pending automatic retry keeps its `retry_at`: it is queued when that time
+  comes, or right after the start when it passed while the server was down.
+- A file that cannot be read (corrupted, unknown version) is ignored with a
+  warning and replaced on the next change; unusable entries are skipped.
 
 ## HTTP API
 
@@ -110,8 +137,8 @@ With the job option `auto_retry` the server does this by itself: a job that
 minutes (three attempts at most; `attempt` / `max_attempts` count them). The
 retry is queued once the running job is done, so the times are a lower bound. While
 it waits, the job has `retry_at` (epoch milliseconds); `POST .../cancel` on it
-stops the wait. The timer is kept in memory: it is lost when the server
-restarts.
+stops the wait. The timer is saved with the job history, so it survives a
+restart (see [History across restarts](#history-across-restarts)).
 
 `GET /api/v1/info` and every `state` event carry `features`
 (`["retry", "auto_retry"]`). An older server has no such list; the Android app

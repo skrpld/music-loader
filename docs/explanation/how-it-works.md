@@ -355,10 +355,14 @@ scope `failed` queues the URLs of the retryable failures only.
 app): when a job *completes* with retryable failures, the server queues them
 again by itself after 15 minutes, then 30, then 60 - at most three attempts.
 The job shows when the next attempt is due, and cancelling it stops the wait.
-Cancelled and crashed jobs are not retried. The timer lives in the memory of
-the server (`JobManager`): it survives as long as `music-loader serve` or the
-app's download service runs, but not a restart of the server or the app being
-killed. A persistent schedule (WorkManager) is left for later.
+Cancelled and crashed jobs are not retried. The timer is kept with the job
+history (`server-jobs.json` in the server's state folder, the app's private
+storage on Android), so it survives a restart of the server or the app; the
+retry runs once the server runs again (right away when its time has passed).
+Jobs that were queued or running when the process died come back as
+interrupted (`cancelled` / `failed`) and are never re-run by themselves.
+Android has no wake-up of its own for the timer (no WorkManager): a killed
+app retries the next time it starts.
 
 ## Code map
 

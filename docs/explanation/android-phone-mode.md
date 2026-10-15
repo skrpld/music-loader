@@ -49,10 +49,13 @@ This page explains how that works and what it costs.
 - Tracks SoundCloud only serves DRM-protected (or as a 30-second preview) are skipped and shown as
   "Unavailable"; the option "Look for blocked tracks elsewhere" takes the same track from YouTube
   Music when artist, title, version and length match (off by default).
-- Jobs live in the app's memory: the list starts empty after Android ends the app. The library and
-  its indexes are on disk, so running a link again only fetches what is missing.
-- The automatic retry timer lives in the app process: it works while the download service runs and
-  is lost when the app is killed.
+- The job history is kept in the app's private storage (`server-jobs.json`): finished jobs, their
+  log, failures and retry actions are back after Android ends the app. A job that was running or
+  queued when the app was killed comes back as interrupted (failed / cancelled) and is not resumed;
+  retry it from its detail screen. The library and its indexes are on disk, so running a link
+  again only fetches what is missing.
+- The automatic retry timer is saved with the history. It fires while the app (its download
+  service) runs; when the app was killed in the meantime, the retry is queued on the next start.
 - The APK is large (~100 MB): Python, the packages and ffmpeg are inside.
 
 ## Alternative: server mode
