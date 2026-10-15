@@ -1,0 +1,164 @@
+{
+ "_source": "debug-20261015-125214.jsonl (music-loader 2.8.0, server on Android, loose mode, 329 SoundCloud tracks, 0 lyrics found)",
+ "requests": {
+  "anyday *prod playasin*": {
+   "artists": [
+    "WHITENER"
+   ],
+   "featured": [],
+   "title": "anyday *prod playasin*",
+   "album": "anyday *prod playasin* - Single",
+   "duration": 90.09632653061225
+  },
+  "VAMPFLOW ***#UNRELEASED!***": {
+   "artists": [
+    "WHITENER"
+   ],
+   "featured": [],
+   "title": "VAMPFLOW ***#UNRELEASED!***",
+   "album": "VAMPFLOW ***#UNRELEASED!*** (prod. FORLXRN) - Single",
+   "duration": 150.3869387755102
+  },
+  "5 SE「prod. AQUAKEY」": {
+   "artists": [
+    "AQUAKEY",
+    "TARABANDZ"
+   ],
+   "featured": [],
+   "title": "5 SE「prod. AQUAKEY」",
+   "album": "5 SE「prod. AQUAKEY」 - Single",
+   "duration": 138.78857142857143
+  },
+  "bloodrain ###": {
+   "artists": [
+    "WHITENER"
+   ],
+   "featured": [],
+   "title": "bloodrain ###",
+   "album": "bloodrain ### (prod. Haru Matsui) - Single",
+   "duration": 80.66612244897959
+  },
+  "Deathtones (mxstrakh)": {
+   "artists": [
+    "platov",
+    "bankirkash"
+   ],
+   "featured": [],
+   "title": "Deathtones (mxstrakh)",
+   "album": "Another Day In Da City",
+   "duration": 123.68979591836735
+  },
+  "AQUAKEY - OLD NOKIA": {
+   "artists": [
+    "@aquagwap"
+   ],
+   "featured": [],
+   "title": "AQUAKEY - OLD NOKIA",
+   "album": "AQUAKEY - HEDON1SMCEO",
+   "duration": 152.11102040816326
+  },
+  "yung millionaire": {
+   "artists": [
+    "WHITENER"
+   ],
+   "featured": [],
+   "title": "yung millionaire",
+   "album": "money fetish",
+   "duration": 103.47102040816327
+  },
+  "follow me": {
+   "artists": [
+    "WHITENER"
+   ],
+   "featured": [],
+   "title": "follow me",
+   "album": "money fetish",
+   "duration": 151.92816326530613
+  },
+  "check da tag": {
+   "artists": [
+    "WHITENER"
+   ],
+   "featured": [],
+   "title": "check da tag",
+   "album": "money fetish",
+   "duration": 147.77469387755102
+  }
+ },
+ "musixmatch_track_search_body": {
+  "track_list": [
+   {
+    "track": {
+     "track_id": 900000,
+     "artist_name": "Doja Cat",
+     "track_name": "Casual",
+     "track_length": 240,
+     "has_subtitles": 0,
+     "instrumental": 0
+    }
+   },
+   {
+    "track": {
+     "track_id": 900001,
+     "artist_name": "Doja Cat",
+     "track_name": "Casual",
+     "track_length": 0,
+     "has_subtitles": 0,
+     "instrumental": 0
+    }
+   },
+   {
+    "track": {
+     "track_id": 900002,
+     "artist_name": "Calming Cat Music",
+     "track_name": "Casual Backdrops for Kitty Cats",
+     "track_length": 122,
+     "has_subtitles": 0,
+     "instrumental": 0
+    }
+   },
+   {
+    "track": {
+     "track_id": 900003,
+     "artist_name": "Cat Music",
+     "track_name": "Casual Moods for Mysterious Cat",
+     "track_length": 118,
+     "has_subtitles": 0,
+     "instrumental": 0
+    }
+   },
+   {
+    "track": {
+     "track_id": 900004,
+     "artist_name": "Calming Cat Music",
+     "track_name": "Casual Music for Loving Cats",
+     "track_length": 139,
+     "has_subtitles": 0,
+     "instrumental": 0
+    }
+   }
+  ]
+ },
+ "lrclib_statuses": [
+  429,
+  429,
+  404,
+  200,
+  429,
+  429,
+  429,
+  503
+ ],
+ "genius_statuses_first_10": [
+  403,
+  403,
+  403,
+  403,
+  403,
+  403,
+  403,
+  403,
+  403,
+  403
+ ]
+}

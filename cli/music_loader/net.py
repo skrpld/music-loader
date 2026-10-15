@@ -6,7 +6,7 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from . import __version__
@@ -28,6 +28,15 @@ class Response:
     status: int
     body: bytes
     url: str
+    headers: dict[str, str] = field(default_factory=dict)   # lower-case names
+
+    def retry_after(self) -> float | None:
+        """Seconds from a "Retry-After: N" header (the date form is ignored)."""
+        value = self.headers.get("retry-after", "").strip()
+        try:
+            return max(0.0, float(value)) if value else None
+        except ValueError:
+            return None
 
     @property
     def ok(self) -> bool:
@@ -38,6 +47,13 @@ class Response:
 
     def json(self) -> Any:
         return json.loads(self.body.decode("utf-8", "replace"))
+
+
+def _headers(message: Any) -> dict[str, str]:
+    try:
+        return {str(key).lower(): str(value) for key, value in message.items()}
+    except AttributeError:
+        return {}
 
 
 def probe(url: str, timeout: float = 10.0) -> int:
@@ -84,12 +100,12 @@ def http_get(
             body = response.read(max_bytes + 1)
             if len(body) > max_bytes:
                 raise ResponseTooLarge(f"response larger than {max_bytes} bytes")
-            return Response(response.status, body, response.geturl())
+            return Response(response.status, body, response.geturl(), _headers(response.headers))
     except urllib.error.HTTPError as exc:
         try:
             body = exc.read(64 * 1024)
         except OSError:
             body = b""
-        return Response(exc.code, body, url)
+        return Response(exc.code, body, url, _headers(exc.headers))
     except ResponseTooLarge as exc:
         raise OSError(str(exc)) from exc

@@ -56,7 +56,7 @@
     <string name="lyrics_loose">Мягкий</string>
     <string name="lyrics_off">Выкл.</string>
     <string name="lyrics_strict_description">Только точное совпадение исполнителя, названия, версии и длительности (±2 с). Лучше без текста, чем с текстом другой песни.</string>
-    <string name="lyrics_loose_description">Нечёткое совпадение исполнителя и названия, расхождение длительности до 10 с. Если тайминги могут не совпасть, сохраняется только текст.</string>
+    <string name="lyrics_loose_description">Нечёткое совпадение исполнителя и названия, расхождение длительности до предела из настроек (по умолчанию 10 с). Если тайминги могут не совпасть, сохраняется только текст.</string>
     <string name="lyrics_off_description">Тексты не ищутся.</string>
     <string name="options_title">Параметры</string>
     <string name="option_recheck">Перепроверить библиотеку</string>
@@ -250,4 +250,28 @@
     <string name="settings_filename_hint">{track}, {title}, {artist}, {album}, {album_artist}; {track:02} задаёт ширину номера</string>
     <string name="settings_filename_invalid">Нужен ровно один {title}, только эти поля, без / и \\</string>
     <string name="action_reset">Сбросить</string>
+    <string name="settings_lyrics">Тексты песен</string>
+    <string name="settings_lyrics_description">Как ищутся тексты; Строгий / Мягкий режим выбирается на экране загрузки. Синхронизированный текст всегда требует ту же версию и длину в пределах 2 с.</string>
+    <string name="settings_lyrics_description_server">Как ищутся тексты; Строгий / Мягкий режим выбирается на экране загрузки. Синхронизированный текст всегда требует ту же версию и длину в пределах 2 с. Нужен music-loader 2.9.0 или новее на сервере.</string>
+    <string name="settings_lyrics_providers">Источники</string>
+    <string name="settings_lyrics_provider_position">Запрос №%1$d</string>
+    <string name="settings_lyrics_provider_only">Единственный источник, не отключается</string>
+    <string name="settings_lyrics_provider_off">Не используется</string>
+    <string name="settings_lyrics_move_up">Спрашивать %1$s раньше</string>
+    <string name="settings_lyrics_plain">Обычный текст</string>
+    <string name="settings_lyrics_plain_hint">Встраивать текст без таймкодов, если синхронизированный не подошёл</string>
+    <string name="settings_lyrics_versions">Оригинал для sped up / slowed</string>
+    <string name="settings_lyrics_versions_hint">Строгий режим: ускоренная, замедленная, 8D или bass boosted версия получает обычный текст оригинала, без таймкодов</string>
+    <string name="settings_lyrics_tolerance">Разница длины в мягком режиме</string>
+    <string name="settings_lyrics_seconds">%1$d с</string>
+    <string name="settings_lyrics_tolerance_hint">До этой разницы обычный текст ещё принимается</string>
+    <string name="settings_lyrics_retry">Повторный поиск, если не найдено</string>
+    <string name="settings_lyrics_retry_always">Каждый раз</string>
+    <plurals name="settings_lyrics_days">
+        <item quantity="one">%1$d день</item>
+        <item quantity="few">%1$d дня</item>
+        <item quantity="many">%1$d дней</item>
+        <item quantity="other">%1$d дня</item>
+    </plurals>
+    <string name="settings_lyrics_retry_hint">Трек без найденного текста ищется снова через это время; «Перепроверить библиотеку» ищет в любом случае</string>
 </resources>

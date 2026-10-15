@@ -59,6 +59,15 @@ An explicit token must be at least 16 characters of letters, digits and
   means its default; a wrong value or a bad template is refused with 400 and
   the reason (`'soundcloud_filename': the file name template must contain
   {title} exactly once`).
+- Lyrics settings per job, the same settings as the CLI's
+  (see [Lyrics](../explanation/how-it-works.md#lyrics)):
+  `lyrics_providers` (a list of `"lrclib"`, `"musixmatch"`, `"genius"`, asked
+  in that order; default all three), `lyrics_plain` (plain text when no
+  synced lyrics match, default `true`), `lyrics_length_tolerance` (loose
+  mode, seconds from 2 to 60, default `10`), `lyrics_original_for_versions`
+  (strict mode, default `false`) and `lyrics_retry_days` (0 to 365, default
+  `7`). A missing option means its default; a wrong value is refused with 400
+  and the reason (`'lyrics_providers': unknown lyrics provider 'azlyrics'`).
 - Cancelling a job goes through the same cleanup as Ctrl+C: child processes
   stop and unfinished files are removed. A worker that does not finish its
   cleanup within 60 s is killed.
@@ -116,7 +125,10 @@ Queue request:
               "soundcloud_fallback": false, "auto_retry": false, "debug_log": false,
               "soundcloud_feat": "both", "soundcloud_keep_producers": false,
               "soundcloud_keep_versions": true, "soundcloud_strip_promo": true,
-              "soundcloud_filename": "{track} - {title}"}
+              "soundcloud_filename": "{track} - {title}",
+              "lyrics_providers": ["lrclib", "musixmatch", "genius"], "lyrics_plain": true,
+              "lyrics_length_tolerance": 10, "lyrics_original_for_versions": false,
+              "lyrics_retry_days": 7}
 }
 ```
 
@@ -162,10 +174,11 @@ stops the wait. The timer is saved with the job history, so it survives a
 restart (see [History across restarts](#history-across-restarts)).
 
 `GET /api/v1/info` and every `state` event carry `features`
-(`["retry", "auto_retry", "debug_log", "soundcloud_format"]`). An older server has
-no such list (or lacks an entry); the Android app then hides the retry actions
-or the debug log switch. A server without `soundcloud_format` ignores the
-formatting options and writes the default format.
+(`["retry", "auto_retry", "debug_log", "soundcloud_format", "lyrics_settings"]`).
+An older server has no such list (or lacks an entry); the Android app then hides
+the retry actions or the debug log switch. A server without `soundcloud_format`
+ignores the formatting options and writes the default format; one without
+`lyrics_settings` ignores the lyrics settings and uses the defaults.
 
 ### Debug log
 

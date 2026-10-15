@@ -4,8 +4,10 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import java.io.IOException
@@ -50,6 +52,11 @@ class DataStoreSettings(context: Context, private val secrets: SecretBox = Secre
                     soundcloudStripPromo = prefs[SOUNDCLOUD_STRIP_PROMO] ?: true,
                     soundcloudFilename = prefs[SOUNDCLOUD_FILENAME]?.takeIf(FilenameTemplate::isValid)
                         ?: FilenameTemplate.DEFAULT,
+                    lyricsProviders = LyricsProvider.fromWire(prefs[LYRICS_PROVIDERS]?.split(",")).map { it.wire },
+                    lyricsPlain = prefs[LYRICS_PLAIN] ?: true,
+                    lyricsLengthTolerance = LyricsTolerance.sanitize(prefs[LYRICS_LENGTH_TOLERANCE]),
+                    lyricsOriginalForVersions = prefs[LYRICS_ORIGINAL_FOR_VERSIONS] ?: false,
+                    lyricsRetryDays = LyricsRetry.sanitize(prefs[LYRICS_RETRY_DAYS]),
                 ),
             )
         }
@@ -118,6 +125,11 @@ class DataStoreSettings(context: Context, private val secrets: SecretBox = Secre
             it[SOUNDCLOUD_KEEP_VERSIONS] = options.soundcloudKeepVersions
             it[SOUNDCLOUD_STRIP_PROMO] = options.soundcloudStripPromo
             it[SOUNDCLOUD_FILENAME] = options.soundcloudFilename
+            it[LYRICS_PROVIDERS] = options.lyricsProviders.joinToString(",")
+            it[LYRICS_PLAIN] = options.lyricsPlain
+            it[LYRICS_LENGTH_TOLERANCE] = options.lyricsLengthTolerance
+            it[LYRICS_ORIGINAL_FOR_VERSIONS] = options.lyricsOriginalForVersions
+            it[LYRICS_RETRY_DAYS] = options.lyricsRetryDays
         }
     }
 
@@ -139,6 +151,11 @@ class DataStoreSettings(context: Context, private val secrets: SecretBox = Secre
         val SOUNDCLOUD_KEEP_VERSIONS = booleanPreferencesKey("soundcloud_keep_versions")
         val SOUNDCLOUD_STRIP_PROMO = booleanPreferencesKey("soundcloud_strip_promo")
         val SOUNDCLOUD_FILENAME = stringPreferencesKey("soundcloud_filename")
+        val LYRICS_PROVIDERS = stringPreferencesKey("lyrics_providers")
+        val LYRICS_PLAIN = booleanPreferencesKey("lyrics_plain")
+        val LYRICS_LENGTH_TOLERANCE = doublePreferencesKey("lyrics_length_tolerance")
+        val LYRICS_ORIGINAL_FOR_VERSIONS = booleanPreferencesKey("lyrics_original_for_versions")
+        val LYRICS_RETRY_DAYS = intPreferencesKey("lyrics_retry_days")
         val SPOTIFY_CLIENT_ID = stringPreferencesKey("spotify_client_id_enc")
         val SPOTIFY_CLIENT_SECRET = stringPreferencesKey("spotify_client_secret_enc")
     }

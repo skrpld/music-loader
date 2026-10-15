@@ -18,13 +18,20 @@ from .config import (
     FEAT_BOTH,
     FEAT_MODES,
     LOGS_DIRNAME,
+    LYRICS_LOOSE_DURATION_TOLERANCE,
     LYRICS_MODE_LOOSE,
     LYRICS_MODE_STRICT,
+    LYRICS_PROVIDERS,
+    LYRICS_RETRY_DAYS_DEFAULT,
     SPOTIFY_CLIENT_ID_ENV,
     SPOTIFY_CLIENT_SECRET_ENV,
     AppConfig,
+    LyricsSettings,
     SoundCloudFormat,
+    parse_lyrics_providers,
     validate_filename_template,
+    validate_length_tolerance,
+    validate_retry_days,
 )
 from .deps import check_dependencies
 from .links import Link, parse_link, redact_url
@@ -48,6 +55,20 @@ def _filename_template(value: str) -> str:
         return validate_filename_template(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
+def _checked(validate, convert):
+    def parse(value: str):
+        try:
+            return validate(convert(value))
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(str(exc)) from exc
+    return parse
+
+
+def _number(value: str) -> float | int:
+    number = float(value)
+    return int(number) if number.is_integer() else number
 
 
 def _positive_int(value: str) -> int:
@@ -93,6 +114,40 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Loose lyrics matching: fuzzy artist/title match and up to 10 s length "
              "difference (plain text only when the timing may not fit). Default is strict: "
              "exact artist, title, version and length (±2 s).",
+    )
+    lyrics.add_argument(
+        "--lyrics-providers",
+        type=_checked(parse_lyrics_providers, str),
+        default=LYRICS_PROVIDERS,
+        metavar="LIST",
+        help=f"Lyrics providers to ask, in this order, comma-separated (default: {','.join(LYRICS_PROVIDERS)}).",
+    )
+    lyrics.add_argument(
+        "--lyrics-synced-only",
+        action="store_true",
+        help="Save synced lyrics only; by default plain text is embedded when no synced lyrics match.",
+    )
+    lyrics.add_argument(
+        "--lyrics-length-tolerance",
+        type=_checked(validate_length_tolerance, _number),
+        default=LYRICS_LOOSE_DURATION_TOLERANCE,
+        metavar="SECONDS",
+        help=f"Loose mode: the largest length difference for plain text (default: "
+             f"{LYRICS_LOOSE_DURATION_TOLERANCE:g}, 2-60). Synced lyrics always need ±2 s.",
+    )
+    lyrics.add_argument(
+        "--lyrics-original-for-versions",
+        action="store_true",
+        help="Strict mode: a sped-up, slowed, 8D or bass-boosted upload may take the original's "
+             "plain lyrics (never its timestamps). Loose mode always allows it.",
+    )
+    lyrics.add_argument(
+        "--lyrics-retry-days",
+        type=_checked(validate_retry_days, int),
+        default=LYRICS_RETRY_DAYS_DEFAULT,
+        metavar="DAYS",
+        help=f"Search a track whose lyrics were not found again after this many days "
+             f"(default: {LYRICS_RETRY_DAYS_DEFAULT}; 0 = on every run).",
     )
     lyrics.add_argument(
         "--lyrics-workers",
@@ -304,7 +359,7 @@ def process_links(links: list[Link], config: AppConfig, dashboard: Dashboard) ->
     tracks of all links of a service are downloaded together, each once."""
     lyrics = None
     if config.lyrics_enabled:
-        lyrics = LyricsService(config.lyrics_mode)
+        lyrics = LyricsService(config.lyrics_mode, settings=config.lyrics_settings)
     abort = threading.Event()
     batches: dict[str, Any] = {
         "spotify": SpotifyBatch(config, dashboard, abort),
@@ -486,6 +541,7 @@ def main(argv: list[str] | None = None) -> int:
     config.spotify_client_id, config.spotify_client_secret = resolve_spotify_credentials(args)
     config.lyrics_enabled = not args.no_lyrics
     config.lyrics_mode = LYRICS_MODE_LOOSE if args.lyrics_loose else LYRICS_MODE_STRICT
+    config.lyrics_settings = LyricsSettings.from_args(args)
     config.recheck = args.recheck
     config.soundcloud_reposts = args.soundcloud_reposts
     config.soundcloud_likes = args.soundcloud_likes

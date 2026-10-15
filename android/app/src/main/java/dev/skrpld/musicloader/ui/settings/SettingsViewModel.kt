@@ -12,6 +12,9 @@ import dev.skrpld.musicloader.data.FeatPlacement
 import dev.skrpld.musicloader.data.FilenameTemplate
 import dev.skrpld.musicloader.data.JobOptions
 import dev.skrpld.musicloader.data.LocalBackend
+import dev.skrpld.musicloader.data.LyricsProvider
+import dev.skrpld.musicloader.data.LyricsRetry
+import dev.skrpld.musicloader.data.LyricsTolerance
 import dev.skrpld.musicloader.data.ServerConfig
 import dev.skrpld.musicloader.data.ServerInfo
 import dev.skrpld.musicloader.data.ServerRepository
@@ -232,6 +235,33 @@ class SettingsViewModel(
     fun setKeepVersions(keep: Boolean) = updateJobOptions { it.copy(soundcloudKeepVersions = keep) }
 
     fun setStripPromo(strip: Boolean) = updateJobOptions { it.copy(soundcloudStripPromo = strip) }
+
+    /** Turns a lyrics provider on (asked last) or off; the last one stays on. */
+    fun setLyricsProvider(provider: LyricsProvider, enabled: Boolean) = updateJobOptions { options ->
+        val current = options.providers
+        val next = if (enabled) (current - provider) + provider else current - provider
+        if (next.isEmpty()) options else options.copy(lyricsProviders = next.map { it.wire })
+    }
+
+    /** Asks an enabled lyrics provider one place earlier. */
+    fun moveLyricsProviderUp(provider: LyricsProvider) = updateJobOptions { options ->
+        val current = options.providers.toMutableList()
+        val index = current.indexOf(provider)
+        if (index <= 0) return@updateJobOptions options
+        current[index] = current[index - 1]
+        current[index - 1] = provider
+        options.copy(lyricsProviders = current.map { it.wire })
+    }
+
+    fun setLyricsPlain(plain: Boolean) = updateJobOptions { it.copy(lyricsPlain = plain) }
+
+    fun setLyricsOriginalForVersions(allow: Boolean) = updateJobOptions { it.copy(lyricsOriginalForVersions = allow) }
+
+    fun setLyricsLengthTolerance(seconds: Double) = updateJobOptions {
+        it.copy(lyricsLengthTolerance = LyricsTolerance.sanitize(seconds))
+    }
+
+    fun setLyricsRetryDays(days: Int) = updateJobOptions { it.copy(lyricsRetryDays = LyricsRetry.sanitize(days)) }
 
     fun updateFilename(value: String) {
         filenameInput = value

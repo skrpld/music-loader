@@ -18,6 +18,11 @@ music-loader serve -o <MUSIC_FOLDER> [OPTIONS]
 | `-o, --output` | asked | Target Music folder |
 | `--no-lyrics` | off | Do not look up lyrics |
 | `--lyrics-loose` | off | Loose lyrics matching: fuzzy artist/title match and up to 10 s length difference (plain text only when the timing may not fit). Default is strict: exact artist, title, version and length (±2 s) |
+| `--lyrics-providers LIST` | `lrclib,musixmatch,genius` | Lyrics providers to ask, comma-separated, in this order |
+| `--lyrics-synced-only` | off | Save synced lyrics only; by default plain text is embedded when no synced lyrics match |
+| `--lyrics-length-tolerance SECONDS` | `10` | Loose mode: the largest length difference (2–60 s) for plain text. Synced lyrics always need ±2 s |
+| `--lyrics-original-for-versions` | off | Strict mode: a sped-up, slowed, 8D or bass-boosted upload may take the original's plain lyrics, never its timestamps (loose mode always allows it) |
+| `--lyrics-retry-days DAYS` | `7` | Search a track whose lyrics were not found again after this many days; `0` = on every run. `--recheck` always searches again |
 | `--lyrics-workers N` | `2` | Parallel lyrics lookups |
 | `--recheck` | off | Check already downloaded tracks against the current rules again: tags, folder and file name, broken/preview files, lyrics |
 | `--soundcloud-reposts` | off | Profile link: also download the profile's reposts |
@@ -101,7 +106,7 @@ written. The file is JSON lines, one event per line, written as the run goes (re
 | `links` | every link with its service and kind, rejected entries |
 | `soundcloud` | `resolved` (tracks of a link with id, title, uploader, length, album), `metadata` (raw yt-dlp fields: title, uploader, artist, description, length, publisher metadata, ...), `title_parsed` (raw title → artists, featured, producers, title, version markers; producers named in the description; the formatting settings), `final_meta` (tags, `<album artist>/<album>` folder, file name, path), `layout_migration` (tracks moved from the old `Artist - Album` folders), `retry`, `unavailable`, `fallback`, `track_result` |
 | `spotify` | `resolved` (what spotDL returned per song: name, artists, album, ISRC, length, ...), `spotdl_output` (every line spotDL printed, including the match it downloaded), `track_result` (final path, title, artists, album artist) |
-| `lyrics` | `request` (artists, title, album, length), every provider `query` with its parameters and HTTP status, every `candidate` with `verdict` (`synced`, `plain`, `instrumental`, `rejected`) and `reason` (artist mismatch, title mismatch, version mismatch, length difference, ...), `provider_skipped` / `provider_error`, `result` |
+| `lyrics` | `request` (artists, title, album, length, the searches it makes), every provider `query` with its parameters and HTTP status, every `candidate` with `verdict` (`synced`, `plain`, `instrumental`, `rejected`) and `reason` (artist mismatch, title mismatch, version mismatch, length difference, ...), `provider_skipped` (switched off or paused, with the reason) / `provider_error`, `result` |
 
 Secrets are masked before anything is written: private SoundCloud tokens (`/s-…`, `secret_token`),
 client ids, user tokens, passwords and `Authorization` values; the Spotify credentials are never

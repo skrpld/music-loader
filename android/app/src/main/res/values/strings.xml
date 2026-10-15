@@ -58,7 +58,7 @@
     <string name="lyrics_loose">Loose</string>
     <string name="lyrics_off">Off</string>
     <string name="lyrics_strict_description">Only an exact match of artist, title, version and length (±2 s). Nothing is better than the wrong song\'s lyrics.</string>
-    <string name="lyrics_loose_description">Fuzzy artist and title match, up to 10 s length difference. When the timing may not fit, only plain text is saved.</string>
+    <string name="lyrics_loose_description">Fuzzy artist and title match, length difference up to the limit in Settings (10 s by default). When the timing may not fit, only plain text is saved.</string>
     <string name="lyrics_off_description">Lyrics are not looked up.</string>
     <string name="options_title">Options</string>
     <string name="option_recheck">Recheck the library</string>
@@ -250,4 +250,26 @@
     <string name="settings_filename_hint">{track}, {title}, {artist}, {album}, {album_artist}; {track:02} sets the padding</string>
     <string name="settings_filename_invalid">Use {title} once, only the fields listed, no / or \\</string>
     <string name="action_reset">Reset</string>
+    <string name="settings_lyrics">Lyrics</string>
+    <string name="settings_lyrics_description">How lyrics are looked up; the Strict / Loose choice is on the download screen. Synced lyrics always need the same version and a length within 2 s.</string>
+    <string name="settings_lyrics_description_server">How lyrics are looked up; the Strict / Loose choice is on the download screen. Synced lyrics always need the same version and a length within 2 s. Needs music-loader 2.9.0 or newer on the server.</string>
+    <string name="settings_lyrics_providers">Providers</string>
+    <string name="settings_lyrics_provider_position">Asked #%1$d</string>
+    <string name="settings_lyrics_provider_only">The only provider, stays on</string>
+    <string name="settings_lyrics_provider_off">Not asked</string>
+    <string name="settings_lyrics_move_up">Ask %1$s earlier</string>
+    <string name="settings_lyrics_plain">Plain lyrics</string>
+    <string name="settings_lyrics_plain_hint">Embed the text without timestamps when no synced lyrics match</string>
+    <string name="settings_lyrics_versions">Original for sped up / slowed</string>
+    <string name="settings_lyrics_versions_hint">Strict mode: a sped-up, slowed, 8D or bass-boosted upload gets the original\'s plain text, never its timestamps</string>
+    <string name="settings_lyrics_tolerance">Length difference in Loose mode</string>
+    <string name="settings_lyrics_seconds">%1$d s</string>
+    <string name="settings_lyrics_tolerance_hint">Up to this much, plain text is still taken</string>
+    <string name="settings_lyrics_retry">Search again when not found</string>
+    <string name="settings_lyrics_retry_always">Every run</string>
+    <plurals name="settings_lyrics_days">
+        <item quantity="one">%1$d day</item>
+        <item quantity="other">%1$d days</item>
+    </plurals>
+    <string name="settings_lyrics_retry_hint">A track whose lyrics were not found is searched again after this time; Recheck the library searches again anyway</string>
 </resources>
