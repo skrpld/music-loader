@@ -33,8 +33,17 @@ already in the library are skipped either way, so a retry is cheap. With the
 job option `auto_retry` a job that ends with retryable failures is queued again
 by the server after 15, then 30, then 60 minutes (three attempts at most; the
 retry is queued once the running job is done, so the time is a lower bound).
-The job shows `retry_at` while it waits and `/cancel` stops the wait. The timer
-lives in memory: it is lost when the server stops.
+The job shows `retry_at` while it waits and `/cancel` stops the wait.
+
+History: the jobs are kept in a JSON file in the server's state folder
+(`server-jobs.json` next to the stored token, or `--state-dir`; the app's own
+storage on Android), written whenever a job is queued, starts, ends, is
+cancelled or deleted. After a restart the finished jobs are back with their
+log, failures and options, so their retry actions keep working, and a pending
+automatic retry keeps its time (an overdue one is queued right away). A job
+that was queued or running when the process died is never run again by
+itself: it comes back as cancelled or failed with an "Interrupted" message. A
+file that cannot be read is ignored.
 
 `GET /api/v1/info` (and every `state` event) lists the server's `features`
 ("retry", "auto_retry"); a client talking to an older server finds the list
@@ -56,6 +65,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections import deque
@@ -83,10 +93,16 @@ FEATURES = ("retry", "auto_retry")
 DEFAULT_PORT = 8765
 TOKEN_ENV = "MUSIC_LOADER_TOKEN"
 TOKEN_FILENAME = "server-token"
+JOBS_FILENAME = "server-jobs.json"
+_JOBS_FILE_VERSION = 1
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9._~+/=-]{16,512}")
+_JOB_ID_RE = re.compile(r"[0-9a-f]{1,64}")
 _LYRICS_MODES = (LYRICS_MODE_STRICT, LYRICS_MODE_LOOSE, "off")
 _FINISHED = {"completed", "cancelled", "failed"}
+_BOOL_OPTIONS = ("recheck", "soundcloud_reposts", "soundcloud_likes", "soundcloud_fallback", "auto_retry")
+_INTERRUPTED_QUEUED = "Interrupted: the server stopped before the job started"
+_INTERRUPTED_RUNNING = "Interrupted: the server stopped while the job was running"
 _RETRY_SCOPES = ("all", "failed")
 
 _MAX_BODY_BYTES = 256 * 1024
@@ -224,6 +240,117 @@ class Job:
         )
         return data
 
+    def state(self) -> dict[str, Any]:
+        """Everything a restarted server needs, full links included (the file
+        stays on the server, like the job itself)."""
+        return {
+            "id": self.id,
+            "links": [link.url for link in self.links],
+            "options": dict(self.options),
+            "rejected": list(self.rejected),
+            "created_at": self.created_at,
+            "status": self.status,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "message": self.message,
+            "queue": dict(self.queue),
+            "stats": dict(self.stats),
+            "log": list(self.log),
+            "errors": list(self.errors),
+            "error_count": self.error_count,
+            "log_seq": self.log_seq,
+            "runlog": self.runlog,
+            "unavailable_log": self.unavailable_log,
+            "failed": list(self.failed.values()),
+            "attempt": self.attempt,
+            "retry_of": self.retry_of,
+            "retry_at": self.retry_at,
+        }
+
+
+def _opt_int(value: Any) -> Optional[int]:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _opt_text(value: Any) -> Optional[str]:
+    return _text(value) or None
+
+
+def _log_entries(raw: Any) -> list[dict[str, Any]]:
+    entries = []
+    for item in raw if isinstance(raw, list) else []:
+        if isinstance(item, dict):
+            entries.append({
+                "seq": _int(item.get("seq")),
+                "time": _int(item.get("time")),
+                "level": "error" if item.get("level") == "error" else "info",
+                "source": _opt_text(item.get("source")),
+                "text": _text(item.get("text")),
+            })
+    return entries
+
+
+def _job_from_state(data: Any, saved_at: Optional[int]) -> Optional[Job]:
+    """Rebuilds a job from the jobs file; None when the entry is unusable.
+    A job that was queued or running comes back finished, marked interrupted."""
+    if not isinstance(data, dict):
+        return None
+    job_id = data.get("id")
+    if not isinstance(job_id, str) or not _JOB_ID_RE.fullmatch(job_id):
+        return None
+    raw_links = data.get("links")
+    links = [link for link in (parse_link(url) for url in raw_links if isinstance(url, str))
+             if link is not None] if isinstance(raw_links, list) else []
+    created_at = _opt_int(data.get("created_at"))
+    status = data.get("status")
+    if not links or created_at is None or status not in (*_FINISHED, "queued", "running"):
+        return None
+    try:
+        options = _parse_options(data.get("options") or {})
+    except _RequestError:
+        return None
+    raw_rejected = data.get("rejected")
+    rejected = [_text(item)[:200] for item in raw_rejected if isinstance(item, str)] \
+        if isinstance(raw_rejected, list) else []
+    job = Job(id=job_id, links=links[:_MAX_LINKS_PER_JOB], options=options,
+              rejected=rejected[:_MAX_REJECTED_KEPT], created_at=created_at)
+    job.started_at = _opt_int(data.get("started_at"))
+    job.finished_at = _opt_int(data.get("finished_at"))
+    job.message = _opt_text(data.get("message"))
+    queue_state = data.get("queue")
+    if isinstance(queue_state, dict):
+        job.queue = {"completed": _int(queue_state.get("completed")), "total": _int(queue_state.get("total"))}
+    stats = data.get("stats")
+    if isinstance(stats, dict):
+        for key in job.stats:
+            job.stats[key] = _int(stats.get(key))
+    job.log.extend(_log_entries(data.get("log")))
+    job.errors.extend(_log_entries(data.get("errors")))
+    job.error_count = max(_int(data.get("error_count")), len(job.errors))
+    job.log_seq = max([_int(data.get("log_seq"))] + [entry["seq"] for entry in job.log])
+    job.runlog = _opt_text(data.get("runlog"))
+    job.unavailable_log = _opt_text(data.get("unavailable_log"))
+    raw_failed = data.get("failed")
+    for item in raw_failed if isinstance(raw_failed, list) else []:
+        if isinstance(item, dict):
+            JobManager._apply_failure(job, item)
+    attempt = _int(data.get("attempt"))
+    job.attempt = min(max(attempt, 0), len(_AUTO_RETRY_DELAYS))
+    retry_of = data.get("retry_of")
+    job.retry_of = retry_of if isinstance(retry_of, str) and _JOB_ID_RE.fullmatch(retry_of) else None
+    if status in _FINISHED:
+        job.status = status
+        if job.finished_at is None:
+            job.finished_at = job.started_at or job.created_at
+        if status != "cancelled" and job.retryable():
+            job.retry_at = _opt_int(data.get("retry_at"))
+    else:
+        # Never run again by itself: the person decides, with /retry.
+        job.status = "cancelled" if status == "queued" else "failed"
+        job.message = _INTERRUPTED_QUEUED if status == "queued" else _INTERRUPTED_RUNNING
+        job.finished_at = max(saved_at or 0, job.started_at or job.created_at)
+    return job
+
 
 class QueueFull(Exception):
     pass
@@ -243,12 +370,18 @@ class JobManager:
     Each job normally runs in a worker process (worker.py). With
     `in_process` (Android: there is no Python executable to start) it runs in
     a thread of this process instead, and cancelling raises KeyboardInterrupt
-    in that thread - the same cleanup the worker's SIGINT triggers."""
+    in that thread - the same cleanup the worker's SIGINT triggers.
+
+    With `state_dir` the jobs are kept in JOBS_FILENAME there and restored by
+    the next manager on the same folder; without it they live in memory only."""
 
     def __init__(self, music_dir: Path, worker_options: dict[str, Any], console: Console,
-                 in_process: bool = False, clock: Callable[[], float] = time.time):
+                 in_process: bool = False, clock: Callable[[], float] = time.time,
+                 state_dir: Optional[Path] = None):
         # `clock` (epoch seconds) times the automatic retries; tests hand in a fake one.
         self._clock = clock
+        self.jobs_file = state_dir / JOBS_FILENAME if state_dir is not None else None
+        self._save_failed = False
         self.music_dir = music_dir
         self.worker_options = worker_options
         self.console = console
@@ -263,6 +396,7 @@ class JobManager:
         self._job_thread: Optional[threading.Thread] = None
         self._give_up_at: Optional[float] = None
         self._thread = threading.Thread(target=self._run_loop, name="job-runner", daemon=True)
+        self._load()
 
     def start(self) -> None:
         self._thread.start()
@@ -310,9 +444,84 @@ class JobManager:
             return self.revision, self._state()
 
     # -- changes ----------------------------------------------------------------
-    def _changed(self) -> None:
+    def _changed(self, save: bool = False) -> None:
+        """Caller holds the lock. `save` for changes the next server must see;
+        progress (log lines, counters) is saved with the next of those."""
         self.revision += 1
         self._cond.notify_all()
+        if save:
+            self._save()
+
+    # -- jobs file --------------------------------------------------------------
+    def _load(self) -> None:
+        path = self.jobs_file
+        if path is None:
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            self.console.print(f"[yellow]Job history '{escape(str(path))}' ignored: {escape(str(exc))}[/yellow]")
+            return
+        if not isinstance(data, dict) or data.get("version") != _JOBS_FILE_VERSION \
+                or not isinstance(data.get("jobs"), list):
+            self.console.print(f"[yellow]Job history '{escape(str(path))}' ignored: unknown format[/yellow]")
+            return
+        saved_at = _opt_int(data.get("saved_at"))
+        restored = interrupted = 0
+        for entry in data["jobs"]:
+            try:
+                job = _job_from_state(entry, saved_at)
+            except (TypeError, ValueError, AttributeError):
+                job = None
+            if job is None or job.id in self._jobs:
+                continue
+            restored += 1
+            if entry.get("status") in ("queued", "running"):
+                interrupted += 1
+            self._jobs[job.id] = job
+        self._trim_history()
+        if restored:
+            line = f"[cyan]Restored {len(self._jobs)} job(s) from the history[/cyan]"
+            if interrupted:
+                line += f" [yellow]({interrupted} interrupted)[/yellow]"
+            self.console.print(line)
+            # The file says "interrupted" from now on, whatever happens next.
+            self._save()
+
+    def _save(self) -> None:
+        """Writes the jobs file atomically (caller holds the lock). The file
+        holds full links (private ones too), so only its owner may read it."""
+        path = self.jobs_file
+        if path is None:
+            return
+        data = {"version": _JOBS_FILE_VERSION, "saved_at": _now_ms(),
+                "jobs": [job.state() for job in self._jobs.values()]}
+        tmp: Optional[str] = None
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # mkstemp creates the file with mode 0600.
+            handle, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
+            with os.fdopen(handle, "w", encoding="utf-8") as stream:
+                json.dump(data, stream, ensure_ascii=False)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(tmp, path)
+            tmp = None
+            self._save_failed = False
+        except OSError as exc:
+            if not self._save_failed:
+                # Once per run of failures: the server keeps working without a history.
+                self.console.print(f"[red]Could not save the job history to '{escape(str(path))}': "
+                                   f"{escape(str(exc))}[/red]")
+            self._save_failed = True
+        finally:
+            if tmp is not None:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
 
     def submit(self, links: list[Link], options: dict[str, Any], rejected: list[str],
                attempt: int = 0, retry_of: Optional[str] = None) -> Job:
@@ -329,7 +538,7 @@ class JobManager:
             self._jobs[job.id] = job
             self._pending.append(job.id)
             self._trim_history()
-            self._changed()
+            self._changed(save=True)
         self.console.print(f"[cyan]Job {job.id} queued:[/cyan] {len(links)} link(s)")
         return job
 
@@ -342,7 +551,7 @@ class JobManager:
                 self._pending.remove(job_id)
                 job.status = "cancelled"
                 job.finished_at = _now_ms()
-                self._changed()
+                self._changed(save=True)
             elif job.status == "running" and not job.cancel_requested:
                 job.cancel_requested = True
                 self._interrupt()
@@ -350,7 +559,7 @@ class JobManager:
             elif job.finished and job.retry_at is not None:
                 # Cancelling a job that waits for its automatic retry.
                 job.retry_at = None
-                self._changed()
+                self._changed(save=True)
             return job.summary()
 
     def retry(self, job_id: str, scope: str) -> Job:
@@ -376,6 +585,7 @@ class JobManager:
             new = self.submit(links, dict(job.options), [], retry_of=job.id)
             # What a person queued by hand replaces the automatic retry.
             job.retry_at = None
+            self._changed(save=True)
             return new
 
     def tick(self) -> list[str]:
@@ -383,6 +593,9 @@ class JobManager:
         The runner thread calls it, tests call it with a fake clock."""
         queued: list[str] = []
         with self._cond:
+            if self.closed:
+                # The timers stay in the jobs file for the next server.
+                return queued
             now = int(self._clock() * 1000)
             for job in list(self._jobs.values()):
                 if job.retry_at is None or job.retry_at > now:
@@ -390,8 +603,8 @@ class JobManager:
                 job.retry_at = None
                 links = [link for link in map(parse_link, (i["url"] for i in job.retryable()))
                          if link is not None]
-                if self.closed or not links:
-                    self._changed()
+                if not links:
+                    self._changed(save=True)
                     continue
                 try:
                     new = self.submit(links, dict(job.options), [], attempt=job.attempt + 1,
@@ -399,7 +612,7 @@ class JobManager:
                 except QueueFull:
                     # Not lost: look again shortly, when the queue may have room.
                     job.retry_at = now + _QUEUE_FULL_RECHECK_SECONDS * 1000
-                    self._changed()
+                    self._changed(save=True)
                     continue
                 queued.append(new.id)
         return queued
@@ -429,7 +642,7 @@ class JobManager:
             if not job.finished:
                 return False
             del self._jobs[job_id]
-            self._changed()
+            self._changed(save=True)
             return True
 
     def shutdown(self, timeout: float) -> None:
@@ -443,8 +656,9 @@ class JobManager:
             if self._running is not None:
                 self._running.cancel_requested = True
                 self._interrupt()
-            self._changed()
-        self._thread.join(timeout)
+            self._changed(save=True)
+        if self._thread.ident is not None:
+            self._thread.join(timeout)
 
     def _trim_history(self) -> None:
         # A job that waits for its automatic retry is still needed.
@@ -472,7 +686,7 @@ class JobManager:
                 job.started_at = _now_ms()
                 job.queue = {"completed": 0, "total": len(job.links)}
                 self._running = job
-                self._changed()
+                self._changed(save=True)
             self.console.print(f"[cyan]Job {job.id} started[/cyan]")
             try:
                 status, message = self._execute(job)
@@ -489,7 +703,7 @@ class JobManager:
                 self._give_up_at = None
                 self._schedule_retry(job)
                 self._trim_history()
-                self._changed()
+                self._changed(save=True)
             style = {"completed": "green", "cancelled": "yellow"}.get(status, "red")
             line = f"[{style}]Job {job.id} {status}[/{style}]"
             if message:
@@ -802,22 +1016,25 @@ def _parse_job_request(body: Any) -> tuple[list[Link], dict[str, Any], list[str]
             seen.add(link.url)
             links.append(link)
 
-    raw_options = body.get("options") or {}
+    options = _parse_options(body.get("options") or {})
+    if not links:
+        raise _RequestError(HTTPStatus.BAD_REQUEST, "No Spotify or SoundCloud links", rejected=rejected)
+    return links, options, rejected
+
+
+def _parse_options(raw_options: Any) -> dict[str, Any]:
     if not isinstance(raw_options, dict):
         raise _RequestError(HTTPStatus.BAD_REQUEST, "'options' must be an object")
     lyrics = raw_options.get("lyrics", LYRICS_MODE_STRICT)
     if lyrics not in _LYRICS_MODES:
         raise _RequestError(HTTPStatus.BAD_REQUEST, f"'lyrics' must be one of {', '.join(_LYRICS_MODES)}")
     options: dict[str, Any] = {"lyrics": lyrics}
-    for key in ("recheck", "soundcloud_reposts", "soundcloud_likes", "soundcloud_fallback", "auto_retry"):
+    for key in _BOOL_OPTIONS:
         value = raw_options.get(key, False)
         if not isinstance(value, bool):
             raise _RequestError(HTTPStatus.BAD_REQUEST, f"'{key}' must be true or false")
         options[key] = value
-
-    if not links:
-        raise _RequestError(HTTPStatus.BAD_REQUEST, "No Spotify or SoundCloud links", rejected=rejected)
-    return links, options, rejected
+    return options
 
 
 def _parse_retry_request(body: bytes) -> str:
@@ -1073,6 +1290,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                              f"{_config_dir() / TOKEN_FILENAME}.")
     parser.add_argument("--new-token", action="store_true",
                         help="Generate a new stored token (the app has to be paired again).")
+    parser.add_argument("--state-dir", default=None,
+                        help=f"Folder for the job history ({JOBS_FILENAME}); default: "
+                             f"{_config_dir()}. Give each server its own when several run "
+                             f"on one machine.")
     parser.add_argument("--lyrics-workers", type=_positive_int, default=2,
                         help="Number of parallel lyrics workers (default: 2).")
     parser.add_argument("--soundcloud-download-workers", type=_positive_int, default=2,
@@ -1116,6 +1337,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             "spotify_threads": args.spotify_threads,
         },
         console,
+        state_dir=Path(args.state_dir).expanduser() if args.state_dir else _config_dir(),
     )
     try:
         server = make_server(args.host, args.port, manager, token)
