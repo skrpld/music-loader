@@ -65,6 +65,12 @@
     <string name="option_fallback">Искать недоступные треки в другом месте</string>
     <string name="option_fallback_description">Для треков, которые SoundCloud не отдаёт (DRM, 30-секундный фрагмент), брать тот же трек с YouTube Music, если совпадают исполнитель, название, версия и длительность. Это другая запись или мастер; в тегах указан источник.</string>
     <string name="option_profile_only">Только для ссылок на профиль</string>
+    <string name="download_options_title">Параметры загрузки</string>
+    <string name="option_short_recheck">Перепроверка</string>
+    <string name="option_short_reposts">Репосты</string>
+    <string name="option_short_likes">Лайки</string>
+    <string name="option_short_fallback">Замена недоступных</string>
+    <string name="option_short_auto_retry">Автоповтор</string>
     <string name="download_submit">Добавить в очередь</string>
     <string name="download_submitted">Задание добавлено в очередь</string>
     <string name="download_submitted_rejected">Задание добавлено; не распознано: %1$d</string>
