@@ -50,6 +50,15 @@ An explicit token must be at least 16 characters of letters, digits and
   `auto_retry` (queue failed tracks again after a cooldown, off by
   default) and `debug_log` (write a detailed debug log of the job, off by
   default; see [Debug log](#debug-log)).
+- SoundCloud formatting per job, the same settings as the CLI's
+  (see [Formatting settings](../explanation/how-it-works.md#formatting-settings)):
+  `soundcloud_feat` (`"both"` / `"artist"` / `"title"`, default `"both"`),
+  `soundcloud_keep_producers` (default `false`), `soundcloud_keep_versions`
+  (default `true`), `soundcloud_strip_promo` (default `true`) and
+  `soundcloud_filename` (default `"{track} - {title}"`). A missing option
+  means its default; a wrong value or a bad template is refused with 400 and
+  the reason (`'soundcloud_filename': the file name template must contain
+  {title} exactly once`).
 - Cancelling a job goes through the same cleanup as Ctrl+C: child processes
   stop and unfinished files are removed. A worker that does not finish its
   cleanup within 60 s is killed.
@@ -104,7 +113,10 @@ Queue request:
 {
   "links": ["https://open.spotify.com/album/...", "https://soundcloud.com/..."],
   "options": {"lyrics": "strict", "recheck": false, "soundcloud_reposts": false, "soundcloud_likes": false,
-              "soundcloud_fallback": false, "auto_retry": false, "debug_log": false}
+              "soundcloud_fallback": false, "auto_retry": false, "debug_log": false,
+              "soundcloud_feat": "both", "soundcloud_keep_producers": false,
+              "soundcloud_keep_versions": true, "soundcloud_strip_promo": true,
+              "soundcloud_filename": "{track} - {title}"}
 }
 ```
 
@@ -150,9 +162,10 @@ stops the wait. The timer is saved with the job history, so it survives a
 restart (see [History across restarts](#history-across-restarts)).
 
 `GET /api/v1/info` and every `state` event carry `features`
-(`["retry", "auto_retry", "debug_log"]`). An older server has no such list (or
-lacks an entry); the Android app then hides the retry actions or the debug
-log switch.
+(`["retry", "auto_retry", "debug_log", "soundcloud_format"]`). An older server has
+no such list (or lacks an entry); the Android app then hides the retry actions
+or the debug log switch. A server without `soundcloud_format` ignores the
+formatting options and writes the default format.
 
 ### Debug log
 

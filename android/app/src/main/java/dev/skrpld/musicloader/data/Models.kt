@@ -35,8 +35,51 @@ data class JobOptions(
     @SerialName("auto_retry") val autoRetry: Boolean = false,
     /** The job writes a detailed debug log (needs [Features.DebugLog]). */
     @SerialName("debug_log") val debugLog: Boolean = false,
+    /** SoundCloud formatting (needs [Features.SoundCloudFormat]; an older server ignores them). */
+    @SerialName("soundcloud_feat") val soundcloudFeat: String = FeatPlacement.Both.wire,
+    @SerialName("soundcloud_keep_producers") val soundcloudKeepProducers: Boolean = false,
+    @SerialName("soundcloud_keep_versions") val soundcloudKeepVersions: Boolean = true,
+    @SerialName("soundcloud_strip_promo") val soundcloudStripPromo: Boolean = true,
+    @SerialName("soundcloud_filename") val soundcloudFilename: String = FilenameTemplate.DEFAULT,
 ) {
     val lyricsMode: LyricsMode get() = LyricsMode.fromWire(lyrics)
+    val featPlacement: FeatPlacement get() = FeatPlacement.fromWire(soundcloudFeat)
+}
+
+/** Where featured artists of a SoundCloud track go: title and artist tag, artist tag only, title only. */
+enum class FeatPlacement(val wire: String) {
+    Both("both"),
+    Artist("artist"),
+    Title("title");
+
+    companion object {
+        fun fromWire(value: String?): FeatPlacement = entries.firstOrNull { it.wire == value } ?: Both
+    }
+}
+
+/** File name template for SoundCloud tracks; the same rules as validate_filename_template in config.py. */
+object FilenameTemplate {
+    const val DEFAULT = "{track} - {title}"
+    private const val MAX_LENGTH = 200
+    private val FIELDS = setOf("track", "title", "artist", "album", "album_artist")
+    private val FIELD = Regex("""\{([^{}:!]*)(?::([^{}]*))?\}""")
+    private val TRACK_FORMAT = Regex("0?[1-9]")
+
+    fun isValid(template: String): Boolean {
+        if (template.isBlank() || template.length > MAX_LENGTH) return false
+        if (template.any { it == '/' || it == '\\' || it.code < 32 }) return false
+        var titles = 0
+        for (match in FIELD.findAll(template)) {
+            val name = match.groupValues[1]
+            val format = match.groupValues[2]
+            if (name !in FIELDS) return false
+            if (format.isNotEmpty() && (name != "track" || !TRACK_FORMAT.matches(format))) return false
+            if (name == "title") titles++
+        }
+        // Braces outside a field ("{title", "a}b") are not allowed either.
+        val rest = FIELD.replace(template, "")
+        return titles == 1 && '{' !in rest && '}' !in rest
+    }
 }
 
 @Serializable
@@ -61,6 +104,9 @@ object Features {
 
     /** The `debug_log` job option and `GET /jobs/<id>/debug-log`. */
     const val DebugLog = "debug_log"
+
+    /** The SoundCloud formatting job options (`soundcloud_feat` ... `soundcloud_filename`). */
+    const val SoundCloudFormat = "soundcloud_format"
 }
 
 /** What a retry queues: every link of the job again, or only the failures worth another try. */

@@ -13,9 +13,21 @@ collective):
     I Shot The Sheriff (p. systematik)
     WHITENER+BENJAMINBENZ+AQUAKEY+TARABANDZ-STONE COLD(Prod SPACE NIKExQIO)
 
+Smaller scenes have their own shapes too (from a debug log of real runs):
+
+    yung millionaire ((haru matsui + jack13))       "((...))": producers
+    thraxx interlude ((me ft. haru matsui))
+    Морозы (+elya14062001)                          "(+ X)": a guest
+    Mudstock feat. CODE80 (mxstrakh)
+    1million ((cryst)) ALBUM OTW                    trailing promo words
+    diesel (playasin)                               a producer, when the
+                                                    description says "prod by playasin"
+
 `parse_soundcloud_title` turns these into main artists, a clean title (with
 a normalized "(feat. ...)" part, like Spotify writes it), producers and a
-track number, and drops promotional noise.
+track number, and drops promotional noise. `format_title` then applies the
+formatting settings (where the featured artists go, producer credits,
+version markers).
 """
 from __future__ import annotations
 
@@ -41,10 +53,21 @@ _JUNK_RE = re.compile(_JUNK_WORDS, re.IGNORECASE)
 _JUNK_WHOLE_RE = re.compile(
     r"^\s*(?:(?:clean|explicit|dirty)(?: version)?|hq|hd|4k|mv|m/v|(?:19|20)\d\d)\s*$", re.IGNORECASE
 )
-# "#phonk #drift": hashtags are promotion, "#1" or "No.#5" are not.
-_HASHTAG_RE = re.compile(r"(?<!\S)#[^\W\d_][\w-]*")
+# "#phonk #drift": hashtags are promotion, "#1" or "No.#5" are not. A
+# hashtag that starts the text ("#J20 XTREME SPORT") is part of the name.
+_HASHTAG_RE = re.compile(r"(?<!\S)#[^\W\d_][\w-]*!*")
+_LEADING_HASHTAG_RE = re.compile(r"#[^\W\d_][\w-]*(?=\s+\S)")
 # A trailing "OUT NOW" / "BUY = FREE DL" outside of brackets.
 _JUNK_TAIL_RE = re.compile(rf"\s+(?:out now|{_BUY_FREE_DL}|{_FREE_DL})\s*!*\s*$", re.IGNORECASE)
+# "mv in desc", "ALBUM OTW", "new mixtape otw", "mv on yt" after the title.
+# Only with a "what" word in front: "Help Is On The Way" stays.
+_PROMO_TAIL_RE = re.compile(
+    r"\s+(?:new\s+)?(?:mv|m/v|music video|video|clip|album|mixtape|tape|ep|single|snippet)\s+"
+    r"(?:in (?:the )?desc(?:ription)?|otw|on yt|on youtube|out now)\s*!*\s*$",
+    re.IGNORECASE,
+)
+# "platov  (@platovoplomo)": SoundCloud display names that carry the handle.
+_HANDLE_RE = re.compile(r"\s*[\(\[]\s*@[\w.\-]+\s*[\)\]]")
 # "Song | Some Label": a short last part after a pipe that names a label. A
 # subtitle ("| Live in Paris", "| Part Two") must stay.
 _LABEL_TAIL_RE = re.compile(
@@ -57,9 +80,11 @@ _BRACKETS = {"(": ")", "[": "]", "{": "}"}
 # Producer credits: "(prod. X)", "[PROD. BY X]", "(Prod X)", "(p. X)", "(produced by X)".
 _PROD_HEAD_RE = re.compile(r"^\s*(?:prod(?:uced)?\.?(?:\s*by)?|p\.)\s*[:\-]?\s*", re.IGNORECASE)
 _PROD_TAIL_RE = re.compile(r"\s+prod(?:uced)?\.?\s*(?:by\s+)?(.+)$", re.IGNORECASE)
+# A "prod by X, Y" line in the track description.
+_PROD_LINE_RE = re.compile(r"^\s*prod(?:uced)?\b\.?\s*(?:by\b)?\s*[:\-]?\s*(.+)$", re.IGNORECASE)
 
-# Featured artists: "(feat. X)", "[ft X]", "(w/ X)", "feat X" at the end.
-_FEAT_HEAD_RE = re.compile(r"^\s*(?:feat\.?|ft\.?|featuring|w/)\s*", re.IGNORECASE)
+# Featured artists: "(feat. X)", "[ft X]", "(w/ X)", "(+ X)", "feat X" at the end.
+_FEAT_HEAD_RE = re.compile(r"^\s*(?:featuring|feat\b\.?|ft\b\.?|w/|\+)\s*", re.IGNORECASE)
 _FEAT_TAIL_RE = re.compile(r"\s+(?:feat\.?|ft\.?|featuring|w/)\s+(.+)$", re.IGNORECASE)
 # Bare " W " ("Pitstop W Aquakey & Platov"), only trusted for known artists.
 _BARE_WITH_RE = re.compile(r"\s+[Ww]\s+(.+)$")
@@ -86,7 +111,7 @@ _SUFFIX_ONLY_RE = re.compile(
 
 # Separators between several artist names.
 _ARTIST_SPLIT_RE = re.compile(r"\s*\+\s*|\s*,\s*|\s+&\s+|\s+[xх×]\s+|\s+и\s+|\s+and\s+", re.IGNORECASE)
-_FEAT_SPLIT_RE = re.compile(r"\s*\+\s*|\s*,\s*|\s+&\s+|\s+и\s+|\s+and\s+", re.IGNORECASE)
+_FEAT_SPLIT_RE = re.compile(r"\s*\+\s*|\s*,\s*|\s+&\s+|\s+[xх×]\s+|\s+и\s+|\s+and\s+", re.IGNORECASE)
 
 # Version markers. They are kept in the title (a sped-up edit is a different
 # recording), and lyrics matching requires them to agree on both sides.
@@ -176,8 +201,9 @@ def _strip_edges(text: str) -> str:
 
 
 def strip_decorations(name: str | None) -> str:
-    """Removes decorative symbols around a display name ("✦ platov ✦")."""
-    text = collapse(unicodedata.normalize("NFC", name or ""))
+    """Removes decorative symbols around a display name ("✦ platov ✦") and
+    a SoundCloud handle after it ("platov (@platovoplomo)")."""
+    text = collapse(_HANDLE_RE.sub(" ", unicodedata.normalize("NFC", name or "")))
 
     def decorative(char: str) -> bool:
         category = unicodedata.category(char)
@@ -284,8 +310,30 @@ def clean_promo(text: str) -> str:
     text = " | ".join(parts)
     text = _JUNK_TAIL_RE.sub("", text)
     if "#" in text:
-        text = _HASHTAG_RE.sub(" ", text)
-    return _strip_edges(re.sub(r"[\(\[\{]\s*[\)\]\}]", " ", text))
+        lead = _LEADING_HASHTAG_RE.match(text)
+        keep = lead.group(0) if lead else ""
+        text = keep + _HASHTAG_RE.sub(" ", text[len(keep):])
+    text = _PROMO_TAIL_RE.sub("", collapse(text))
+    text = re.sub(r"[\(\[\{]\s*[\)\]\}]", " ", text)
+    return _strip_edges(tidy_brackets(text))
+
+
+def tidy_brackets(text: str) -> str:
+    """"( whyjuzo )" -> "(whyjuzo)"; a bracket left open at the very end
+    ("CAST A SPELL (" once its emoji is gone) is dropped."""
+    text = re.sub(r"([\(\[\{])\s+", r"\1", collapse(text))
+    text = re.sub(r"\s+([\)\]\}])", r"\1", text)
+    return re.sub(r"\s*[\(\[\{]+$", "", text)
+
+
+def description_producers(description: str | None) -> list[str]:
+    """Producers named on a "prod by X, Y" line of a track description."""
+    names: list[str] = []
+    for line in (description or "").splitlines():
+        match = _PROD_LINE_RE.match(line)
+        if match:
+            names.extend(split_artist_names(match.group(1)))
+    return unique(names)
 
 
 def _extract_bracketed(text: str, head_re: re.Pattern, slot: str = "") -> tuple[str, list[str]]:
@@ -310,6 +358,48 @@ def _extract_bracketed(text: str, head_re: re.Pattern, slot: str = "") -> tuple[
         if text[start] != "*" and match and inner[match.end():].strip():
             return collapse(text[:start] + f" {slot} " + text[end:]), found
     return text, found
+
+
+def _extract_double_brackets(text: str) -> tuple[str, list[str], list[str]]:
+    """"((haru matsui + jack13))" is a producer credit; "((me ft. X))"
+    also names a guest. Returns the text without them, the producers and
+    the guests."""
+    producers: list[str] = []
+    featured: list[str] = []
+    spans: list[tuple[int, int]] = []
+    for start, end, inner in _bracket_groups(text):
+        if text[start] != "(" or not (inner.startswith("(") and inner.endswith(")")):
+            continue
+        groups = _bracket_groups(inner)
+        if len(groups) != 1 or groups[0][:2] != (0, len(inner)):
+            continue
+        credit = _PROD_HEAD_RE.sub("", groups[0][2].strip(), count=1)
+        guest = _FEAT_TAIL_RE.search(credit)
+        if guest:
+            featured.append(guest.group(1))
+            credit = credit[:guest.start()]
+        if credit.strip():
+            producers.append(credit)
+        spans.append((start, end))
+    return _remove_spans(text, spans), producers, featured
+
+
+def _extract_hinted_producers(text: str, hints: Iterable[str]) -> tuple[str, list[str]]:
+    """Brackets that only name producers known from elsewhere: "diesel
+    (playasin)" when the description says "prod by playasin"."""
+    keys = {normalize_name(name) for name in hints if normalize_name(name)}
+    if not keys:
+        return text, []
+    producers: list[str] = []
+    spans: list[tuple[int, int]] = []
+    for start, end, inner in _bracket_groups(text):
+        if text[start] not in "([":
+            continue
+        names = split_artist_names(inner)
+        if names and all(normalize_name(name) in keys for name in names):
+            producers.append(inner)
+            spans.append((start, end))
+    return _remove_spans(text, spans), producers
 
 
 # -- SoundCloud title parsing ----------------------------------------------------
@@ -338,11 +428,17 @@ def parse_soundcloud_title(
     official_artists: list[str] | None = None,
     known: KnownArtist | None = None,
     canonical: Callable[[str], str] | None = None,
+    producer_hints: Iterable[str] = (),
+    strip_promo: bool = True,
 ) -> ParsedTitle:
     """Splits a SoundCloud title into credits and a clean song title.
 
     Artist priority: SoundCloud's own artist field (filled for label
     releases) -> "Artist - Song" from the title -> the uploader.
+
+    `producer_hints` are producers named elsewhere (the description): a
+    bracket holding only those names is a producer credit. With
+    `strip_promo` off, promotional noise and emoji stay in the title.
     """
     result = ParsedTitle()
     title = collapse(unicodedata.normalize("NFC", raw_title or ""))
@@ -364,13 +460,19 @@ def parse_soundcloud_title(
         result.track_number = int(number.group(1))
         title = title[number.end():]
 
-    title = clean_promo(title)
+    title = clean_promo(title) if strip_promo else tidy_brackets(title)
     title, producers = _extract_bracketed(title, _PROD_HEAD_RE)
+    title, double_producers, featured = _extract_double_brackets(title)
+    producers.extend(double_producers)
+    title, hinted = _extract_hinted_producers(title, producer_hints)
+    producers.extend(hinted)
     tail = _PROD_TAIL_RE.search(title)
     if tail and not _bracket_groups(tail.group(1)):
         producers.append(tail.group(1))
         title = title[:tail.start()]
-    result.producers = unique(strip_decorations(item) for item in producers)
+    result.producers = unique(
+        name for item in producers for name in split_artist_names(item, is_known)
+    )
 
     artists_from_title: list[str] = []
     split = _split_artist_part(title)
@@ -388,11 +490,23 @@ def parse_soundcloud_title(
             artists_from_title = left_names
             title = right
 
-    title, featured = _extract_bracketed(title, _FEAT_HEAD_RE, _FEAT_SLOT)
+    title, bracketed = _extract_bracketed(title, _FEAT_HEAD_RE, _FEAT_SLOT)
+    featured = bracketed + featured
     feat_tail = _FEAT_TAIL_RE.search(title)
-    if feat_tail and not _bracket_groups(feat_tail.group(1)):
-        featured.append(feat_tail.group(1))
-        title = title[:feat_tail.start()]
+    if feat_tail:
+        names = feat_tail.group(1)
+        bracket = re.search(r"[\(\[\{\)\]\}]", names)
+        if bracket is None:
+            featured.append(names)
+            title = title[:feat_tail.start()]
+        elif names[:bracket.start()].strip():
+            # "Mudstock feat. CODE80 (mxstrakh)": the names end where a
+            # bracket starts, which stays in the title after the credit;
+            # "(me ft. X)" closes its own bracket first.
+            featured.append(names[:bracket.start()])
+            rest = names[bracket.start():]
+            close = rest[0] if rest[0] in ")]}" else ""
+            title = f"{title[:feat_tail.start()]}{close} {_FEAT_SLOT} {rest[len(close):]}"
     else:
         bare = _BARE_WITH_RE.search(title)
         if bare:
@@ -438,6 +552,18 @@ def parse_soundcloud_title(
     result.base_title = base
     result.title = full
     return result
+
+
+def format_title(parsed: ParsedTitle, feat_in_title: bool = True, keep_producers: bool = False,
+                 keep_versions: bool = True) -> str:
+    """The title as the formatting settings want it written: with or
+    without "(feat. ...)", version markers and "(prod. ...)"."""
+    text = parsed.title if feat_in_title else parsed.base_title
+    if not keep_versions:
+        text = strip_variants(text) or text
+    if keep_producers and parsed.producers:
+        text = f"{text} (prod. {', '.join(parsed.producers)})"
+    return text
 
 
 # -- lyrics helpers ----------------------------------------------------------------

@@ -12,7 +12,12 @@ Rules
 * Album: the album/EP/single set the track belongs to (title, owner as album
   artist, position as track number); everything else is its own single,
   "<song> - Single", by the main artist.
-* Folder: "<album artist> - <album>/<NN> - <title>.mp3", a single included.
+* Folder: "<album artist>/<album>/<NN> - <title>.mp3", a single included.
+* Formatting settings (`SoundCloudFormat`): featured artists in the title,
+  the artist tag or both; producer credits and version markers kept or
+  not; promo noise stripped or not; the file name template. They change
+  what is written (tags, file name) only: lyrics and the fallback compare
+  the full parsed title, versions included.
 * Cover: the track's artwork, else the album's; never the uploader's avatar
   (yt-dlp offers the avatar when a track has no artwork of its own).
 """
@@ -25,13 +30,15 @@ from typing import Any
 
 from . import debuglog
 from .artists import PRIORITY_TITLE, PRIORITY_UPLOADER, ArtistRegistry
-from .config import SINGLE_ALBUM_SUFFIX
+from .config import SINGLE_ALBUM_SUFFIX, SoundCloudFormat
 from .links import redact_url
 from .naming import VARIOUS_ARTISTS, album_path, track_filename
 from .process import module_available
 from .tags import TrackTags
 from .text_utils import (
     clean_promo,
+    description_producers,
+    format_title,
     normalize_name,
     parse_soundcloud_title,
     split_artist_names,
@@ -74,7 +81,7 @@ class TrackMeta:
     filename: str
     main_artists: list[str]
     featured: list[str]
-    title: str
+    title: str                # parsed title, versions and feat included (lyrics, fallback)
     album: str
     artwork_urls: list[str]
 
@@ -304,7 +311,9 @@ def build_meta(
     info: dict[str, Any],
     album: AlbumContext | None,
     registry: ArtistRegistry,
+    fmt: SoundCloudFormat | None = None,
 ) -> TrackMeta:
+    fmt = fmt or SoundCloudFormat()
     track_id = str(info.get("id") or "")
     uploader = strip_decorations(info.get("uploader") or "")
     if uploader:
@@ -313,8 +322,10 @@ def build_meta(
     for name in official:
         registry.register(name, PRIORITY_UPLOADER)
 
+    hints = description_producers(str(info.get("description") or ""))
     parsed = parse_soundcloud_title(
         str(info.get("title") or ""), uploader, official, registry.is_known, registry.canonical,
+        producer_hints=hints, strip_promo=fmt.strip_promo,
     )
     if debuglog.enabled():
         debuglog.event(
@@ -327,13 +338,15 @@ def build_meta(
             uploader=uploader, official_artists=official, artists=parsed.artists,
             featured=parsed.featured, producers=parsed.producers, title=parsed.title,
             base_title=parsed.base_title, version_markers=variant_markers(parsed.title),
-            track_number=parsed.track_number,
+            track_number=parsed.track_number, description_producers=hints, format=asdict(fmt),
         )
     for name in parsed.artists + parsed.featured:
         registry.register(name, PRIORITY_TITLE)
     main = parsed.artists or ["Unknown Artist"]
     featured = parsed.featured
     title = parsed.title or str(info.get("title") or track_id or "Unknown Title")
+    written = format_title(parsed, fmt.feat_in_title, fmt.keep_producers, fmt.keep_versions) or title
+    written_base = format_title(parsed, False, fmt.keep_producers, fmt.keep_versions) or written
 
     artwork_urls = [url for url in [pick_artwork_url(info)] if url]
     if album is not None:
@@ -352,15 +365,15 @@ def build_meta(
         if album.artwork_url and album.artwork_url not in artwork_urls:
             artwork_urls.append(album.artwork_url)
     else:
-        album_title = f"{parsed.base_title or title}{SINGLE_ALBUM_SUFFIX}"
+        album_title = f"{written_base}{SINGLE_ALBUM_SUFFIX}"
         album_artist = main[0]
         number, total = 1, 1
         release = info.get("release_timestamp") or info.get("timestamp")
         genre = _genre(info)
 
     tags = TrackTags(
-        title=title,
-        artists=main + featured,
+        title=written,
+        artists=main + featured if fmt.feat_in_artists else list(main),
         album=album_title,
         album_artist=album_artist,
         track_number=number,
@@ -371,7 +384,9 @@ def build_meta(
         soundcloud_id=track_id,
     )
     folder = album_path(album_artist, album_title)
-    filename = track_filename(title, number, total)
+    filename = track_filename(written, number, total, template=fmt.filename_template, fields={
+        "artist": ", ".join(main), "album": album_title, "album_artist": album_artist,
+    })
     debuglog.event("soundcloud", "final_meta", id=track_id, tags=asdict(tags),
                    folder=folder, filename=filename, path=f"{folder}/{filename}")
     return TrackMeta(

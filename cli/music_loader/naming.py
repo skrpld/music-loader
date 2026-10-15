@@ -2,7 +2,8 @@
 
     <album artist> - <album>/<NN> - <title>.mp3          Spotify, single disc
     <album artist> - <album>/<D>-<NN> - <title>.mp3      Spotify, several discs
-    <album artist>/<album>/<NN> - <title>.mp3            SoundCloud
+    <album artist>/<album>/<NN> - <title>.mp3            SoundCloud (file name template
+                                                         configurable, see config.py)
 
 SoundCloud and Spotify files go through the same functions, so the same
 characters, padding and truncation apply to every path component. Names are
@@ -13,6 +14,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 
+from .config import DEFAULT_FILENAME_TEMPLATE, FILENAME_FIELDS
 from .text_utils import collapse, normalize_name, normalize_unicode, strip_symbols
 
 VARIOUS_ARTISTS = "Various Artists"
@@ -105,11 +107,46 @@ def track_label(number: int, total: int = 1, disc: int = 1, disc_total: int = 1)
     return f"{max(disc, 1)}-{label}" if disc_total > 1 else label
 
 
+class _TrackNumber(int):
+    """{track} in a file name template: the usual label ("07", "2-07"),
+    or the plain number with a format of its own ("{track:03}")."""
+
+    def __new__(cls, number: int, label: str):
+        value = super().__new__(cls, number)
+        value.label = label
+        return value
+
+    def __format__(self, spec: str) -> str:
+        return format(int(self), spec) if spec else self.label
+
+
+_TITLE_MARK = "\x00title\x00"
+
+
 def track_filename(title: str | None, number: int, total: int = 1, disc: int = 1,
-                   disc_total: int = 1, ext: str = ".mp3") -> str:
-    prefix = f"{track_label(number, total, disc, disc_total)} - "
-    budget = MAX_NAME_BYTES - len(ext.encode("utf-8")) - len(prefix.encode("utf-8"))
-    return prefix + truncate(safe_name(title, "Unknown Title"), budget) + ext
+                   disc_total: int = 1, ext: str = ".mp3", template: str | None = None,
+                   fields: dict[str, str] | None = None) -> str:
+    """"<NN> - <title>.mp3", or a file name template (config.py checks it)
+    with {track}, {title} and the `fields` (artist, album, album_artist).
+    Only the title is shortened when the name is too long."""
+    label = track_label(number, total, disc, disc_total)
+    budget = MAX_NAME_BYTES - len(ext.encode("utf-8"))
+    if not template or template == DEFAULT_FILENAME_TEMPLATE:
+        prefix = f"{label} - "
+        return prefix + truncate(safe_name(title, "Unknown Title"), budget - len(prefix.encode("utf-8"))) + ext
+    values = {name: clean_text(value) for name, value in (fields or {}).items()}
+    for name in FILENAME_FIELDS:
+        values.setdefault(name, "")
+    values.update(track=_TrackNumber(max(number, 1), label), title=_TITLE_MARK)
+    prefix, _, suffix = template.format(**values).partition(_TITLE_MARK)
+    song = safe_name(title, "Unknown Title")
+    name = safe_name(prefix + song + suffix, "Unknown Title")
+    while len(name.encode("utf-8")) > budget and song:
+        excess = len(name.encode("utf-8")) - budget
+        shorter = truncate(song, max(len(song.encode("utf-8")) - excess, 0))
+        song = shorter if len(shorter) < len(song) else song[:-1]
+        name = safe_name(prefix + song + suffix, "Unknown Title")
+    return truncate(name, budget) + ext
 
 
 def album_folder(album_artist: str | None, album: str | None) -> str:

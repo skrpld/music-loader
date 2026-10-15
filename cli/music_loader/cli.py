@@ -14,12 +14,17 @@ from rich.markup import escape
 
 from . import __version__, debuglog
 from .config import (
+    DEFAULT_FILENAME_TEMPLATE,
+    FEAT_BOTH,
+    FEAT_MODES,
     LOGS_DIRNAME,
     LYRICS_MODE_LOOSE,
     LYRICS_MODE_STRICT,
     SPOTIFY_CLIENT_ID_ENV,
     SPOTIFY_CLIENT_SECRET_ENV,
     AppConfig,
+    SoundCloudFormat,
+    validate_filename_template,
 )
 from .deps import check_dependencies
 from .links import Link, parse_link, redact_url
@@ -36,6 +41,13 @@ from .ui import PHASE_DOWNLOADING, PHASE_RESOLVING, Dashboard
 # rate-limit pause of soundcloud.py.
 RESOLVE_WORKERS = 4
 _RESOLVE_LIMITS = {"spotify": 2, "soundcloud": RESOLVE_WORKERS}
+
+
+def _filename_template(value: str) -> str:
+    try:
+        return validate_filename_template(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def _positive_int(value: str) -> int:
@@ -128,6 +140,43 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         type=_positive_int,
         default=4,
         help="Number of parallel SoundCloud conversion/tagging workers (default: 4).",
+    )
+
+    formatting = parser.add_argument_group(
+        "SoundCloud formatting",
+        "How SoundCloud titles are written. --recheck applies a change to tracks already there.",
+    )
+    formatting.add_argument(
+        "--soundcloud-feat",
+        choices=FEAT_MODES,
+        default=FEAT_BOTH,
+        help="Where featured artists go: 'both' (default) = \"(feat. X)\" in the title and X in the "
+             "artist tag; 'artist' = artist tag only; 'title' = title only.",
+    )
+    formatting.add_argument(
+        "--soundcloud-keep-producers",
+        action="store_true",
+        help="Keep producer credits in the title as \"(prod. X)\" (dropped by default).",
+    )
+    formatting.add_argument(
+        "--soundcloud-drop-versions",
+        action="store_true",
+        help="Remove version markers (Remix, Sped Up, Slowed, Live...) from the title. Lyrics "
+             "matching still compares the real version.",
+    )
+    formatting.add_argument(
+        "--soundcloud-keep-promo",
+        action="store_true",
+        help="Keep promotional noise ([Free DL], (Official Audio), hashtags, emoji) in the title.",
+    )
+    formatting.add_argument(
+        "--soundcloud-filename",
+        type=_filename_template,
+        default=DEFAULT_FILENAME_TEMPLATE,
+        metavar="TEMPLATE",
+        help="File name template with {track}, {title}, {artist}, {album}, {album_artist} "
+             "(default: '{track} - {title}'; '{track:02}' sets the padding). The usual "
+             "file name rules and length limit apply.",
     )
 
     diagnostics = parser.add_argument_group("diagnostics")
@@ -441,6 +490,7 @@ def main(argv: list[str] | None = None) -> int:
     config.soundcloud_reposts = args.soundcloud_reposts
     config.soundcloud_likes = args.soundcloud_likes
     config.soundcloud_fallback = args.soundcloud_fallback
+    config.soundcloud_format = SoundCloudFormat.from_args(args)
     try:
         config.ensure_dirs()
     except OSError as exc:

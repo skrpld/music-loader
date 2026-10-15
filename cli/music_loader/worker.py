@@ -13,6 +13,9 @@ Job spec:
      "lyrics": "strict" | "loose" | "off", "recheck": false,
      "soundcloud_reposts": false, "soundcloud_likes": false,
      "soundcloud_fallback": false, "debug_log": false,
+     "soundcloud_feat": "both", "soundcloud_keep_producers": false,
+     "soundcloud_keep_versions": true, "soundcloud_strip_promo": true,
+     "soundcloud_filename": "{track} - {title}",
      "spotify_threads": 4, "soundcloud_download_workers": 2,
      "soundcloud_workers": 4, "lyrics_workers": 2}
 
@@ -34,6 +37,7 @@ from .config import (
     SPOTIFY_CLIENT_ID_ENV,
     SPOTIFY_CLIENT_SECRET_ENV,
     AppConfig,
+    SoundCloudFormat,
 )
 from . import debuglog
 from .events import EventDashboard
@@ -75,6 +79,7 @@ def build_config(spec: dict[str, Any]) -> AppConfig:
     config.soundcloud_reposts = spec.get("soundcloud_reposts") is True
     config.soundcloud_likes = spec.get("soundcloud_likes") is True
     config.soundcloud_fallback = spec.get("soundcloud_fallback") is True
+    config.soundcloud_format = SoundCloudFormat.from_options(spec)
     client_id = os.environ.get(SPOTIFY_CLIENT_ID_ENV) or None
     client_secret = os.environ.get(SPOTIFY_CLIENT_SECRET_ENV) or None
     if client_id and client_secret:
