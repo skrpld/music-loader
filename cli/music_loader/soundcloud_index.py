@@ -180,6 +180,23 @@ class SoundCloudIndex:
                 self._legacy_ids.pop(track_id, None)
                 self._legacy_prints = [item for item in self._legacy_prints if item[0] != path]
 
+    def relocate(self, moves: dict[Path, Path]) -> int:
+        """Points entries at the new place of moved files (layout migration).
+        Returns the number of changed entries."""
+        changed = 0
+        with self._lock:
+            for entry in self._data.values():
+                new = moves.get(self._resolve(str(entry.get("path", ""))))
+                if new is not None:
+                    entry["path"] = self._store(new)
+                    changed += 1
+            if changed:
+                self._dirty = True
+        with self._legacy_lock:
+            # The scan remembers old paths: run it again when it is needed.
+            self._legacy_ids, self._legacy_prints = None, []
+        return changed
+
     def webpage_url(self, track_id: str) -> str:
         with self._lock:
             entry = self._data.get(track_id) or {}

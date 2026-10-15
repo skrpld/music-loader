@@ -6,14 +6,16 @@ and options see the [CLI reference](../reference/cli.md).
 
 ## Library layout
 
-Both services use the same layout: one folder per album, singles included.
+Both services keep one folder per album, singles included. Spotify albums
+sit directly in the music folder; SoundCloud groups them by artist first.
 
 ```
 Music/
 ├── <album artist> - <album>/<NN> - <title>.mp3          # Spotify
 ├── SoundCloud/
-│   ├── <album artist> - <album>/<NN> - <title>.mp3      # SoundCloud album/EP track
-│   ├── <artist> - <song> - Single/01 - <song>.mp3        # standalone SoundCloud upload
+│   ├── <album artist>/
+│   │   ├── <album>/<NN> - <title>.mp3                    # SoundCloud album/EP track
+│   │   └── <song> - Single/01 - <song>.mp3               # standalone SoundCloud upload
 │   ├── SoundCloud_New.m3u8          (all SoundCloud tracks)
 │   ├── <uploader> - <playlist>.m3u8 (one per playlist link, original order)
 │   ├── .sc_index.json               (SoundCloud id -> file)
@@ -30,6 +32,31 @@ Music/
 The album artist decides the folder - the artist the album belongs to, not
 the first artist of a track - so an album whose tracks start with different
 artists stays together. Lyrics (`.lrc`) sit next to the audio file.
+
+On SoundCloud a single gets its own folder under its artist, like an album
+(`<artist>/<song> - Single/`), so a single that later appears on an album
+does not share a folder with it. A compilation goes under `Various Artists/`.
+
+### Moving a SoundCloud library to the artist folders
+
+Before 2.7.0 SoundCloud used Spotify's layout, `SoundCloud/<album artist> -
+<album>/`. Every SoundCloud run first moves such a library to the current
+layout ([`soundcloud_layout.py`](../../cli/music_loader/soundcloud_layout.py)):
+
+- A track is in the old layout when it sits directly in a first-level folder
+  (the current layout never puts audio there). It moves when music-loader
+  wrote it (SoundCloud id tag, or an entry in `.sc_index.json`) and it has
+  album and album artist tags; its new folder is built from those tags, its
+  file name is kept. Other files are left where they are.
+- The `.lrc` moves with the track, `.sc_index.json` and the `.m3u8`
+  playlists follow it (paths stay relative), and old folders that are empty
+  afterwards are removed. A file is never overwritten: a name already taken
+  gets the SoundCloud id appended.
+- The planned moves are written to `.sc_layout_migration.json` before the
+  first file is touched, and the file is deleted when everything is done. An
+  interrupted migration is finished on the next run; on a library in the
+  current layout the step only lists the first-level folders and moves
+  nothing.
 
 ### Names
 
@@ -177,7 +204,7 @@ Every new file is checked before it counts as downloaded:
 library - useful after updating music-loader:
 
 - SoundCloud: metadata is fetched again; tags, folder and file name are
-  rewritten (files from older versions move into album folders, with their
+  rewritten (files from older versions move into artist/album folders, with their
   `.lrc`; entries in the `.m3u8` playlists follow the moved files); a file whose length does not match is downloaded again.
 - Spotify: tags are refreshed from Spotify (`--overwrite metadata`), files
   are renamed to the current naming scheme (with their `.lrc`), the
@@ -411,6 +438,7 @@ cli/music_loader/
 ├── soundcloud.py         # SoundCloud: discovery, parallel pipeline, recheck
 ├── soundcloud_meta.py    # SoundCloud tags, album context, folders, covers
 ├── soundcloud_index.py   # SoundCloud id -> file index, archive
+├── soundcloud_layout.py  # moves old "Artist - Album" SoundCloud folders to "Artist/Album"
 ├── text_utils.py         # title parsing, normalization, version markers
 ├── artists.py            # canonical artist spelling across the library
 ├── lyrics.py             # verified lyrics (LRCLIB, Musixmatch, Genius)
