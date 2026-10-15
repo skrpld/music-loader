@@ -43,11 +43,13 @@ Android (from `android/`; JDK 17+, Android SDK, Python 3.13 in `PATH` for Chaquo
 
 ## Releasing (docs/how-to/publish-a-release.md)
 
-CLI and Android are versioned and released independently by pushing a tag; GitHub Actions builds and publishes the release. A suffix (`-rc.1`, `-beta.2`) makes a pre-release.
+CLI and Android are versioned and released independently, by pushing a tag or by running the component's workflow manually on `main` with `release=true`; either way GitHub Actions builds, checks and publishes the release. A suffix (`-rc.1`, `-beta.2`) makes a pre-release.
 
-- **CLI**: bump `__version__` in `cli/music_loader/__init__.py` (the only place; `pyproject.toml` reads it), merge to `main`, push tag `cli-vX.Y.Z`. CI refuses a tag that does not match `__version__`. Assets: wheel, sdist, `SHA256SUMS`.
-- **Android**: optionally bump `appVersionName` in `android/gradle.properties` (branch builds only), merge to `main`, push tag `android-vX.Y.Z`. `versionName` comes from the tag, `versionCode` is the workflow run number. Release signing uses the `ANDROID_KEYSTORE_*` / `ANDROID_KEY_*` repository secrets; without them CI builds a debug APK.
-- Branch and PR builds run the same workflows (path-filtered) and only upload artifacts.
+- **Releasing from a session**: sessions cannot push tags. After the user merges the PR, trigger the workflow on `main` via `workflow_dispatch`: `cli.yml` with `release=true` (version = `__version__`), `android.yml` with `release=true` and `version=X.Y.Z`. The run creates the tag and publishes the release; it refuses a run off `main`, an existing tag, a malformed version or one not newer than the latest tag of that component. Send the user the release links. If the dispatch is refused, give the user the tag commands instead.
+
+- **CLI**: bump `__version__` in `cli/music_loader/__init__.py` (the only place; `pyproject.toml` reads it), merge to `main`, then run the workflow (above) or push tag `cli-vX.Y.Z`. CI refuses a tag that does not match `__version__`. Assets: wheel, sdist, `SHA256SUMS`.
+- **Android**: optionally bump `appVersionName` in `android/gradle.properties` (branch builds only), merge to `main`, then run the workflow with `version=X.Y.Z` or push tag `android-vX.Y.Z`. `versionName` comes from the tag or the `version` input, `versionCode` is the workflow run number. Release signing uses the `ANDROID_KEYSTORE_*` / `ANDROID_KEY_*` repository secrets; without them CI builds a debug APK.
+- Branch and PR builds (and manual runs without `release`) run the same workflows (path-filtered) and only upload artifacts.
 
 ## Conventions
 

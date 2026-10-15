@@ -19,14 +19,28 @@ on:
       - "android/**"
       - "cli/music_loader/**"
       - ".github/workflows/android.yml"
+  # Actions -> Android -> Run workflow. With "release" on main the run builds
+  # versionName <version>, tags android-v<version> on the built commit and
+  # publishes the release, exactly like a tag push (sessions cannot push
+  # tags, but can start a run).
   workflow_dispatch:
+    inputs:
+      release:
+        description: Publish a release (main only)
+        type: boolean
+        default: false
+      version:
+        description: Release version, e.g. 1.11.0 (required with release)
+        type: string
+        default: ""
 
 permissions:
   contents: read
 
+# A release run has its own group, so a push to main does not cancel it.
 concurrency:
-  group: android-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  group: android-${{ github.ref }}${{ inputs.release && '-release' || '' }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') && !inputs.release }}
 
 jobs:
   build:
@@ -56,12 +70,19 @@ jobs:
       # Caches Gradle and validates the wrapper jar.
       - uses: gradle/actions/setup-gradle@v4
 
-      # A tag android-v1.2.0 (or android-v1.2.0-rc.1) becomes versionName
-      # 1.2.0; otherwise appVersionName from gradle.properties is used.
+      # A tag android-v1.2.0 (or android-v1.2.0-rc.1) or the "version" input of
+      # a release run becomes versionName 1.2.0; otherwise appVersionName from
+      # gradle.properties is used.
       - name: Version
         id: version
+        env:
+          RELEASE: ${{ inputs.release }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/android-v* ]]; then
+          if [ "$RELEASE" = true ]; then
+            version="$INPUT_VERSION"
+            bash ../.github/scripts/check-release.sh android-v "$version"
+          elif [[ "$GITHUB_REF" == refs/tags/android-v* ]]; then
             version="${GITHUB_REF_NAME#android-v}"
             if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
               echo "::error::Tag $GITHUB_REF_NAME is not android-vMAJOR.MINOR.PATCH[-suffix]."
@@ -79,12 +100,13 @@ jobs:
         id: signing
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          RELEASE: ${{ startsWith(github.ref, 'refs/tags/') || inputs.release }}
         run: |
           if [ -n "$KEYSTORE_BASE64" ]; then
             echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
             echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
             echo "variant=release" >> "$GITHUB_OUTPUT"
-          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+          elif [ "$RELEASE" = true ]; then
             echo "::warning::No signing secrets: the release gets a debug APK, which cannot be installed over another build."
             echo "variant=debug" >> "$GITHUB_OUTPUT"
           else
@@ -112,8 +134,9 @@ jobs:
         id: apk
         env:
           VARIANT: ${{ steps.signing.outputs.variant }}
+          RELEASE: ${{ startsWith(github.ref, 'refs/tags/') || inputs.release }}
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+          if [ "$RELEASE" = true ]; then
             name="music-loader-${VERSION_NAME}"
           else
             name="music-loader-${VERSION_NAME}-${GITHUB_RUN_NUMBER}"
@@ -133,7 +156,7 @@ jobs:
 
   release:
     name: GitHub release
-    if: startsWith(github.ref, 'refs/tags/android-v')
+    if: startsWith(github.ref, 'refs/tags/android-v') || inputs.release
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -157,6 +180,8 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          # A manual run creates the tag; a tag push brings its own. The tag is
+          # built from the input, not from a job output (see above).
+          TAG: ${{ inputs.release && format('android-v{0}', inputs.version) || github.ref_name }}
           VERSION: ${{ needs.build.outputs.version }}
         run: bash .github/scripts/publish-release.sh "$TAG" "Android $VERSION" "android-v*" dist/*

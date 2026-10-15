@@ -16,14 +16,23 @@ on:
     paths:
       - "cli/**"
       - ".github/workflows/cli.yml"
+  # Actions -> CLI -> Run workflow. With "release" on main the run also tags
+  # cli-v<__version__> on the built commit and publishes the release, exactly
+  # like a tag push (sessions cannot push tags, but can start a run).
   workflow_dispatch:
+    inputs:
+      release:
+        description: Publish a release of __version__ (main only)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+# A release run has its own group, so a push to main does not cancel it.
 concurrency:
-  group: cli-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  group: cli-${{ github.ref }}${{ inputs.release && '-release' || '' }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') && !inputs.release }}
 
 defaults:
   run:
@@ -86,6 +95,13 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      - name: Check release
+        if: inputs.release
+        working-directory: .
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: bash .github/scripts/check-release.sh cli-v "$VERSION"
+
       - name: Build wheel and sdist
         run: |
           python -m pip install build
@@ -111,7 +127,7 @@ jobs:
 
   release:
     name: GitHub release
-    if: startsWith(github.ref, 'refs/tags/cli-v')
+    if: startsWith(github.ref, 'refs/tags/cli-v') || inputs.release
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -134,6 +150,7 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          # A manual run creates the tag; a tag push brings its own.
+          TAG: ${{ inputs.release && format('cli-v{0}', needs.build.outputs.version) || github.ref_name }}
           VERSION: ${{ needs.build.outputs.version }}
         run: bash .github/scripts/publish-release.sh "$TAG" "CLI $VERSION" "cli-v*" dist/*
