@@ -91,6 +91,8 @@ class DownloadViewModel(
 
     fun setAutoRetry(enabled: Boolean) = updateOptions { it.copy(autoRetry = enabled) }
 
+    fun setDebugLog(enabled: Boolean) = updateOptions { it.copy(debugLog = enabled) }
+
     private fun updateOptions(change: (JobOptions) -> JobOptions) {
         viewModelScope.launch { settingsStore.setJobOptions(change(options.value)) }
     }

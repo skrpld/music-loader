@@ -31,6 +31,7 @@
     <string name="action_paste">Paste</string>
     <string name="action_clear">Clear</string>
     <string name="action_copy">Copy</string>
+    <string name="action_share">Share</string>
     <string name="action_back">Back</string>
     <string name="action_add_links">Add links</string>
     <string name="action_cancel_job">Cancel job</string>
@@ -73,6 +74,7 @@
     <string name="option_short_likes">Likes</string>
     <string name="option_short_fallback">Blocked elsewhere</string>
     <string name="option_short_auto_retry">Auto retry</string>
+    <string name="option_short_debug_log">Debug log</string>
     <string name="download_submit">Add to queue</string>
     <string name="download_submitted">Added to the queue</string>
     <string name="download_submitted_rejected">Added to the queue; not recognized: %1$d</string>
@@ -112,6 +114,10 @@
     <string name="log_no_errors">No errors</string>
     <string name="job_runlog">Failure log</string>
     <string name="job_unavailable_log">Unavailable tracks</string>
+    <string name="job_debug_log">Debug log</string>
+    <string name="job_debug_log_description">Share the detailed log of this job</string>
+    <string name="job_debug_log_description_running">Share the log written so far</string>
+    <string name="job_debug_log_share_title">Share the debug log</string>
     <string name="job_failed_links">Failed links</string>
     <string name="kind_track">Track</string>
     <string name="kind_album">Album</string>
@@ -167,6 +173,8 @@
     <string name="failure_unavailable">Unavailable</string>
     <string name="option_auto_retry">Retry automatically</string>
     <string name="option_auto_retry_description">Try the failed tracks again by itself, whatever went wrong: after 15, 30 and 60 minutes (3 attempts at most). Unavailable tracks are not retried. Works while the app or the server keeps running.</string>
+    <string name="option_debug_log">Debug log</string>
+    <string name="option_debug_log_description">Record in detail how each link was resolved, how titles were parsed into artists and file names, and every lyrics search with the reason a result was rejected. Secrets are masked. Share it from the job to attach it to an issue.</string>
 
     <!-- Settings -->
     <string name="settings_mode">Where to download</string>

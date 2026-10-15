@@ -59,6 +59,7 @@ from .availability import (
     classify_track,
     failure_category,
 )
+from . import debuglog
 from .config import (
     ARCHIVE_FILENAME,
     ARTISTS_FILENAME,
@@ -1013,6 +1014,7 @@ class SoundCloudBatch:
             raise
         except Exception as exc:
             dashboard.log_error("SoundCloud", f"Could not resolve '{redact_url(url)}': {exc}")
+            debuglog.event("soundcloud", "resolve_failed", link=url, kind=link.kind, error=str(exc))
             # The whole link failed: a retry runs the link again.
             dashboard.record_failure("soundcloud", failure_category([str(exc)]), url)
             return plan
@@ -1023,6 +1025,18 @@ class SoundCloudBatch:
         plan.resolved = True
         plan.partial = own.had_failure
         dashboard.log(f"[SoundCloud] Found {len(plan.jobs)} track(s) in {redact_url(url)}")
+        if debuglog.enabled():
+            debuglog.event(
+                "soundcloud", "resolved", link=url, kind=link.kind, link_section=link.section,
+                playlist_title=plan.playlist_title, partial=plan.partial,
+                tracks=[{
+                    "id": job.track_id, "url": job.url, "title": job.info.get("title"),
+                    "uploader": job.info.get("uploader"), "duration": job.info.get("duration"),
+                    "album": job.album.title if job.album else None,
+                    "position": job.album.position if job.album else None,
+                    "album_lookup": job.lookup_album,
+                } for job in plan.jobs],
+            )
         return plan
 
     @staticmethod
@@ -1111,6 +1125,15 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
             lyrics_futures.append(lyrics_pool.submit(task))
 
     def finished(job: TrackJob, result: _Processed, recheck: bool) -> None:
+        debuglog.event(
+            "soundcloud", "track_result", id=job.track_id, ok=result.ok,
+            status=("failed" if not result.ok or result.path is None
+                    else "rechecked" if result.existed and recheck
+                    else "skipped (already in library)" if result.existed else "downloaded"),
+            path=(str(result.path.relative_to(ctx.soundcloud_dir))
+                  if result.path is not None and result.path.is_relative_to(ctx.soundcloud_dir)
+                  else result.path),
+        )
         if not result.ok or result.path is None:
             ctx.fail(job)
             dashboard.record_track("soundcloud", "failed")
@@ -1180,8 +1203,14 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
         from another source when the fallback is on, else counted and listed.
         Never a failure."""
         note = ""
+        debuglog.event("soundcloud", "unavailable", id=job.track_id, title=track.title,
+                       reason=track.reason.value, fallback=config.soundcloud_fallback)
         if config.soundcloud_fallback:
             download, note = _fallback_download(job, track, ctx, slot)
+            debuglog.event("soundcloud", "fallback", id=job.track_id,
+                           found=download is not None and download.raw_path is not None,
+                           source=(download.info.get(_SOURCE_KEY) if download is not None else None),
+                           note=note)
             if download is not None and download.raw_path is not None:
                 # No gate.relax(): a download from another site says nothing
                 # about SoundCloud's rate limit.
@@ -1250,6 +1279,8 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
                 break
             attempt += 1
             delay = ctx.gate.trip()
+            debuglog.event("soundcloud", "retry", id=job.track_id, attempt=attempt,
+                           reason="rate limited", pause_seconds=delay)
             slower = " and downloading one track at a time from now on" if download_workers > 1 else ""
             dashboard.log(f"[SoundCloud] Rate limited by SoundCloud, pausing downloads for {delay}s{slower}")
         if download.unavailable is not None:

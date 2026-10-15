@@ -30,6 +30,7 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TaskID, TaskProgre
 from rich.table import Table
 from rich.text import Text
 
+from . import debuglog
 from .availability import FailureCategory, UnavailableTrack
 from .runlog import RunLog
 
@@ -134,6 +135,7 @@ class Dashboard:
         with self._lock:
             self._log.append(Text(str(message)))
         self._refresh()
+        debuglog.event("run", "log", text=message)
 
     def log_error(self, source: str, message: str) -> None:
         """Records a failed operation: shows it in the Activity panel AND
@@ -142,6 +144,7 @@ class Dashboard:
         with self._lock:
             self._log.append(Text(f"[{source}][!] {message}", style="red"))
         self._refresh()
+        debuglog.event("run", "error", source=source, text=message)
         if self.runlog is not None:
             self.runlog.record(source, message)
 
@@ -172,6 +175,7 @@ class Dashboard:
         failures, explained in the Activity panel and listed in the run's
         unavailable-tracks file (not in the failure log)."""
         self.record_track(kind, "unavailable")
+        debuglog.log_unavailable(kind, track, note)
         self.log(f"[{track.source}] {track.message(note)}")
         if self.runlog is not None:
             self.runlog.record_unavailable(track)
@@ -180,6 +184,7 @@ class Dashboard:
         """Names a track (or a whole link) that failed and why. The counters
         and the failure log are fed by `record_track` and `log_error`; this is
         for the server, which lets the app retry exactly the retryable ones."""
+        debuglog.event("run", "failure", service=kind, category=category.value, url=url, title=title)
 
     def record_lyrics(self, found: bool) -> None:
         """Records one lyrics lookup result (found / not found)."""

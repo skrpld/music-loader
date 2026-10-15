@@ -25,6 +25,7 @@ music-loader serve -o <MUSIC_FOLDER> [OPTIONS]
 | `--soundcloud-fallback` | off | For a track SoundCloud does not give out (DRM, preview only, blocked), take the same track from YouTube Music when artist, title, version and length match; the tags say where it came from |
 | `--soundcloud-download-workers N` | `2` | Parallel SoundCloud downloads. SoundCloud allows about 600 requests per 10 minutes; more workers hit that limit sooner |
 | `--soundcloud-workers N` | `4` | Parallel SoundCloud conversion/tagging workers |
+| `--debug-log [PATH]` | off | Write a detailed debug log of the run (see [Debug log](#debug-log)). Without `PATH`, or with a folder, the file is `.music-loader-logs/debug-YYYYMMDD-HHMMSS.jsonl` in the Music folder (or in that folder) |
 | `--spotify-threads N` | `4` | Parallel spotDL downloads |
 | `--spotify-client-id` | none | Own Spotify application client id |
 | `--spotify-client-secret` | none | Own Spotify application client secret |
@@ -70,9 +71,36 @@ Music/
 │   └── *.m3u8                                              # playlists
 └── .music-loader-logs/
     ├── failures-YYYYMMDD-HHMMSS.log
-    └── unavailable-YYYYMMDD-HHMMSS.log     # DRM / preview-only tracks that were skipped
+    ├── unavailable-YYYYMMDD-HHMMSS.log     # DRM / preview-only tracks that were skipped
+    └── debug-YYYYMMDD-HHMMSS.jsonl         # only with --debug-log
 ```
 
 Hidden index files (`.sc_index.json`, `.spotify_index.json`, `.music-loader-artists.json`, lyrics
 attempt files) make re-runs fast and detect moved files. Naming, tagging and lyrics rules:
 [How it works](../explanation/how-it-works.md).
+
+## Debug log
+
+`--debug-log` records why every track ended up the way it did, for analysing title parsing and
+lyrics matching or for attaching to an issue. It is off by default; without it nothing extra is
+written. The file is JSON lines, one event per line, written as the run goes (readable mid-run):
+
+```json
+{"time": "2026-10-15 08:00:00.123", "section": "lyrics", "event": "candidate", "track": "01 - Song.mp3",
+ "provider": "LRCLIB", "artist": "Other", "title": "Song", "verdict": "rejected", "reason": "artist mismatch"}
+```
+
+| `section` | Events |
+|---|---|
+| `run` | `start` (version, options), every Activity line (`log`, `error`), `failure` with its category, `unavailable` with its reason, `finished` with the counters |
+| `links` | every link with its service and kind, rejected entries |
+| `soundcloud` | `resolved` (tracks of a link with id, title, uploader, length, album), `metadata` (raw yt-dlp fields: title, uploader, artist, description, length, publisher metadata, ...), `title_parsed` (raw title → artists, featured, producers, title, version markers), `final_meta` (tags, folder, file name), `retry`, `unavailable`, `fallback`, `track_result` |
+| `spotify` | `resolved` (what spotDL returned per song: name, artists, album, ISRC, length, ...), `spotdl_output` (every line spotDL printed, including the match it downloaded), `track_result` (final path, title, artists, album artist) |
+| `lyrics` | `request` (artists, title, album, length), every provider `query` with its parameters and HTTP status, every `candidate` with `verdict` (`synced`, `plain`, `instrumental`, `rejected`) and `reason` (artist mismatch, title mismatch, version mismatch, length difference, ...), `provider_skipped` / `provider_error`, `result` |
+
+Secrets are masked before anything is written: private SoundCloud tokens (`/s-…`, `secret_token`),
+client ids, user tokens, passwords and `Authorization` values; the Spotify credentials are never
+logged. Long texts (descriptions) are cut at 2000 characters.
+
+Put links before the flag or use `--debug-log=PATH`: a link right after `--debug-log` is still
+treated as a link, not as the path.

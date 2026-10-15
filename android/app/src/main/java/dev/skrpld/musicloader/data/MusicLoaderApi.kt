@@ -1,5 +1,6 @@
 package dev.skrpld.musicloader.data
 
+import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resumeWithException
@@ -66,6 +67,32 @@ class MusicLoaderApi(
         return json.decodeFromString<JobEnvelope>(
             execute(request(server, "jobs", id, "retry").post(body).build()),
         ).job
+    }
+
+    /** Saves the job's debug log to [target]. Needs [Features.DebugLog]. */
+    suspend fun downloadDebugLog(server: ServerConfig, id: String, target: File) {
+        val request = request(server, "jobs", id, "debug-log").build()
+        suspendCancellableCoroutine<Unit> { continuation ->
+            val call = client.newCall(request)
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    continuation.resumeWithException(e)
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    val result = runCatching<Unit> {
+                        response.use {
+                            if (!it.isSuccessful) {
+                                throw ApiException(it.code, errorMessage(it.body.string()) ?: "HTTP ${it.code}")
+                            }
+                            target.outputStream().use { out -> it.body.byteStream().copyTo(out) }
+                        }
+                    }
+                    continuation.resumeWith(result)
+                }
+            })
+        }
     }
 
     suspend fun delete(server: ServerConfig, id: String) {

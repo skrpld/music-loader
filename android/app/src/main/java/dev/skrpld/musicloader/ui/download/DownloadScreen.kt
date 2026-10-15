@@ -107,6 +107,7 @@ fun DownloadScreen(
     var showOptions by rememberSaveable { mutableStateOf(false) }
     // An older server would ignore the option: do not offer what it cannot do.
     val showAutoRetry = connection.supports(Features.AutoRetry)
+    val showDebugLog = connection.supports(Features.DebugLog)
 
     val messages by rememberUpdatedState(
         DownloadMessages(
@@ -198,6 +199,7 @@ fun DownloadScreen(
                     options = options,
                     recheck = viewModel.recheck,
                     showAutoRetry = showAutoRetry,
+                    showDebugLog = showDebugLog,
                     onClick = { showOptions = true },
                     modifier = contentModifier,
                 )
@@ -270,6 +272,9 @@ fun DownloadScreen(
                     onRepostsChange = viewModel::setSoundcloudReposts,
                     onLikesChange = viewModel::setSoundcloudLikes,
                     onFallbackChange = viewModel::setSoundcloudFallback,
+                    showDebugLog = showDebugLog,
+                    debugLog = options.debugLog,
+                    onDebugLogChange = viewModel::setDebugLog,
                 )
             }
         }
@@ -289,6 +294,7 @@ private fun OptionsSummary(
     options: JobOptions,
     recheck: Boolean,
     showAutoRetry: Boolean,
+    showDebugLog: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -335,6 +341,9 @@ private fun OptionsSummary(
                     }
                     if (showAutoRetry && options.autoRetry) {
                         Pill(text = stringResource(R.string.option_short_auto_retry), icon = R.drawable.ic_schedule)
+                    }
+                    if (showDebugLog && options.debugLog) {
+                        Pill(text = stringResource(R.string.option_short_debug_log), icon = R.drawable.ic_info)
                     }
                 }
             }
@@ -479,8 +488,11 @@ private fun OptionsList(
     onRepostsChange: (Boolean) -> Unit,
     onLikesChange: (Boolean) -> Unit,
     onFallbackChange: (Boolean) -> Unit,
+    showDebugLog: Boolean,
+    debugLog: Boolean,
+    onDebugLogChange: (Boolean) -> Unit,
 ) {
-    val count = if (showAutoRetry) 5 else 4
+    val count = 4 + (if (showAutoRetry) 1 else 0) + (if (showDebugLog) 1 else 0)
     Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
         OptionItem(
             index = 0,
@@ -527,6 +539,17 @@ private fun OptionsList(
                 description = stringResource(R.string.option_auto_retry_description),
                 checked = autoRetry,
                 onCheckedChange = onAutoRetryChange,
+            )
+        }
+        if (showDebugLog) {
+            OptionItem(
+                index = count - 1,
+                count = count,
+                icon = R.drawable.ic_info,
+                title = stringResource(R.string.option_debug_log),
+                description = stringResource(R.string.option_debug_log_description),
+                checked = debugLog,
+                onCheckedChange = onDebugLogChange,
             )
         }
     }

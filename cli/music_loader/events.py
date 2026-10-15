@@ -31,6 +31,7 @@ import threading
 from dataclasses import asdict
 from typing import Any, Optional, TextIO
 
+from . import debuglog
 from .availability import FailureCategory, UnavailableTrack
 from .runlog import RunLog, redact_secrets
 from .ui import PHASE_DOWNLOADING, Stats
@@ -58,10 +59,12 @@ class EventDashboard:
 
     # -- Dashboard interface ----------------------------------------------------
     def log(self, message: str) -> None:
+        debuglog.event("run", "log", text=message)
         self.emit({"type": "log", "level": "info", "source": None,
                    "text": redact_secrets(message)})
 
     def log_error(self, source: str, message: str) -> None:
+        debuglog.event("run", "error", source=source, text=message)
         self.emit({"type": "log", "level": "error", "source": source,
                    "text": redact_secrets(message)})
         if self.runlog is not None:
@@ -81,6 +84,7 @@ class EventDashboard:
 
     def record_unavailable(self, kind: str, track: UnavailableTrack, note: str = "") -> None:
         self.record_track(kind, "unavailable")
+        debuglog.log_unavailable(kind, track, note)
         self.log(f"[{track.source}] {track.message(note)}")
         if self.runlog is not None:
             self.runlog.record_unavailable(track)
@@ -91,6 +95,7 @@ class EventDashboard:
                 self.emit({"type": "unavailable_log", "path": str(self.runlog.unavailable_path)})
 
     def record_failure(self, kind: str, category: FailureCategory, url: str, title: str = "") -> None:
+        debuglog.event("run", "failure", service=kind, category=category.value, url=url, title=title)
         if not url:
             return
         self.emit({"type": "failure", "service": kind, "category": category.value,

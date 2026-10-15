@@ -29,6 +29,7 @@
     <string name="action_paste">Вставить</string>
     <string name="action_clear">Очистить</string>
     <string name="action_copy">Копировать</string>
+    <string name="action_share">Поделиться</string>
     <string name="action_back">Назад</string>
     <string name="action_add_links">Добавить ссылки</string>
     <string name="action_cancel_job">Отменить</string>
@@ -71,6 +72,7 @@
     <string name="option_short_likes">Лайки</string>
     <string name="option_short_fallback">Замена недоступных</string>
     <string name="option_short_auto_retry">Автоповтор</string>
+    <string name="option_short_debug_log">Отладочный журнал</string>
     <string name="download_submit">Добавить в очередь</string>
     <string name="download_submitted">Задание добавлено в очередь</string>
     <string name="download_submitted_rejected">Задание добавлено; не распознано: %1$d</string>
@@ -112,6 +114,10 @@
     <string name="log_no_errors">Ошибок нет</string>
     <string name="job_runlog">Журнал ошибок</string>
     <string name="job_unavailable_log">Недоступные треки</string>
+    <string name="job_debug_log">Отладочный журнал</string>
+    <string name="job_debug_log_description">Поделиться подробным журналом задания</string>
+    <string name="job_debug_log_description_running">Поделиться уже записанной частью журнала</string>
+    <string name="job_debug_log_share_title">Поделиться отладочным журналом</string>
     <string name="job_failed_links">Ссылок с ошибками</string>
     <string name="kind_track">Трек</string>
     <string name="kind_album">Альбом</string>
@@ -167,6 +173,8 @@
     <string name="failure_unavailable">Недоступны</string>
     <string name="option_auto_retry">Повторять автоматически</string>
     <string name="option_auto_retry_description">Самостоятельно повторять неудачные треки, какой бы ни была ошибка: через 15, 30 и 60 минут (не более 3 попыток). Недоступные треки не повторяются. Работает, пока запущено приложение или сервер.</string>
+    <string name="option_debug_log">Отладочный журнал</string>
+    <string name="option_debug_log_description">Подробно записывать, как разбиралась каждая ссылка, как из названий получались исполнители и имена файлов, и каждый поиск текста с причиной, по которой результат отклонён. Секреты скрываются. Журналом можно поделиться из задания, чтобы приложить его к issue.</string>
 
     <!-- Settings -->
     <string name="settings_mode">Куда скачивать</string>

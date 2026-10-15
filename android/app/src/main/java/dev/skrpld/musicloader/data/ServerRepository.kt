@@ -1,5 +1,6 @@
 package dev.skrpld.musicloader.data
 
+import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -181,6 +182,9 @@ class ServerRepository(
     suspend fun cancel(id: String): Job = api.cancel(server(), id)
 
     suspend fun delete(id: String) = api.delete(server(), id)
+
+    /** Saves the job's debug log to [target] (phone mode and a server alike). */
+    suspend fun downloadDebugLog(id: String, target: File) = api.downloadDebugLog(server(), id, target)
 
     /** Checks a server that is not saved yet. */
     suspend fun test(server: ServerConfig): ServerInfo = api.info(server)

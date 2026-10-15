@@ -17,12 +17,19 @@ the first start (printed at startup).
     POST   /api/v1/jobs/<id>/cancel   cancel a queued or running job, or the pending automatic retry
                                       of a finished one
     POST   /api/v1/jobs/<id>/retry    queue a finished job again: {"scope": "all" | "failed"}
+    GET    /api/v1/jobs/<id>/debug-log  the job's debug log (JSON lines), when it was queued with
+                                      "debug_log": true
     DELETE /api/v1/jobs/<id>          remove a finished job from the list
     GET    /api/v1/events             Server-Sent Events: a "state" event on every change
 
 Job options: {"lyrics": "strict" | "loose" | "off", "recheck": false,
 "soundcloud_reposts": false, "soundcloud_likes": false, "soundcloud_fallback": false,
-"auto_retry": false}.
+"auto_retry": false, "debug_log": false}.
+
+Debug log: with `debug_log` the job writes a detailed log of the run (see
+debuglog.py) to the library's log folder; the job shows its path as
+`debug_log` and `/debug-log` sends the file, so a client on another device
+can save or share it.
 
 Retrying: a track (or link) that failed is recorded with a category (see
 availability.py). Every failure is retryable, whatever its category
@@ -47,8 +54,8 @@ itself: it comes back as cancelled or failed with an "Interrupted" message. A
 file that cannot be read is ignored.
 
 `GET /api/v1/info` (and every `state` event) lists the server's `features`
-("retry", "auto_retry"); a client talking to an older server finds the list
-missing and leaves the retry actions out.
+("retry", "auto_retry", "debug_log"); a client talking to an older server
+finds the list (or an entry) missing and leaves those actions out.
 
 The server speaks plain HTTP: use it in a trusted network or a VPN
 (Tailscale, WireGuard), or put an HTTPS reverse proxy in front of it.
@@ -83,14 +90,14 @@ from rich.markup import escape
 from . import __version__
 from .cli import _positive_int
 from .availability import FailureCategory
-from .config import LYRICS_MODE_LOOSE, LYRICS_MODE_STRICT
+from .config import LOGS_DIRNAME, LYRICS_MODE_LOOSE, LYRICS_MODE_STRICT
 from .deps import check_dependencies
 from .links import Link, parse_link, redact_url
 from .ui import PHASE_DOWNLOADING, PHASE_RESOLVING, Stats
 
 API_VERSION = 1
 # Optional capabilities, for clients that may talk to an older server.
-FEATURES = ("retry", "auto_retry")
+FEATURES = ("retry", "auto_retry", "debug_log")
 DEFAULT_PORT = 8765
 TOKEN_ENV = "MUSIC_LOADER_TOKEN"
 TOKEN_FILENAME = "server-token"
@@ -101,7 +108,8 @@ _TOKEN_RE = re.compile(r"[A-Za-z0-9._~+/=-]{16,512}")
 _JOB_ID_RE = re.compile(r"[0-9a-f]{1,64}")
 _LYRICS_MODES = (LYRICS_MODE_STRICT, LYRICS_MODE_LOOSE, "off")
 _FINISHED = {"completed", "cancelled", "failed"}
-_BOOL_OPTIONS = ("recheck", "soundcloud_reposts", "soundcloud_likes", "soundcloud_fallback", "auto_retry")
+_BOOL_OPTIONS = ("recheck", "soundcloud_reposts", "soundcloud_likes", "soundcloud_fallback", "auto_retry",
+                 "debug_log")
 _INTERRUPTED_QUEUED = "Interrupted: the server stopped before the job started"
 _INTERRUPTED_RUNNING = "Interrupted: the server stopped while the job was running"
 _RETRY_SCOPES = ("all", "failed")
@@ -182,6 +190,7 @@ class Job:
     log_seq: int = 0
     runlog: Optional[str] = None
     unavailable_log: Optional[str] = None
+    debug_log: Optional[str] = None
     cancel_requested: bool = False
     # Failed tracks (or whole links) by their link, with the reason; the full
     # link is kept for the retry, clients only get it redacted.
@@ -242,6 +251,7 @@ class Job:
             errors=list(self.errors)[-error_limit:],
             runlog=self.runlog,
             unavailable_log=self.unavailable_log,
+            debug_log=self.debug_log,
             failed_items=[
                 {"url": redact_url(item["url"]), "service": item["service"], "title": item["title"],
                  "category": item["category"],
@@ -272,6 +282,7 @@ class Job:
             "log_seq": self.log_seq,
             "runlog": self.runlog,
             "unavailable_log": self.unavailable_log,
+            "debug_log": self.debug_log,
             "failed": list(self.failed.values()),
             "attempt": self.attempt,
             "retry_of": self.retry_of,
@@ -341,6 +352,7 @@ def _job_from_state(data: Any, saved_at: Optional[int]) -> Optional[Job]:
     job.log_seq = max([_int(data.get("log_seq"))] + [entry["seq"] for entry in job.log])
     job.runlog = _opt_text(data.get("runlog"))
     job.unavailable_log = _opt_text(data.get("unavailable_log"))
+    job.debug_log = _opt_text(data.get("debug_log"))
     raw_failed = data.get("failed")
     for item in raw_failed if isinstance(raw_failed, list) else []:
         if isinstance(item, dict):
@@ -434,6 +446,26 @@ class JobManager:
         with self._cond:
             job = self._jobs.get(job_id)
             return job.detail() if job is not None else None
+
+    def debug_log(self, job_id: str) -> Optional[Path]:
+        """The job's debug log file. Raises JobNotFound for an unknown job;
+        None when the job has none (any more). Only a file in the library's
+        log folder is ever handed out."""
+        with self._cond:
+            job = self._jobs.get(job_id)
+            if job is None:
+                raise JobNotFound(job_id)
+            recorded = job.debug_log
+        if not recorded:
+            return None
+        try:
+            path = Path(recorded).resolve()
+            logs = (self.music_dir / LOGS_DIRNAME).resolve()
+        except OSError:
+            return None
+        if path.parent != logs or not path.name.startswith("debug-") or not path.is_file():
+            return None
+        return path
 
     def _state(self) -> dict[str, Any]:
         running = self._running
@@ -917,6 +949,8 @@ class JobManager:
             job.runlog = _text(event.get("path")) or None
         elif kind == "unavailable_log":
             job.unavailable_log = _text(event.get("path")) or None
+        elif kind == "debug_log":
+            job.debug_log = _text(event.get("path")) or None
 
     @staticmethod
     def _apply_failure(job: Job, event: dict[str, Any]) -> None:
@@ -1089,6 +1123,31 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_file(self, path: Path, content_type: str) -> None:
+        try:
+            handle = open(path, "rb")
+        except OSError:
+            raise _RequestError(HTTPStatus.NOT_FOUND, "The file is gone")
+        with handle:
+            size = os.fstat(handle.fileno()).st_size
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(size))
+            self.send_header("Content-Disposition", f'attachment; filename="{path.name}"')
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            # A running job keeps appending: send what was there when asked.
+            remaining = size
+            while remaining > 0:
+                chunk = handle.read(min(remaining, 64 * 1024))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                remaining -= len(chunk)
+            if remaining:
+                # The file shrank under us; the client must not reuse the connection.
+                self.close_connection = True
+
     def _send_empty(self, status: HTTPStatus) -> None:
         self.send_response(status)
         self.send_header("Content-Length", "0")
@@ -1180,6 +1239,14 @@ class _Handler(BaseHTTPRequestHandler):
             if summary is None:
                 raise _RequestError(HTTPStatus.NOT_FOUND, "No such job")
             return self._send_json(HTTPStatus.OK, {"job": summary})
+        if len(parts) == 3 and parts[0] == "jobs" and parts[2] == "debug-log" and method == "GET":
+            try:
+                path = manager.debug_log(parts[1])
+            except JobNotFound:
+                raise _RequestError(HTTPStatus.NOT_FOUND, "No such job")
+            if path is None:
+                raise _RequestError(HTTPStatus.NOT_FOUND, "The job has no debug log")
+            return self._send_file(path, "application/x-ndjson; charset=utf-8")
         if len(parts) == 3 and parts[0] == "jobs" and parts[2] == "retry" and method == "POST":
             scope = _parse_retry_request(body)
             try:

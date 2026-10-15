@@ -12,7 +12,7 @@ from typing import Any
 from rich.console import Console
 from rich.markup import escape
 
-from . import __version__
+from . import __version__, debuglog
 from .config import (
     LOGS_DIRNAME,
     LYRICS_MODE_LOOSE,
@@ -130,6 +130,20 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Number of parallel SoundCloud conversion/tagging workers (default: 4).",
     )
 
+    diagnostics = parser.add_argument_group("diagnostics")
+    diagnostics.add_argument(
+        "--debug-log",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="PATH",
+        help="Write a detailed debug log of the run: how every link was resolved, raw "
+             "SoundCloud metadata, title parsing, final tags/folder/file name, what spotDL "
+             "matched, every lyrics query and candidate with its verdict. Secrets are masked. "
+             f"Without PATH (or with a folder) the file goes to {LOGS_DIRNAME}/debug-<time>.jsonl "
+             "in the Music folder. Off by default.",
+    )
+
     spotify = parser.add_argument_group("Spotify")
     spotify.add_argument(
         "--spotify-threads",
@@ -152,6 +166,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
              f"of the machine.",
     )
     return parser.parse_args(argv)
+
+
+def _reclaim_debug_log_link(args: argparse.Namespace) -> None:
+    """`--debug-log <link>`: the optional PATH took a link; it is a link to download."""
+    if args.debug_log and parse_link(args.debug_log) is not None:
+        args.source.append(args.debug_log)
+        args.debug_log = ""
 
 
 def collect_links(source_args: list[str], console: Console) -> tuple[list[Link], list[str]]:
@@ -296,6 +317,7 @@ def _resolve_links(links: list[Link], batches: dict[str, Any], dashboard: Dashbo
     dashboard.set_queue(0, total, PHASE_RESOLVING)
 
     def resolve(index: int, link: Link) -> None:
+        debuglog.event("links", "resolve_queued", url=link.url, service=link.service)
         limit = limits[link.service]
         while not limit.acquire(timeout=0.5):
             if abort.is_set():
@@ -385,6 +407,7 @@ def main(argv: list[str] | None = None) -> int:
 
     console = Console()
     args = parse_args(argv)
+    _reclaim_debug_log_link(args)
 
     if not check_dependencies(console):
         return 1
@@ -434,25 +457,48 @@ def main(argv: list[str] | None = None) -> int:
         if runlog is not None:
             runlog.record("Links", f"Skipped (not a Spotify/SoundCloud link): {entry[:200]}")
 
+    debug = None
+    if args.debug_log is not None:
+        try:
+            debug = debuglog.DebugLog(Path(args.debug_log) if args.debug_log
+                                      else config.music_dir / LOGS_DIRNAME)
+        except OSError as exc:
+            console.print(f"[yellow]Could not create the debug log: {escape(str(exc))}[/yellow]")
+
     dashboard = Dashboard(
         console,
         source_label=f"{len(links)} link(s)",
         output_dir=str(config.music_dir),
         runlog=runlog,
     )
+    debuglog.activate(debug)
     try:
+        debuglog.log_start("cli", links, config)
+        for entry in rejected:
+            debuglog.event("links", "rejected", entry=entry[:200])
         with dashboard:
             process_links(links, config, dashboard)
+        debuglog.event("run", "finished", status="completed", stats=vars(dashboard.stats))
     except KeyboardInterrupt:
+        debuglog.event("run", "finished", status="cancelled")
         console.print("\n[yellow]Interrupted by user.[/yellow]")
         if runlog is not None and runlog.count:
             console.print(
                 f"[yellow]{runlog.count} failed operation(s) logged to:[/yellow] {escape(str(runlog.path))}"
             )
+        _print_debug_log(console, debug)
         return 130
+    finally:
+        debuglog.deactivate()
 
     print_summary(console, dashboard)
+    _print_debug_log(console, debug)
     return 0
+
+
+def _print_debug_log(console: Console, debug: "debuglog.DebugLog | None") -> None:
+    if debug is not None:
+        console.print(f"\n[dim]Debug log ({debug.count} entries):[/dim] {escape(str(debug.path))}")
 
 
 if __name__ == "__main__":

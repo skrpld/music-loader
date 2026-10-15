@@ -23,7 +23,8 @@ Music/
 ├── .spotify_lyrics_attempts.json
 └── .music-loader-logs/
     ├── failures-YYYYMMDD-HHMMSS.log     (what went wrong)
-    └── unavailable-YYYYMMDD-HHMMSS.log  (tracks SoundCloud does not give out)
+    ├── unavailable-YYYYMMDD-HHMMSS.log  (tracks SoundCloud does not give out)
+    └── debug-YYYYMMDD-HHMMSS.jsonl      (optional debug log, --debug-log)
 ```
 
 The album artist decides the folder - the artist the album belongs to, not
@@ -303,6 +304,13 @@ A job runs in two phases:
 Every failure is written to `.music-loader-logs/failures-<timestamp>.log` as
 it happens, so a long batch can be reviewed afterwards.
 
+The optional debug log (`--debug-log`, server job option `debug_log`, a switch
+in the Android app) goes further: it records how every link was resolved, the
+raw SoundCloud metadata, how each title was parsed into credits, the final
+tags, folder and file name, what spotDL matched, and every lyrics query and
+candidate with the verdict and the reason it was rejected. Format and
+contents: [CLI reference](../reference/cli.md#debug-log).
+
 ## Unavailable tracks (DRM, previews)
 
 A track ends as one of: downloaded, already had, **failed**, or
@@ -412,6 +420,7 @@ cli/music_loader/
 ├── net.py                # small HTTP helper
 ├── playlist.py           # .m3u8 playlists for SoundCloud
 ├── runlog.py             # persistent per-run failure log and unavailable-tracks list
+├── debuglog.py           # optional debug log of a whole run (JSON lines, secrets masked)
 ├── availability.py       # failure categories, DRM / preview / blocked detection
 ├── fallback.py           # opt-in: verified YouTube Music match for unavailable tracks
 ├── ui.py                 # live dashboard

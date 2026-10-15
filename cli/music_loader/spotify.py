@@ -54,6 +54,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import debuglog
 from .artists import PRIORITY_SPOTIFY, get_registry
 from .availability import RATE_LIMIT_RE, FailureCategory, failure_category
 from .config import (
@@ -92,6 +93,12 @@ _VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 
 _HEARTBEAT_INTERVAL = 20.0  # seconds between "still working" log lines
 _TAIL_LINES = 20
+# spotDL song fields worth seeing in the debug log (debuglog.py).
+_DEBUG_FIELDS = (
+    "name", "artists", "artist", "album_name", "album_artist", "album_id", "album_type",
+    "track_number", "tracks_count", "disc_number", "disc_count", "duration", "date", "year",
+    "isrc", "song_id", "url", "download_url", "explicit", "genres", "publisher", "copyright_text",
+)
 # Quiet for this long while resolving a link: say that Spotify may not answer.
 _SLOW_RESOLVE_SECONDS = 60.0
 
@@ -259,6 +266,8 @@ class _Run:
     def on_line(self, line: str) -> None:
         self.first_output = True
         self.tail.append(line)
+        debuglog.event("spotify", "spotdl_output", step="download" if self.count_tracks else "resolve",
+                       line=line)
         if _REFUSED_RE.search(line):
             self.refused = True
         found = _FOUND_RE.search(line)
@@ -474,6 +483,11 @@ class SpotifyBatch:
                 return plan
             plan.songs = songs
             plan.resolved = True
+            if debuglog.enabled():
+                debuglog.event("spotify", "resolved", link=url, songs=[
+                    {key: song.data.get(key) for key in _DEBUG_FIELDS if song.data.get(key) not in (None, "", [])}
+                    for song in songs
+                ])
             dashboard.log(f"[Spotify] Found {len(songs)} track(s) in {url}")
             return plan
         finally:
@@ -553,6 +567,8 @@ class SpotifyBatch:
 
             # -- artist tags ----------------------------------------------------------------------
             _tag_artists(songs, existed, config, registry, dashboard)
+            if debuglog.enabled():
+                _debug_results(songs, existed, failed, registry, music_dir)
 
             # -- lyrics ---------------------------------------------------------------------------
             if lyrics is not None and config.lyrics_enabled:
@@ -740,6 +756,30 @@ def _tag_artists(songs: list[_Song], existed: set[str], config: AppConfig,
             dashboard.log_error("Spotify", f"Could not write the artist tags of {path.name}")
     if changed:
         dashboard.log(f"[Spotify] Artist tags written for {changed} file(s)")
+
+
+def _debug_results(songs: list[_Song], existed: set[str], failed: set[str] | None,
+                   registry, music_dir: Path) -> None:
+    """Where every song ended up and with which tags (debuglog.py)."""
+    for song in songs:
+        path = song.path
+        if failed is not None and song.url in failed:
+            status = "failed"
+        elif song.url in existed:
+            status = "already in library"
+        else:
+            status = "downloaded" if path is not None and path.exists() else "unknown"
+        data = song.data
+        debuglog.event(
+            "spotify", "track_result", url=song.url, status=status,
+            path=str(path.relative_to(music_dir)) if path is not None and path.is_relative_to(music_dir) else path,
+            spotdl_path=song.work,
+            title=spotify_title(str(data.get("name") or "")),
+            artists=[registry.canonical(str(name)) for name in data.get("artists") or [] if name],
+            album=data.get("album_name"), album_artist=song.album_artist or data.get("album_artist"),
+            track_number=data.get("track_number"), tracks_count=data.get("tracks_count"),
+            disc_number=data.get("disc_number"), date=data.get("date"),
+        )
 
 
 def _verify(songs: list[_Song], existed: set[str], run: _Run, dashboard) -> set[str] | None:
