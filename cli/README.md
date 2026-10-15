@@ -107,7 +107,8 @@ pytest
 ```
 
 Code stays compatible with Python 3.10 (CI tests 3.10 and 3.13). The version lives in
-`music_loader/__init__.py`; releases are cut by pushing a `cli-v<VERSION>` tag
+`music_loader/__init__.py`; releases are cut by pushing a `cli-v<VERSION>` tag or
+by running the CLI workflow on `main` with `release=true`
 ([Publish a release](https://github.com/skrpld/music-loader/blob/main/docs/how-to/publish-a-release.md)).
 
 ## Contributing

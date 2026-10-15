@@ -1,8 +1,10 @@
 # Publish a release
 
 The CLI and the Android app are versioned and released independently. A
-release is cut by pushing a tag; GitHub Actions builds, checks and publishes
-it as a GitHub release.
+release is cut either by pushing a tag or by running the component's workflow
+manually on `main` (see [Release from a manual run](#release-from-a-manual-run));
+GitHub Actions builds, checks and publishes it as a GitHub release. Both ways
+give the same tag, checks and assets.
 
 | Component | Tag | Workflow | Release assets |
 |---|---|---|---|
@@ -71,15 +73,46 @@ Keep the keystore and its passwords outside the repository (`*.jks`,
 `*.keystore` and `keystore.properties` are git-ignored) and back them up: a
 lost key means users have to uninstall the app before the next update.
 
+## Release from a manual run
+
+Instead of pushing a tag, run the workflow on `main` with `release` enabled:
+**Actions → CLI / Android → Run workflow**, branch `main`. The run builds and
+checks the commit exactly as for a tag push, then creates the tag on that
+commit and publishes the release. Claude Code cloud sessions, which cannot
+push tags, release this way after their pull request is merged.
+
+```bash
+# CLI: the version is __version__ from cli/music_loader/__init__.py
+gh workflow run cli.yml --ref main -f release=true
+
+# Android: the version becomes versionName and the tag android-v1.11.0
+gh workflow run android.yml --ref main -f release=true -f version=1.11.0
+```
+
+The run refuses to release (and publishes nothing) when:
+
+- it is not on `main`;
+- the version is not `MAJOR.MINOR.PATCH[-suffix]` (Android: the `version`
+  input is required);
+- the tag `cli-v<version>` / `android-v<version>` already exists;
+- the version is not newer than the latest tag of the same component.
+
+A suffix (`-rc.1`) publishes a pre-release, as with tags. The tag is created
+with the workflow token, which does not start another run: everything happens
+in the one manual run. Without `release` a manual run is an ordinary build on
+any branch and only uploads its artifact.
+
 ## Branch and pull request builds
 
 The same workflows run on every push and pull request that touches their
 component (`cli/**`; `android/**` or `cli/music_loader/**`, which the app
 embeds). Their output is attached to the run as
-an artifact (**Actions → run → Artifacts**) and is not published.
+an artifact (**Actions → run → Artifacts**) and is not published. A manual run
+without `release` (**Run workflow** on any branch) does the same.
 
 ## Re-running a release
 
 Re-running a failed release workflow is safe: an existing release keeps its
 notes and only its assets are replaced. To rebuild from a different commit,
-delete the release and the tag on GitHub, then tag again.
+delete the release and the tag on GitHub, then tag again or start a new
+manual run.

@@ -3,6 +3,9 @@
 #
 #   publish-release.sh <tag> <title> <tag pattern> <file>...
 #
+# A pushed tag is used as is. A tag that does not exist yet (a release from a
+# manual workflow run) is created on the checked-out commit.
+#
 # Release notes are generated from the changes since the previous tag of the
 # same component (<tag pattern>, e.g. "cli-v*"), so CLI and Android releases
 # do not list each other's history. A tag with a pre-release suffix
@@ -20,8 +23,16 @@ if gh release view "$tag" > /dev/null 2>&1; then
   exit 0
 fi
 
-args=(--title "$title" --generate-notes --verify-tag)
-if previous=$(git describe --tags --abbrev=0 --match "$pattern" "${tag}^" 2> /dev/null); then
+args=(--title "$title" --generate-notes)
+if git rev-parse -q --verify "refs/tags/$tag" > /dev/null; then
+  args+=(--verify-tag)
+  ref="$tag"
+else
+  ref=$(git rev-parse HEAD)
+  args+=(--target "$ref")
+  echo "Creating tag $tag on $ref."
+fi
+if previous=$(git describe --tags --abbrev=0 --match "$pattern" "${ref}^" 2> /dev/null); then
   args+=(--notes-start-tag "$previous")
 fi
 if [[ "$tag" =~ -v[0-9]+\.[0-9]+\.[0-9]+- ]]; then
