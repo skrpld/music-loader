@@ -47,7 +47,7 @@ An explicit token must be at least 16 characters of letters, digits and
 - Options per job: lyrics mode (strict / loose / off), `--recheck`,
   SoundCloud reposts and likes, `soundcloud_fallback` (look for tracks
   SoundCloud does not give out on YouTube Music, off by default) and
-  `auto_retry` (queue retryable failures again after a cooldown, off by
+  `auto_retry` (queue failed tracks again after a cooldown, off by
   default).
 - Cancelling a job goes through the same cleanup as Ctrl+C: child processes
   stop and unfinished files are removed. A worker that does not finish its
@@ -115,12 +115,13 @@ with only such tracks still ends `completed`. The job detail carries
 
 A track (or link) that failed is listed in the job detail as `failed_items`
 (`url`, `title`, `service`, `category`, `retryable`); the summary carries
-`failed_counts` (per category) and `retryable_count`. Categories:
-`rate_limited` and `network` are retryable, `failed` is not. Unavailable
-tracks (DRM, preview, blocked) are never failures and never retried.
+`failed_counts` (per category) and `retryable_count`. Every failure is
+retryable, whatever its category (`failed`, `rate_limited`, `network`):
+many tracks that failed once come down on a second attempt. Unavailable
+tracks (DRM, preview, blocked, removed) are never failures and never retried.
 
 ```bash
-# only the retryable failures, or every link of the job again
+# only the failed tracks, or every link of the job again
 curl -H "Authorization: Bearer $MUSIC_LOADER_TOKEN" -d '{"scope": "failed"}' \
      http://192.168.1.10:8765/api/v1/jobs/<id>/retry
 curl -H "Authorization: Bearer $MUSIC_LOADER_TOKEN" -d '{"scope": "all"}' \
@@ -133,7 +134,7 @@ the job is queued or running or when scope `failed` finds nothing to retry,
 `503` when the queue is full.
 
 With the job option `auto_retry` the server does this by itself: a job that
-*completes* (or whose worker crashed after recording failures) with retryable failures is queued again after 15, 30 and 60
+*completes* (or whose worker crashed after recording failures) with failed tracks of any category is queued again after 15, 30 and 60
 minutes (three attempts at most; `attempt` / `max_attempts` count them). The
 retry is queued once the running job is done, so the times are a lower bound. While
 it waits, the job has `retry_at` (epoch milliseconds); `POST .../cancel` on it

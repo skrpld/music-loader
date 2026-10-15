@@ -25,12 +25,13 @@ Job options: {"lyrics": "strict" | "loose" | "off", "recheck": false,
 "auto_retry": false}.
 
 Retrying: a track (or link) that failed is recorded with a category (see
-availability.py). `rate_limited` and `network` are retryable, `failed` is not,
-and an unavailable track (DRM, preview, blocked) is never listed as failed at
-all. `/retry` creates a new job with the same options: scope "all" queues the
-original links again, scope "failed" only the retryable failures. Tracks
+availability.py). Every failure is retryable, whatever its category
+(`failed`, `rate_limited`, `network`); an unavailable track (DRM, preview,
+blocked, removed) is never listed as failed at all, so it is never retried.
+`/retry` creates a new job with the same options: scope "all" queues the
+original links again, scope "failed" only the failures. Tracks
 already in the library are skipped either way, so a retry is cheap. With the
-job option `auto_retry` a job that ends with retryable failures is queued again
+job option `auto_retry` a job that ends with failures is queued again
 by the server after 15, then 30, then 60 minutes (three attempts at most; the
 retry is queued once the running job is done, so the time is a lower bound).
 The job shows `retry_at` while it waits and `/cancel` stops the wait.
@@ -563,8 +564,8 @@ class JobManager:
             return job.summary()
 
     def retry(self, job_id: str, scope: str) -> Job:
-        """Queues a finished job again: all its links, or only the failures
-        that may succeed on another try. Raises JobNotFound, JobConflict or
+        """Queues a finished job again: all its links, or only its failed
+        tracks (every category; unavailable tracks are never failures). Raises JobNotFound, JobConflict or
         QueueFull."""
         with self._cond:
             job = self._jobs.get(job_id)

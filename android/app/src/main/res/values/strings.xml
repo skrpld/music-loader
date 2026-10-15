@@ -159,7 +159,7 @@
     <string name="failure_failed">Failed</string>
     <string name="failure_unavailable">Unavailable</string>
     <string name="option_auto_retry">Retry automatically</string>
-    <string name="option_auto_retry_description">After a rate limit or network errors, try the failed tracks again by itself: after 15, 30 and 60 minutes (3 attempts at most). Works while the app or the server keeps running.</string>
+    <string name="option_auto_retry_description">Try the failed tracks again by itself, whatever went wrong: after 15, 30 and 60 minutes (3 attempts at most). Unavailable tracks are not retried. Works while the app or the server keeps running.</string>
 
     <!-- Settings -->
     <string name="settings_mode">Where to download</string>

@@ -31,7 +31,7 @@ data class JobOptions(
     @SerialName("soundcloud_reposts") val soundcloudReposts: Boolean = false,
     @SerialName("soundcloud_likes") val soundcloudLikes: Boolean = false,
     @SerialName("soundcloud_fallback") val soundcloudFallback: Boolean = false,
-    /** The server queues retryable failures again after a cooldown (needs [Features.AutoRetry]). */
+    /** The server queues failed tracks again after a cooldown (needs [Features.AutoRetry]). */
     @SerialName("auto_retry") val autoRetry: Boolean = false,
 ) {
     val lyricsMode: LyricsMode get() = LyricsMode.fromWire(lyrics)
@@ -199,7 +199,7 @@ data class Job(
 ) {
     val status: JobStatus get() = JobStatus.fromWire(statusWire)
 
-    /** A finished job whose retryable failures the server will queue again by itself. */
+    /** A finished job whose failed tracks the server will queue again by itself. */
     val isWaitingForRetry: Boolean get() = status.isFinished && retryAt != null
 }
 

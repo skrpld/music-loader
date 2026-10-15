@@ -44,7 +44,7 @@ import kotlinx.coroutines.withContext
  * lock. Stops itself once nothing is running or queued. Finished tracks are handed to
  * the media scanner so music players see them.
  *
- * A finished job that waits for its automatic retry (the cooldown after a rate limit) counts
+ * A finished job that waits for its automatic retry (the cooldown after failures) counts
  * as work: the retry timer lives in the downloader inside this process, so the service stays
  * until the retry has run. Killing the app drops the timer.
  */
@@ -155,7 +155,7 @@ class DownloadService : Service() {
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
         val stats = job?.stats
         if (job == null && queued == 0 && nextRetry != null) {
-            // Only waiting for the cooldown after a rate limit.
+            // Only waiting for the cooldown before an automatic retry.
             builder.setContentText(getString(R.string.notification_waiting_retry, timeFormat.format(Date(nextRetry))))
             builder.setProgress(0, 0, false)
         } else if (stats != null && stats.tracksTotal > 0) {

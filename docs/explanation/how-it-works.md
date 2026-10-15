@@ -295,9 +295,12 @@ A track ends as one of: downloaded, already had, **failed**, or
   holder) or **removed**. It is skipped, counted separately and does **not**
   make the job fail: a run where only such tracks were skipped completes.
 - *failed* - anything else that went wrong; it counts as a failure.
-- *rate_limited* and *network* - transient causes. They count as failures,
-  but they are *retryable* (`FailureCategory.retryable`): a retry picks
-  exactly these and never an unavailable track.
+- *rate_limited* and *network* - transient causes. They count as failures
+  like *failed* and are named apart so the cause is visible.
+
+Every failure, whatever its category, is *retryable*
+(`FailureCategory.retryable`): a retry picks all of them and never an
+unavailable track.
 
 Music Loader does not decrypt DRM and does not try to get around it. SoundCloud
 serves such tracks only as `ctr-encrypted-hls` / `cbc-encrypted-hls` streams;
@@ -343,16 +346,16 @@ URL) and shows them grouped by category:
 |---|---|---|
 | `rate_limited` | yes | HTTP 429 / 403, "too many requests" |
 | `network` | yes | timeout, connection reset, HTTP 5xx |
-| `failed` | no | conversion, tagging or an error nobody recognized |
+| `failed` | yes | conversion, tagging or an error nobody recognized |
 | `unavailable` | never | DRM, preview, blocked, removed - listed apart, not a failure |
 
 Re-running a link is cheap because tracks already in the library are skipped,
 so a retry is simply the same link queued again. `POST /api/v1/jobs/<id>/retry`
 creates a new job with the same options: scope `all` queues the original links,
-scope `failed` queues the URLs of the retryable failures only.
+scope `failed` queues the URLs of the failed tracks only (every category).
 
 **Automatic retry** (job option `auto_retry`, off by default; a switch in the
-app): when a job *completes* with retryable failures, the server queues them
+app): when a job *completes* with failed tracks, the server queues them
 again by itself after 15 minutes, then 30, then 60 - at most three attempts.
 The job shows when the next attempt is due, and cancelling it stops the wait.
 Cancelled and crashed jobs are not retried. The timer is kept with the job
