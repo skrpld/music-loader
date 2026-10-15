@@ -148,8 +148,11 @@ More shapes, taken from a debug log of real runs (the full table is in
 
 Rules:
 
-- **Artist**: SoundCloud's own artist field (set for label releases) →
-  `Artist - Song` from the title → the uploader. Featured artists follow the
+- **Artist**: `Artist - Song` from the title (a name in the title always
+  wins) → SoundCloud's own artist field (set for label releases; a field that
+  only repeats the uploader's name is not a credit) → the account's confirmed
+  artist name or, for a reupload account, the original's artist (see
+  [Accounts and reuploads](#accounts-and-reuploads)) → the uploader. Featured artists follow the
   main artists, as on Spotify. A right-hand side that is only a suffix
   ("Outro", "Remix", "Pt. 2") is not split off. Ambiguous credits - a bare
   `W` ("Pitstop W Aquakey & Platov"), guests appended with `+`/`x` to a title
@@ -180,10 +183,62 @@ Rules:
   downscaled to 1200 px.
 - **Canonical spelling**: one artist is written one way everywhere
   (`BENJAMINGOTBENZ` → `benjamingotbenz`). Spotify spellings win, then
-  SoundCloud account names, then names from titles; decorations such as
-  `✦ platov ✦` are dropped.
+  SoundCloud account names and confirmed account artist names, then names
+  from titles; decorations such as `✦ platov ✦` are dropped.
 - The SoundCloud id is stored in the file (`TXXX:SOUNDCLOUD_ID`), and the page
   URL without a private link's secret token.
+
+### Accounts and reuploads
+
+A SoundCloud account is not always its artist. `@aquagwap` is the artist
+AQUAKEY: its uploads are titled `AQUAKEY - Song`, but SoundCloud fills the
+artist field with the account name, so its untitled tracks and its albums
+used to land under `@aquagwap/`. A reupload account posts other people's
+tracks, often without the artist in the title, and used to become their
+artist. [`accounts.py`](../../cli/music_loader/accounts.py) makes one decision
+per account, keyed by the uploader id (stable across renames), in the
+resolve phase of a job, before anything is downloaded:
+
+1. **Local evidence**, free: a candidate is a name other than the account
+   name that is the first main artist in at least 70 % of the account's
+   titles, with at least 3 tracks (from the job and the library). A featured
+   partner never gets there. No candidate: nothing is looked up and nothing
+   changes - most accounts stop here.
+2. **Checks**, only for an account with a candidate, until two of its tracks
+   match: the user's own library (a Spotify track with the same title, length
+   ±3 s, the candidate as main artist), then Spotify (`spotdl save` with
+   `"<candidate> <title>"`), then Deezer's public search.
+3. **Verdict**: two matches - the candidate becomes the account's artist
+   name. Only other artists' matches - a reupload account. Fewer - the name
+   is only a suggestion, shown in Artists and in the run summary, never
+   applied. A service that does not answer decides nothing: the account is
+   "not checked" and tried again on the next run.
+4. A decision is kept for 30 days. Whatever the user chooses (set a name,
+   keep the account name, mark a reupload account, accept a suggestion) is
+   locked and no run changes it; a rejected name is never suggested again.
+
+A confirmed name replaces the account name only where the account name
+would be used: a title without an artist part, the album artist and the
+artist folder. A name in the title always wins. A new track of an
+automatically confirmed account that has no artist in its title and is not
+found under that name sends the account back to step 1; with titles of many
+artists it becomes a reupload account.
+
+Tracks of a reupload account - and the untitled tracks of an account without
+a decision whose titles name many different artists - get the artist of the
+original upload: the library first (same title, length ±2 s), then
+SoundCloud's search (same title and length, another account that is not a
+reupload account, uploaded earlier), then Spotify and Deezer. The result is
+kept per track in `.sc_index.json`, so the search runs once. Not found: the
+track keeps the account name and is listed as "artist not determined". An
+album of a reupload account goes to `Various Artists`.
+
+Decisions are listed and changed with [`music-loader artists`](../reference/cli.md#artists),
+the server's [`/api/v1/artists`](../reference/server.md#artists) and the app's
+Settings → Artists. They live in `.music-loader-artists.json` under the key
+`_accounts` (older versions keep it untouched); writes merge with the file,
+so a change made while a job runs is not lost. A change applies to files
+downloaded from then on; `--recheck` applies it to the files already there.
 
 ### Formatting settings
 
@@ -547,7 +602,9 @@ cli/music_loader/
 ├── soundcloud_index.py   # SoundCloud id -> file index, archive
 ├── soundcloud_layout.py  # moves old "Artist - Album" SoundCloud folders to "Artist/Album"
 ├── text_utils.py         # title parsing, normalization, version markers
-├── artists.py            # canonical artist spelling across the library
+├── artists.py            # canonical artist spelling across the library, account decisions file
+├── accounts.py           # SoundCloud accounts: artist names, reupload accounts, originals
+├── artist_lookup.py      # library / Spotify / Deezer / SoundCloud searches for accounts.py
 ├── lyrics.py             # verified lyrics (LRCLIB, Musixmatch, Genius)
 ├── tags.py               # ID3 helpers (mutagen)
 ├── naming.py             # one naming scheme for folders and files (both sources)

@@ -6,6 +6,7 @@ Command-line interface of the `music-loader` package (`music-loader` command, or
 ```text
 music-loader [OPTIONS] [SOURCE ...]
 music-loader serve -o <MUSIC_FOLDER> [OPTIONS]
+music-loader artists -o <MUSIC_FOLDER> [--json] [ACTION ACCOUNT [NAME]]
 ```
 
 `SOURCE` is a Spotify or SoundCloud link, or a path to a `.txt` file with one link per line
@@ -89,6 +90,33 @@ Hidden index files (`.sc_index.json`, `.spotify_index.json`, `.music-loader-arti
 attempt files) make re-runs fast and detect moved files. Naming, tagging and lyrics rules:
 [How it works](../explanation/how-it-works.md).
 
+## Artists
+
+`music-loader artists` lists the SoundCloud accounts of a library and the artist name their tracks
+get, and changes that decision (rules: [Accounts and reuploads](../explanation/how-it-works.md#accounts-and-reuploads)).
+
+```text
+music-loader artists -o ~/Music                         # the list (--json for JSON)
+music-loader artists -o ~/Music accept @aquagwap        # take the suggested name
+music-loader artists -o ~/Music set ak2angel AQUAKEY    # write the account as AQUAKEY
+music-loader artists -o ~/Music reuploader slmndk       # each track gets the original's artist
+```
+
+| Action | Effect |
+|---|---|
+| `set ACCOUNT NAME` | Tracks of the account without an artist in the title, its albums and its folder use `NAME` |
+| `keep ACCOUNT` | Keep the account's own name |
+| `reuploader ACCOUNT` | A reupload account: each track gets the artist of its original upload |
+| `accept ACCOUNT` | Take the suggested name |
+| `reject ACCOUNT` | Drop the suggested name; it is never suggested again |
+| `unlock ACCOUNT` | Give the account back to the automatic check of the next run |
+
+`ACCOUNT` is the account's id, its profile link (`soundcloud.com/ak2angel`), its permalink or its
+handle. Every action but `reject` and `unlock` locks the account: no run changes it again. The list
+shows each account's state (confirmed, suggestion, reupload account, not checked, account name), the
+name its tracks get, where that came from and when it was checked; suggestions come first. A change
+applies to files downloaded from then on; `--recheck` applies it to the files already there.
+
 ## Debug log
 
 `--debug-log` records why every track ended up the way it did, for analysing title parsing and
@@ -106,6 +134,7 @@ written. The file is JSON lines, one event per line, written as the run goes (re
 | `links` | every link with its service and kind, rejected entries |
 | `soundcloud` | `resolved` (tracks of a link with id, title, uploader, length, album), `metadata` (raw yt-dlp fields: title, uploader, artist, description, length, publisher metadata, ...), `title_parsed` (raw title → artists, featured, producers, title, version markers; producers named in the description; the formatting settings), `final_meta` (tags, `<album artist>/<album>` folder, file name, path), `layout_migration` (tracks moved from the old `Artist - Album` folders), `retry`, `unavailable`, `fallback`, `track_result` |
 | `spotify` | `resolved` (what spotDL returned per song: name, artists, album, ISRC, length, ...), `spotdl_output` (every line spotDL printed, including the match it downloaded), `track_result` (final path, title, artists, album artist) |
+| `accounts` | every account decision (`evidence`, `check` / `recheck` with their matches, `verdict`), each Spotify / Deezer / SoundCloud `search` and `service_unavailable`, `original` (the original upload found for a reupload, or why none) |
 | `lyrics` | `request` (artists, title, album, length, the searches it makes), every provider `query` with its parameters and HTTP status, every `candidate` with `verdict` (`synced`, `plain`, `instrumental`, `rejected`) and `reason` (artist mismatch, title mismatch, version mismatch, length difference, ...), `provider_skipped` (switched off or paused, with the reason) / `provider_error`, `result` |
 
 Secrets are masked before anything is written: private SoundCloud tokens (`/s-…`, `secret_token`),

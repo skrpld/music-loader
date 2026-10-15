@@ -114,6 +114,8 @@ JSON over HTTP, `Authorization: Bearer <token>` on every request.
 | `POST /api/v1/jobs/<id>/retry` | queue a finished job again (body below); `201` with the new job |
 | `GET /api/v1/jobs/<id>/debug-log` | the job's debug log file (`application/x-ndjson`); `404` when the job has none |
 | `DELETE /api/v1/jobs/<id>` | remove a finished job (`409` while it runs) |
+| `GET /api/v1/artists` | SoundCloud accounts and the artist names their tracks get (feature `artists`) |
+| `POST /api/v1/artists/<id>/<action>` | change one account's decision (feature `artists`, body below for `set`) |
 | `GET /api/v1/events` | Server-Sent Events: a `state` event after every change, keep-alive comments every 15 s |
 
 Queue request:
@@ -174,11 +176,44 @@ stops the wait. The timer is saved with the job history, so it survives a
 restart (see [History across restarts](#history-across-restarts)).
 
 `GET /api/v1/info` and every `state` event carry `features`
-(`["retry", "auto_retry", "debug_log", "soundcloud_format", "lyrics_settings"]`).
+(`["retry", "auto_retry", "debug_log", "soundcloud_format", "lyrics_settings", "artists"]`).
 An older server has no such list (or lacks an entry); the Android app then hides
-the retry actions or the debug log switch. A server without `soundcloud_format`
+the retry actions, the debug log switch or Settings → Artists. A server without `soundcloud_format`
 ignores the formatting options and writes the default format; one without
 `lyrics_settings` ignores the lyrics settings and uses the defaults.
+
+### Artists
+
+The decision per SoundCloud account (rules: [Accounts and reuploads](../explanation/how-it-works.md#accounts-and-reuploads)),
+the same list and actions as [`music-loader artists`](cli.md#artists). `GET /api/v1/artists` answers
+`{"accounts": [...]}`, suggestions first:
+
+```json
+{"id": "123456", "handle": "@aquagwap", "permalink": "ak2angel", "url": "https://soundcloud.com/ak2angel",
+ "status": "suggestion", "kind": "unknown", "alias": null, "source": null, "suggestion": "AQUAKEY",
+ "locked": false, "checked_at": "2026-10-15", "tracks": 12}
+```
+
+`status` is `confirmed`, `suggestion`, `reuploader`, `not_checked` (a service did not answer; the
+next run checks again) or `nick` (the tracks keep the account name); `source` says where a name came
+from (`library`, `spotify`, `deezer`, `manual`, `title`).
+
+`POST /api/v1/artists/<id>/<action>` takes the account's numeric id and one of `set`, `keep`,
+`reuploader`, `accept`, `reject`, `unlock`, and answers `{"account": {...}}`. `set` needs
+`{"name": "AQUAKEY"}` (1-200 characters); the other actions take no body. Every action but `reject`
+and `unlock` locks the account. Errors: `400` for a missing name or an action that does not apply
+(`accept` without a suggestion), `404` for an unknown account or action. The change is written to the
+library's `.music-loader-artists.json` at once (merged with what running jobs write) and applies to
+files downloaded from then on.
+
+```bash
+curl -H "Authorization: Bearer $MUSIC_LOADER_TOKEN" -d '{"name": "AQUAKEY"}' \
+     http://192.168.1.10:8765/api/v1/artists/123456/set
+```
+
+A job carries `artists`: `{"alias": [...], "suggestion": [...], "undetermined": [...]}`, the
+decisions of that run as text (accounts that got a name, suggestions waiting for the user, tracks
+whose artist was not found), kept in the job history.
 
 ### Debug log
 
