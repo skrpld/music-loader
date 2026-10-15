@@ -28,7 +28,10 @@ def test_job_request_splits_validates_and_deduplicates():
                        "soundcloud_fallback": False, "auto_retry": False, "debug_log": False,
                        "soundcloud_feat": "both", "soundcloud_keep_producers": False,
                        "soundcloud_keep_versions": True, "soundcloud_strip_promo": True,
-                       "soundcloud_filename": "{track} - {title}"}
+                       "soundcloud_filename": "{track} - {title}",
+                       "lyrics_providers": ["lrclib", "musixmatch", "genius"],
+                       "lyrics_length_tolerance": 10.0, "lyrics_retry_days": 7,
+                       "lyrics_plain": True, "lyrics_original_for_versions": False}
 
 
 @pytest.mark.parametrize(

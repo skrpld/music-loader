@@ -47,6 +47,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
@@ -64,6 +65,9 @@ import dev.skrpld.musicloader.data.DownloadMode
 import dev.skrpld.musicloader.data.FeatPlacement
 import dev.skrpld.musicloader.data.FilenameTemplate
 import dev.skrpld.musicloader.data.JobOptions
+import dev.skrpld.musicloader.data.LyricsProvider
+import dev.skrpld.musicloader.data.LyricsRetry
+import dev.skrpld.musicloader.data.LyricsTolerance
 import dev.skrpld.musicloader.data.ServerUrls
 import dev.skrpld.musicloader.data.ThemeMode
 import dev.skrpld.musicloader.engine.StorageAccess
@@ -128,6 +132,8 @@ fun SettingsScreen(
                 }
                 SectionHeader(stringResource(R.string.settings_formatting))
                 FormattingCard(viewModel, settings, serverMode = mode == DownloadMode.Server)
+                SectionHeader(stringResource(R.string.settings_lyrics))
+                LyricsCard(viewModel, settings, serverMode = mode == DownloadMode.Server)
                 SectionHeader(stringResource(R.string.settings_appearance))
                 Text(
                     text = stringResource(R.string.settings_theme),
@@ -473,6 +479,147 @@ private fun FormattingCard(viewModel: SettingsViewModel, settings: AppSettings?,
                 ) {
                     Text(stringResource(if (saved) R.string.action_saved else R.string.action_save))
                 }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun LyricsCard(viewModel: SettingsViewModel, settings: AppSettings?, serverMode: Boolean) {
+    val options = settings?.jobOptions ?: JobOptions()
+    val enabled = options.providers
+    // Providers that are on come first, in the order they are asked.
+    val rows = enabled + LyricsProvider.entries.filter { it !in enabled }
+    Card(
+        shape = MaterialTheme.shapes.extraLarge,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+                text = stringResource(
+                    if (serverMode) R.string.settings_lyrics_description_server else R.string.settings_lyrics_description,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(text = stringResource(R.string.settings_lyrics_providers), style = MaterialTheme.typography.bodyMedium)
+            Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
+                rows.forEachIndexed { index, provider ->
+                    val on = provider in enabled
+                    val position = enabled.indexOf(provider)
+                    SegmentedListItem(
+                        checked = on,
+                        onCheckedChange = { viewModel.setLyricsProvider(provider, it) },
+                        shapes = ListItemDefaults.segmentedShapes(index = index, count = rows.size),
+                        supportingContent = {
+                            Text(
+                                when {
+                                    !on -> stringResource(R.string.settings_lyrics_provider_off)
+                                    enabled.size == 1 -> stringResource(R.string.settings_lyrics_provider_only)
+                                    else -> stringResource(R.string.settings_lyrics_provider_position, position + 1)
+                                },
+                            )
+                        },
+                        trailingContent = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (on && position > 0) {
+                                    IconButton(onClick = { viewModel.moveLyricsProviderUp(provider) }) {
+                                        Icon(
+                                            painterResource(R.drawable.ic_arrow_upward),
+                                            contentDescription = stringResource(
+                                                R.string.settings_lyrics_move_up,
+                                                provider.label,
+                                            ),
+                                        )
+                                    }
+                                }
+                                Switch(checked = on, onCheckedChange = null)
+                            }
+                        },
+                    ) {
+                        Text(provider.label)
+                    }
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
+                SwitchItem(
+                    index = 0,
+                    count = 2,
+                    checked = options.lyricsPlain,
+                    onCheckedChange = viewModel::setLyricsPlain,
+                    title = stringResource(R.string.settings_lyrics_plain),
+                    hint = stringResource(R.string.settings_lyrics_plain_hint),
+                )
+                SwitchItem(
+                    index = 1,
+                    count = 2,
+                    checked = options.lyricsOriginalForVersions,
+                    onCheckedChange = viewModel::setLyricsOriginalForVersions,
+                    title = stringResource(R.string.settings_lyrics_versions),
+                    hint = stringResource(R.string.settings_lyrics_versions_hint),
+                )
+            }
+            Text(text = stringResource(R.string.settings_lyrics_tolerance), style = MaterialTheme.typography.bodyMedium)
+            ChoiceSelector(
+                choices = LyricsTolerance.choices,
+                selected = options.lyricsLengthTolerance,
+                label = { stringResource(R.string.settings_lyrics_seconds, it.toInt()) },
+                onSelect = viewModel::setLyricsLengthTolerance,
+            )
+            Text(
+                text = stringResource(R.string.settings_lyrics_tolerance_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(text = stringResource(R.string.settings_lyrics_retry), style = MaterialTheme.typography.bodyMedium)
+            ChoiceSelector(
+                choices = LyricsRetry.choices,
+                selected = options.lyricsRetryDays,
+                label = {
+                    if (it == 0) {
+                        stringResource(R.string.settings_lyrics_retry_always)
+                    } else {
+                        pluralStringResource(R.plurals.settings_lyrics_days, it, it)
+                    }
+                },
+                onSelect = viewModel::setLyricsRetryDays,
+            )
+            Text(
+                text = stringResource(R.string.settings_lyrics_retry_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun <T> ChoiceSelector(
+    choices: List<T>,
+    selected: T,
+    label: @Composable (T) -> String,
+    onSelect: (T) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
+    ) {
+        choices.forEachIndexed { index, choice ->
+            ToggleButton(
+                checked = selected == choice,
+                onCheckedChange = { onSelect(choice) },
+                modifier = Modifier
+                    .weight(1f)
+                    .semantics { role = Role.RadioButton },
+                shapes = when (index) {
+                    0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                    choices.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                    else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                },
+            ) {
+                Text(text = label(choice), maxLines = 1)
             }
         }
     }

@@ -206,6 +206,115 @@ class SoundCloudFormat:
         }
 
 
+# -- lyrics settings ------------------------------------------------------------------
+LYRICS_PROVIDERS = ("lrclib", "musixmatch", "genius")
+LYRICS_RETRY_DAYS_DEFAULT = LYRICS_RETRY_COOLDOWN_SECONDS // (24 * 60 * 60)
+LYRICS_RETRY_DAYS_MAX = 365
+# Bounds of --lyrics-length-tolerance (loose mode, plain text only).
+LYRICS_LENGTH_TOLERANCE_MIN = LYRICS_STRICT_DURATION_TOLERANCE
+LYRICS_LENGTH_TOLERANCE_MAX = 60.0
+
+
+def parse_lyrics_providers(value: Any) -> tuple[str, ...]:
+    """"lrclib,genius" or ["lrclib", "genius"] -> ("lrclib", "genius"):
+    known names only, each once, at least one. Raises ValueError."""
+    items = value.split(",") if isinstance(value, str) else value
+    if not isinstance(items, (list, tuple)):
+        raise ValueError("the lyrics providers must be a list")
+    names: list[str] = []
+    for item in items:
+        name = item.strip().lower() if isinstance(item, str) else None
+        if name not in LYRICS_PROVIDERS:
+            raise ValueError(f"unknown lyrics provider {item!r}; use {', '.join(LYRICS_PROVIDERS)}")
+        if name in names:
+            raise ValueError(f"lyrics provider '{name}' is listed twice")
+        names.append(name)
+    if not names:
+        raise ValueError("at least one lyrics provider is needed")
+    return tuple(names)
+
+
+def validate_length_tolerance(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("the length tolerance must be a number of seconds")
+    if not LYRICS_LENGTH_TOLERANCE_MIN <= float(value) <= LYRICS_LENGTH_TOLERANCE_MAX:
+        raise ValueError(f"the length tolerance must be between {LYRICS_LENGTH_TOLERANCE_MIN:g} "
+                         f"and {LYRICS_LENGTH_TOLERANCE_MAX:g} seconds")
+    return float(value)
+
+
+def validate_retry_days(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= LYRICS_RETRY_DAYS_MAX:
+        raise ValueError(f"the retry interval must be a whole number of days from 0 to {LYRICS_RETRY_DAYS_MAX}")
+    return value
+
+
+@dataclass(frozen=True)
+class LyricsSettings:
+    """Finer lyrics settings on top of the strict/loose mode. The defaults
+    are the behaviour of versions before these settings existed. Synced
+    lyrics always need the length within 2 s, whatever is set here."""
+    providers: tuple[str, ...] = LYRICS_PROVIDERS   # tried in this order
+    plain: bool = True                 # plain text when no synced lyrics match
+    # Loose mode: the largest length difference for plain text.
+    length_tolerance: float = LYRICS_LOOSE_DURATION_TOLERANCE
+    # Strict mode: a sped-up/slowed/8D/bass-boosted upload may take the
+    # original's plain text (loose mode always allows it).
+    original_for_versions: bool = False
+    # A track whose search found nothing is searched again after this many
+    # days; 0 searches again on every run.
+    retry_days: int = LYRICS_RETRY_DAYS_DEFAULT
+
+    @property
+    def retry_seconds(self) -> int:
+        return self.retry_days * 24 * 60 * 60
+
+    @classmethod
+    def from_args(cls, args: Any) -> "LyricsSettings":
+        return cls(
+            providers=args.lyrics_providers,
+            plain=not args.lyrics_synced_only,
+            length_tolerance=args.lyrics_length_tolerance,
+            original_for_versions=args.lyrics_original_for_versions,
+            retry_days=args.lyrics_retry_days,
+        )
+
+    @classmethod
+    def from_options(cls, options: dict[str, Any]) -> "LyricsSettings":
+        """From server job options (already validated by the server); a
+        missing or broken value means the default."""
+        default = cls()
+
+        def checked(key: str, validate, fallback):
+            try:
+                return validate(options[key]) if key in options else fallback
+            except ValueError:
+                return fallback
+
+        def flag(key: str, fallback: bool) -> bool:
+            value = options.get(key)
+            return value if isinstance(value, bool) else fallback
+
+        return cls(
+            providers=checked("lyrics_providers", parse_lyrics_providers, default.providers),
+            plain=flag("lyrics_plain", default.plain),
+            length_tolerance=checked("lyrics_length_tolerance", validate_length_tolerance,
+                                     default.length_tolerance),
+            original_for_versions=flag("lyrics_original_for_versions", default.original_for_versions),
+            retry_days=checked("lyrics_retry_days", validate_retry_days, default.retry_days),
+        )
+
+    def options(self) -> dict[str, Any]:
+        """The server job options for these settings."""
+        return {
+            "lyrics_providers": list(self.providers),
+            "lyrics_plain": self.plain,
+            "lyrics_length_tolerance": self.length_tolerance,
+            "lyrics_original_for_versions": self.original_for_versions,
+            "lyrics_retry_days": self.retry_days,
+        }
+
+
 @dataclass
 class AppConfig:
     music_dir: Path
@@ -218,6 +327,7 @@ class AppConfig:
     spotify_client_secret: str | None = None
     lyrics_enabled: bool = True
     lyrics_mode: str = LYRICS_MODE_STRICT
+    lyrics_settings: LyricsSettings = field(default_factory=LyricsSettings)
     recheck: bool = False
     soundcloud_reposts: bool = False
     soundcloud_likes: bool = False

@@ -26,7 +26,16 @@ Job options: {"lyrics": "strict" | "loose" | "off", "recheck": false,
 "soundcloud_reposts": false, "soundcloud_likes": false, "soundcloud_fallback": false,
 "auto_retry": false, "debug_log": false, "soundcloud_feat": "both" | "artist" | "title",
 "soundcloud_keep_producers": false, "soundcloud_keep_versions": true,
-"soundcloud_strip_promo": true, "soundcloud_filename": "{track} - {title}"}.
+"soundcloud_strip_promo": true, "soundcloud_filename": "{track} - {title}",
+"lyrics_providers": ["lrclib", "musixmatch", "genius"], "lyrics_plain": true,
+"lyrics_length_tolerance": 10, "lyrics_original_for_versions": false,
+"lyrics_retry_days": 7}.
+
+Lyrics settings (the "lyrics_providers" ... "lyrics_retry_days" options,
+feature "lyrics_settings"): the same settings as the command line's
+--lyrics-providers, --lyrics-synced-only, --lyrics-length-tolerance,
+--lyrics-original-for-versions and --lyrics-retry-days. A missing option
+means the default; a wrong value is refused with 400 and the reason.
 
 SoundCloud formatting (the "soundcloud_feat" ... "soundcloud_filename"
 options, feature "soundcloud_format"): the same settings as the command
@@ -104,8 +113,12 @@ from .config import (
     LOGS_DIRNAME,
     LYRICS_MODE_LOOSE,
     LYRICS_MODE_STRICT,
+    LyricsSettings,
     SoundCloudFormat,
+    parse_lyrics_providers,
     validate_filename_template,
+    validate_length_tolerance,
+    validate_retry_days,
 )
 from .deps import check_dependencies
 from .links import Link, parse_link, redact_url
@@ -113,7 +126,7 @@ from .ui import PHASE_DOWNLOADING, PHASE_RESOLVING, Stats
 
 API_VERSION = 1
 # Optional capabilities, for clients that may talk to an older server.
-FEATURES = ("retry", "auto_retry", "debug_log", "soundcloud_format")
+FEATURES = ("retry", "auto_retry", "debug_log", "soundcloud_format", "lyrics_settings")
 DEFAULT_PORT = 8765
 TOKEN_ENV = "MUSIC_LOADER_TOKEN"
 TOKEN_FILENAME = "server-token"
@@ -1110,6 +1123,24 @@ def _parse_options(raw_options: Any) -> dict[str, Any]:
             raw_options.get("soundcloud_filename", default["soundcloud_filename"]))
     except ValueError as exc:
         raise _RequestError(HTTPStatus.BAD_REQUEST, f"'soundcloud_filename': {exc}")
+    lyrics_default = LyricsSettings().options()
+    checks = (
+        ("lyrics_providers", parse_lyrics_providers, list),
+        ("lyrics_length_tolerance", validate_length_tolerance, float),
+        ("lyrics_retry_days", validate_retry_days, int),
+    )
+    if not isinstance(raw_options.get("lyrics_providers", []), list):
+        raise _RequestError(HTTPStatus.BAD_REQUEST, "'lyrics_providers' must be a list")
+    for key, validate, convert in checks:
+        try:
+            options[key] = convert(validate(raw_options.get(key, lyrics_default[key])))
+        except ValueError as exc:
+            raise _RequestError(HTTPStatus.BAD_REQUEST, f"'{key}': {exc}")
+    for key in ("lyrics_plain", "lyrics_original_for_versions"):
+        value = raw_options.get(key, lyrics_default[key])
+        if not isinstance(value, bool):
+            raise _RequestError(HTTPStatus.BAD_REQUEST, f"'{key}' must be true or false")
+        options[key] = value
     return options
 
 

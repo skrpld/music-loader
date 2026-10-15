@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Material Symbols Rounded "arrow_upward" (Apache License 2.0). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <group android:translateY="960">
+        <path
+            android:fillColor="#FF000000"
+            android:pathData="M450,-686L223,-459Q214,-450 202,-450.5Q190,-451 181,-460Q172,-469 172,-481Q172,-493 181,-502L459,-780Q464,-785 469,-787Q474,-789 480,-789Q486,-789 491,-787Q496,-785 501,-780L779,-502Q788,-493 788,-481Q788,-469 779,-460Q770,-451 758,-451Q746,-451 737,-460L510,-686L510,-200Q510,-187 501.5,-178.5Q493,-170 480,-170Q467,-170 458.5,-178.5Q450,-187 450,-200L450,-686Z" />
+    </group>
+</vector>

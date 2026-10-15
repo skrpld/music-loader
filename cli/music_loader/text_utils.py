@@ -140,7 +140,7 @@ _VARIANT_RES = [(name, re.compile(pattern, re.IGNORECASE)) for name, pattern in 
 # Uploads that are DJ sets, mixes or beats carry no singable lyrics.
 _NO_LYRICS_RE = re.compile(
     r"\b(?:dj ?set|live set|full set|mixtape mix|guest mix|mix ?#?\d+|podcast|episode|ep\.? ?\d+|"
-    r"type beat|beat tape|instrumental|minus|минус|boiler room)\b",
+    r"type beat|beat tape|instrumental|boiler room)\b",
     re.IGNORECASE,
 )
 
@@ -609,3 +609,89 @@ def title_key(title: str | None) -> str:
     text = re.sub(r"[\(\[]?\s*-?\s*\b(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?(?:\s+version)?\s*[\)\]]?",
                   " ", text, flags=re.IGNORECASE)
     return normalize_name(text.replace("#", " "))
+
+
+# -- lyrics query helpers ----------------------------------------------------------
+# 「prod. X」 / 【X】: CJK brackets are read like round ones.
+_CJK_BRACKET_RE = re.compile(r"[「『【〔〖]([^「『【〔〖」』】〕〗]*)[」』】〕〗]")
+# Brackets that only credit people or label the upload, never part of the
+# song's name: "*prod playasin*", "[生产. THORNS]", "*由主办 HARUMATSUI*",
+# "(hosted by X)", "*VERY RARE*", "#UNRELEASED!".
+_CREDIT_GROUP_RE = re.compile(
+    r"^\s*#?\s*(?:prod(?:uced)?\b|p\.\s|生产|由主办|hosted\b|host(?:ed)? by\b|mixed by\b|"
+    r"(?:very\s+)?rare\b|unreleased\b|leak(?:ed)?\b)",
+    re.IGNORECASE,
+)
+# A token of symbols only: "###", "**", ":(", "!!!".
+# "&", "+", "-" and "/" stay: they join words ("FAITH & HOPE").
+_SYMBOL_TOKEN_RE = re.compile(r"(?<!\S)[^\w\s&+\-–—/]+(?!\S)")
+
+
+def lyrics_clean_title(title: str | None) -> str:
+    """The song's name for lyrics searches and comparisons: no "(feat. ...)",
+    no producer or "hosted by" credits in any bracket style, no promo noise
+    and no symbol-only tokens. Version markers stay."""
+    text = strip_feat(title)
+    text = _CJK_BRACKET_RE.sub(lambda match: f" ({match.group(1)}) ", text)
+    text = re.sub(r"\*{2,}", "*", text)
+    spans = [
+        (start, end) for start, end, inner in _bracket_groups(text)
+        if _CREDIT_GROUP_RE.match(inner) or not normalize_name(inner)
+    ]
+    text = clean_promo(_remove_spans(text, spans))
+    text = _SYMBOL_TOKEN_RE.sub(" ", text)
+    return _strip_edges(tidy_brackets(text)) or collapse(title)
+
+
+def lyrics_bare_title(title: str | None) -> str:
+    """`lyrics_clean_title` without any bracket that is not a version
+    marker: "Deathtones (mxstrakh)" -> "Deathtones". Loose mode only - a
+    bracket can name a different song ("Intro (Part 2)")."""
+    text = lyrics_clean_title(title)
+    spans = [(start, end) for start, end, inner in _bracket_groups(text) if not variant_markers(inner)]
+    return _strip_edges(_remove_spans(text, spans)) or text
+
+
+def split_title_artist(title: str | None) -> tuple[str, str] | None:
+    """"AQUAKEY - ALONE" uploaded by another account: (artist, title), or
+    None when the title has no "artist - song" form."""
+    text = collapse(title)
+    parts = _split_artist_part(text)
+    if parts is None:
+        match = re.match(r"^\s*([^-–—\s][^-–—]*?)[-–—]{1,2}\s+(\S.*)$", text)
+        parts = (_strip_edges(match.group(1)), _strip_edges(match.group(2))) if match else None
+    if parts is None or not parts[0] or not parts[1]:
+        return None
+    artist, song = parts
+    if _looks_like_song_suffix(song) or variant_markers(artist) or len(artist) > 60:
+        return None
+    return artist, song
+
+
+def looks_instrumental(title: str | None) -> bool:
+    """An upload without words: a DJ set, a mix, a beat, or a title marked
+    as an instrumental in a bracket or a dash part ("Song (Instrumental)",
+    "Song - минус"). A bare word in the name ("Beat It", "Minus") is not
+    enough."""
+    text = collapse(title)
+    if has_no_lyrics_hint(text):
+        return True
+    parts = [inner for start, end, inner in _bracket_groups(text)]
+    dashed = _DASH_SEPARATOR_RE.split(text)
+    if len(dashed) > 1:
+        parts.append(dashed[-1])
+    return any("instrumental" in variant_markers(part) for part in parts)
+
+
+_CYRILLIC_TO_LATIN = str.maketrans({
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ж": "zh", "з": "z", "и": "i",
+    "й": "y", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o", "п": "p", "р": "r", "с": "s",
+    "т": "t", "у": "u", "ф": "f", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sch", "ъ": "",
+    "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya", "і": "i", "ї": "yi", "є": "e", "ґ": "g",
+})
+
+
+def latin_key(text: str | None) -> str:
+    """`normalize_name` with Cyrillic letters transliterated ("хестон" ->
+    "heston") and without spaces, for fuzzy comparisons in loose mode."""
+    return normalize_name(text).translate(_CYRILLIC_TO_LATIN).replace(" ", "")

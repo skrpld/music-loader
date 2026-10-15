@@ -41,9 +41,48 @@ data class JobOptions(
     @SerialName("soundcloud_keep_versions") val soundcloudKeepVersions: Boolean = true,
     @SerialName("soundcloud_strip_promo") val soundcloudStripPromo: Boolean = true,
     @SerialName("soundcloud_filename") val soundcloudFilename: String = FilenameTemplate.DEFAULT,
+    /** Lyrics settings (needs [Features.LyricsSettings]; an older server ignores them). */
+    @SerialName("lyrics_providers") val lyricsProviders: List<String> = LyricsProvider.defaultWire,
+    @SerialName("lyrics_plain") val lyricsPlain: Boolean = true,
+    @SerialName("lyrics_length_tolerance") val lyricsLengthTolerance: Double = LyricsTolerance.DEFAULT,
+    @SerialName("lyrics_original_for_versions") val lyricsOriginalForVersions: Boolean = false,
+    @SerialName("lyrics_retry_days") val lyricsRetryDays: Int = LyricsRetry.DEFAULT,
 ) {
     val lyricsMode: LyricsMode get() = LyricsMode.fromWire(lyrics)
     val featPlacement: FeatPlacement get() = FeatPlacement.fromWire(soundcloudFeat)
+    val providers: List<LyricsProvider> get() = LyricsProvider.fromWire(lyricsProviders)
+}
+
+/** Lyrics providers, asked in the order of [JobOptions.lyricsProviders] (see LYRICS_PROVIDERS in config.py). */
+enum class LyricsProvider(val wire: String, val label: String) {
+    Lrclib("lrclib", "LRCLIB"),
+    Musixmatch("musixmatch", "Musixmatch"),
+    Genius("genius", "Genius");
+
+    companion object {
+        val defaultWire: List<String> = entries.map { it.wire }
+
+        /** Known names, each once, in order; nothing usable means every provider. */
+        fun fromWire(values: List<String>?): List<LyricsProvider> =
+            values.orEmpty().mapNotNull { value -> entries.firstOrNull { it.wire == value } }.distinct()
+                .ifEmpty { entries.toList() }
+    }
+}
+
+/** Loose mode: the largest length difference for plain lyrics, in seconds (2-60 on the server). */
+object LyricsTolerance {
+    const val DEFAULT = 10.0
+    val choices = listOf(5.0, 10.0, 20.0, 30.0)
+
+    fun sanitize(value: Double?): Double = value?.takeIf { it in 2.0..60.0 } ?: DEFAULT
+}
+
+/** Days before a track whose lyrics were not found is searched again; 0 = on every run. */
+object LyricsRetry {
+    const val DEFAULT = 7
+    val choices = listOf(0, 1, 7, 30)
+
+    fun sanitize(value: Int?): Int = value?.takeIf { it in 0..365 } ?: DEFAULT
 }
 
 /** Where featured artists of a SoundCloud track go: title and artist tag, artist tag only, title only. */
@@ -107,6 +146,9 @@ object Features {
 
     /** The SoundCloud formatting job options (`soundcloud_feat` ... `soundcloud_filename`). */
     const val SoundCloudFormat = "soundcloud_format"
+
+    /** The lyrics job options (`lyrics_providers` ... `lyrics_retry_days`). */
+    const val LyricsSettings = "lyrics_settings"
 }
 
 /** What a retry queues: every link of the job again, or only the failures worth another try. */

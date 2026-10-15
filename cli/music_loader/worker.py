@@ -16,6 +16,9 @@ Job spec:
      "soundcloud_feat": "both", "soundcloud_keep_producers": false,
      "soundcloud_keep_versions": true, "soundcloud_strip_promo": true,
      "soundcloud_filename": "{track} - {title}",
+     "lyrics_providers": ["lrclib", "musixmatch", "genius"], "lyrics_plain": true,
+     "lyrics_length_tolerance": 10, "lyrics_original_for_versions": false,
+     "lyrics_retry_days": 7,
      "spotify_threads": 4, "soundcloud_download_workers": 2,
      "soundcloud_workers": 4, "lyrics_workers": 2}
 
@@ -37,6 +40,7 @@ from .config import (
     SPOTIFY_CLIENT_ID_ENV,
     SPOTIFY_CLIENT_SECRET_ENV,
     AppConfig,
+    LyricsSettings,
     SoundCloudFormat,
 )
 from . import debuglog
@@ -75,6 +79,7 @@ def build_config(spec: dict[str, Any]) -> AppConfig:
     lyrics = spec.get("lyrics", LYRICS_MODE_STRICT)
     config.lyrics_enabled = lyrics != "off"
     config.lyrics_mode = LYRICS_MODE_LOOSE if lyrics == LYRICS_MODE_LOOSE else LYRICS_MODE_STRICT
+    config.lyrics_settings = LyricsSettings.from_options(spec)
     config.recheck = spec.get("recheck") is True
     config.soundcloud_reposts = spec.get("soundcloud_reposts") is True
     config.soundcloud_likes = spec.get("soundcloud_likes") is True

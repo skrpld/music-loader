@@ -223,26 +223,71 @@ another song's lyrics.
 Strict (default) - a candidate from LRCLIB, Musixmatch or Genius is accepted
 only when:
 
-- its artist is one of the track's artists;
+- its artist is one of the track's artists (case, punctuation and spaces do
+  not count: `HARUMATSUI` is `haru matsui`);
 - its title is the same after normalization (case, punctuation, feat parts,
-  promo noise and remaster notes do not count) **and** it has the same
-  version markers - a sped-up, slowed, remixed or live upload never gets the
-  original's lyrics;
+  producer and "hosted by" credits in any bracket style - `*prod X*`,
+  `「prod. X」`, `[生产. X]` -, promo noise, symbol-only parts such as `###`
+  and remaster notes do not count) **and** it has the same version markers -
+  a sped-up, slowed, remixed or live upload never gets the original's lyrics;
 - for synced lyrics, its length is within **2 s** of the file - otherwise the
   timestamps belong to a different cut;
 - Genius has no length, so its (plain) text needs an exact artist + title
   match.
 
-Loose (`--lyrics-loose`): fuzzy artist and title similarity, up to 10 s
-length difference; versions may differ, but then - or whenever the length
-differs by more than 2 s - only plain text is saved, never misaligned
+Loose (`--lyrics-loose`): fuzzy artist and title similarity (Cyrillic and
+Latin spellings are compared too: `хестон` / `Heston`), brackets that are not
+version markers are ignored (`Deathtones (mxstrakh)` matches `Deathtones`), up
+to 10 s length difference; versions may differ, but then - or whenever the
+length differs by more than 2 s - only plain text is saved, never misaligned
 timestamps.
 
-Instrumentals, DJ sets, mixes and beats are skipped. Synced lyrics are saved
-as `<track>.lrc` and their text is embedded (USLT); plain lyrics are
-embedded only. A track whose search found nothing is retried after 7 days.
-A provider that keeps failing - or Musixmatch asking for a captcha - is
-switched off for the rest of the run instead of stalling it.
+A title in `Artist - Song` form uploaded by another account
+(`AQUAKEY - OLD NOKIA` from `@aquagwap`) is also read as artist `AQUAKEY`,
+song `OLD NOKIA`, and searched that way first. Every provider is asked for at
+most two searches per track (the title as tagged and the cleaned or split
+reading), so rate limits are not hit sooner. Musixmatch is asked through its
+matcher (artist, title and length) and a free-text search; LRCLIB with the
+album as well, without ` - Single` and credits.
+
+Instrumentals, DJ sets, mixes and beats are skipped: the title says
+"instrumental", "type beat", "DJ set" and the like, or a bracket or dash part
+is a version marker for an instrumental (`Song (Instrumental)`,
+`Song - минус`). A word in the name alone (`Beat It`, `Minus`) is not enough.
+Synced lyrics are saved as `<track>.lrc` and their text is embedded (USLT);
+plain lyrics are embedded only.
+
+Providers never stall a run:
+
+- a rate limit (HTTP 429) or a server error is retried twice, after the
+  provider's `Retry-After` or 2 s and 5 s, and the provider's requests are
+  spaced out more from then on;
+- three failed requests in a row pause the provider (60 s, doubling up to
+  10 min); it is asked again afterwards instead of being lost for the run;
+- a provider that refuses access (HTTP 401/403 twice, Musixmatch asking for a
+  captcha) or whose search answers different queries with the same results
+  is switched off for the rest of the run, with the reason in Activity.
+  Genius is tried with a browser and then with the plain music-loader client
+  name before it is switched off.
+
+A track whose search found nothing is searched again after 7 days
+(`--lyrics-retry-days`). When a provider could not be asked because of a rate
+limit, a server or network error, the track is not marked as searched: the
+next run asks again.
+
+### Lyrics settings
+
+| CLI | Server option | Default | Effect |
+|---|---|---|---|
+| `--lyrics-providers` | `lyrics_providers` | `lrclib,musixmatch,genius` | Which providers are asked, in this order |
+| `--lyrics-synced-only` | `lyrics_plain: false` | plain text allowed | Never embed plain text; only synced lyrics are saved |
+| `--lyrics-length-tolerance` | `lyrics_length_tolerance` | `10` | Loose mode: largest length difference for plain text (2–60 s) |
+| `--lyrics-original-for-versions` | `lyrics_original_for_versions` | off | Strict mode: a sped-up, slowed, 8D or bass-boosted upload takes the original's plain text |
+| `--lyrics-retry-days` | `lyrics_retry_days` | `7` | Days before a "not found" track is searched again; 0 = every run |
+
+None of them loosens synced lyrics: they always need the same version and a
+length within 2 s. The Android app has the same settings under
+Settings → Lyrics.
 
 spotDL's own lyrics (Genius at 55 % similarity plus an unverified `.lrc`
 search) are disabled; Spotify tracks go through the same verified lookup.
