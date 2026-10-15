@@ -106,6 +106,12 @@ Queue request:
 }
 ```
 
+A job's `queue` is `{"completed", "total", "phase"}`: while `phase` is
+`resolving`, `completed` counts the links resolved so far; then `phase` is
+`downloading` and `completed` counts finished links. The track totals in
+`stats` (`*_tracks_total`) are set once every link is resolved, before the
+first download, and stay 0 until then.
+
 In a job's `stats`, `soundcloud_tracks_unavailable` counts tracks SoundCloud does
 not give out (DRM, preview, blocked). They are skipped, not failures: a job
 with only such tracks still ends `completed`. The job detail carries

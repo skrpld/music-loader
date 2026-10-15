@@ -5,9 +5,12 @@ what is happening right now.
 
 Two levels of counting are tracked on purpose:
 - "links" - how many URLs from the input were processed (an entire album,
-  playlist, or artist discography counts as ONE link).
+  playlist, or artist discography counts as ONE link). A job resolves every
+  link first ("resolving" phase: the queue counts resolved links), then
+  downloads ("downloading" phase: the queue counts finished links).
 - "tracks" - how many individual songs inside those links were found and
-  processed (downloaded / already had it / failed).
+  processed (downloaded / already had it / failed). The total is known once
+  every link is resolved, before the first download.
 
 Every public method is safe to call from the worker threads. Every text that
 comes from outside (track titles, tool output, paths) is escaped before it
@@ -32,6 +35,10 @@ from .runlog import RunLog
 
 _LOG_LINES = 10
 
+# What the link queue counts (see `set_queue`).
+PHASE_RESOLVING = "resolving"
+PHASE_DOWNLOADING = "downloading"
+
 
 @dataclass
 class Stats:
@@ -43,10 +50,9 @@ class Stats:
     lyrics_fail: int = 0
     lyrics_skipped: int = 0
 
-    # Track-level counters. "total" accumulates as it's discovered (a link
-    # can be an album/playlist/discography with many tracks inside it), so
-    # it may keep growing for a while before settling once every link in the
-    # queue has reported in.
+    # Track-level counters. "total" is set once every link of the job is
+    # resolved (each track once, however many links contain it), before the
+    # first download; the outcomes add up to it.
     spotify_tracks_total: int = 0
     spotify_tracks_done: int = 0
     spotify_tracks_skipped: int = 0
@@ -79,13 +85,13 @@ class Dashboard:
         self._started = False
 
         self.queue_progress = Progress(
-            TextColumn("[bold cyan]Queue [/bold cyan]"),
+            TextColumn("[bold cyan]{task.fields[label]}[/bold cyan]"),
             BarColumn(),
             TaskProgressColumn(),
             TextColumn("{task.completed}/{task.total} links"),
             console=console,
         )
-        self._queue_task = self.queue_progress.add_task("queue", total=1)
+        self._queue_task = self.queue_progress.add_task("queue", total=1, label="Queue ")
 
         self.tracks_progress = Progress(
             TextColumn("[bold cyan]Tracks[/bold cyan]"),
@@ -139,10 +145,13 @@ class Dashboard:
         if self.runlog is not None:
             self.runlog.record(source, message)
 
-    def set_queue(self, completed: int, total: int) -> None:
+    def set_queue(self, completed: int, total: int, phase: str = PHASE_DOWNLOADING) -> None:
+        """Link progress: resolved links while `phase` is "resolving",
+        finished links while it is "downloading"."""
+        label = "Resolve" if phase == PHASE_RESOLVING else "Queue "
         with self._lock:
             self.queue_progress.update(
-                self._queue_task, completed=completed, total=max(total, 1)
+                self._queue_task, completed=completed, total=max(total, 1), label=label
             )
         self._refresh()
 
@@ -246,7 +255,7 @@ class Dashboard:
         extra = f" / [yellow]{unavailable} unavailable[/yellow]" if unavailable else ""
         return (
             f"[green]{done} downloaded[/green] / [cyan]{skipped} already had[/cyan] / "
-            f"[red]{failed} failed[/red]{extra} [dim](of {total} found so far)[/dim]"
+            f"[red]{failed} failed[/red]{extra} [dim](of {total})[/dim]"
         )
 
     def _stats_table(self) -> Table:

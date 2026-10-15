@@ -78,7 +78,11 @@ fun JobProgressHeader(job: Job, modifier: Modifier = Modifier, showElapsed: Bool
         }
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
-                text = stringResource(R.string.progress_links, job.queue.completed, job.queue.total),
+                text = stringResource(
+                    if (job.queue.resolving) R.string.progress_links_resolving else R.string.progress_links,
+                    job.queue.completed,
+                    job.queue.total,
+                ),
                 style = MaterialTheme.typography.bodyLarge,
             )
             Text(

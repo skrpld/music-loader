@@ -3,7 +3,11 @@ import argparse
 import os
 import shlex
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from queue import Queue
+from typing import Any
 
 from rich.console import Console
 from rich.markup import escape
@@ -20,10 +24,18 @@ from .config import (
 from .deps import check_dependencies
 from .links import Link, parse_link, redact_url
 from .lyrics import LyricsService
+from .process import wait_future
 from .runlog import RunLog
-from .soundcloud import download_soundcloud
-from .spotify import download_spotify
-from .ui import Dashboard
+from .soundcloud import DownloadAborted, SoundCloudBatch
+from .spotify import SpotifyBatch
+from .ui import PHASE_DOWNLOADING, PHASE_RESOLVING, Dashboard
+
+# Links resolved at the same time, in all and per service. Each Spotify
+# resolve is a whole spotdl run (on Android they take turns anyway, spotdl
+# runs one at a time there); SoundCloud listings are cheap and share the
+# rate-limit pause of soundcloud.py.
+RESOLVE_WORKERS = 4
+_RESOLVE_LIMITS = {"spotify": 2, "soundcloud": RESOLVE_WORKERS}
 
 
 def _positive_int(value: str) -> int:
@@ -217,27 +229,108 @@ def resolve_spotify_credentials(args: argparse.Namespace) -> tuple[str | None, s
 
 
 def process_links(links: list[Link], config: AppConfig, dashboard: Dashboard) -> None:
-    total = len(links)
-    dashboard.set_queue(0, total)
+    """Runs a job in two phases: every link is resolved first (in parallel),
+    so the real number of tracks is known before the first download; then the
+    tracks of all links of a service are downloaded together, each once."""
     lyrics = None
     if config.lyrics_enabled:
         lyrics = LyricsService(config.lyrics_mode)
+    abort = threading.Event()
+    batches: dict[str, Any] = {
+        "spotify": SpotifyBatch(config, dashboard, abort),
+        "soundcloud": SoundCloudBatch(config, dashboard, lyrics, abort),
+    }
 
-    for index, link in enumerate(links, start=1):
+    plans = _resolve_links(links, batches, dashboard, abort)
+
+    services = list(dict.fromkeys(link.service for link in links))
+    for service in services:
+        resolved = [plan for plan in plans if plan is not None and plan.link.service == service]
+        dashboard.add_tracks_total(service, batches[service].track_count(resolved))
+
+    total = len(links)
+    completed = 0
+    for link, plan in zip(links, plans):
+        if plan is None or not plan.resolved:
+            dashboard.record(link.service, False)
+            completed += 1
+    dashboard.set_queue(completed, total, PHASE_DOWNLOADING)
+    for service in services:
+        group = [plan for plan in plans if plan is not None and plan.resolved and plan.link.service == service]
+        if not group:
+            continue
         try:
-            if link.service == "spotify":
-                ok = download_spotify(link, config, dashboard, lyrics)
+            if service == "spotify":
+                results = batches[service].download(group, lyrics)
             else:
-                ok = download_soundcloud(link, config, dashboard, lyrics)
-            dashboard.record(link.service, ok)
+                results = batches[service].download(group)
         except KeyboardInterrupt:
             raise
         except Exception as exc:
-            # One broken link must not abort the whole batch.
-            dashboard.record(link.service, False)
-            dashboard.log_error("Links", f"Unexpected error while processing '{redact_url(link.url)}': {exc}")
+            # One broken service must not abort the whole job.
+            results = [False for _ in group]
+            dashboard.log_error("Links", f"Unexpected error while downloading from {service}: {exc}")
+        for ok in results:
+            dashboard.record(service, ok)
+        completed += len(group)
+        dashboard.set_queue(completed, total, PHASE_DOWNLOADING)
 
-        dashboard.set_queue(index, total)
+
+def _resolve_links(links: list[Link], batches: dict[str, Any], dashboard: Dashboard,
+                   abort: threading.Event) -> list[Any]:
+    """Resolves every link, several at a time; one plan per link, None for a
+    link that broke unexpectedly. A link that fails never holds up the others.
+    Ctrl+C stops the resolves in flight (`abort`) before it is passed on."""
+    total = len(links)
+    plans: list[Any] = [None] * total
+    if not links:
+        dashboard.set_queue(0, 0, PHASE_RESOLVING)
+        return plans
+    workers = min(RESOLVE_WORKERS, total)
+    limits = {service: threading.BoundedSemaphore(count) for service, count in _RESOLVE_LIMITS.items()}
+    slots: Queue[int] = Queue()
+    for slot in range(workers):
+        slots.put(slot)
+    lock = threading.Lock()
+    finished = [0]
+    dashboard.set_queue(0, total, PHASE_RESOLVING)
+
+    def resolve(index: int, link: Link) -> None:
+        limit = limits[link.service]
+        while not limit.acquire(timeout=0.5):
+            if abort.is_set():
+                return
+        slot = slots.get()
+        try:
+            if abort.is_set():
+                return
+            try:
+                plans[index] = batches[link.service].resolve(link, slot)
+            except DownloadAborted:
+                raise KeyboardInterrupt
+            except Exception as exc:
+                dashboard.log_error("Links", f"Unexpected error while resolving '{redact_url(link.url)}': {exc}")
+            with lock:
+                finished[0] += 1
+                dashboard.set_queue(finished[0], total, PHASE_RESOLVING)
+        finally:
+            dashboard.finish_file(slot)
+            slots.put(slot)
+            limit.release()
+
+    pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="resolve")
+    aborted = False
+    try:
+        for future in [pool.submit(resolve, index, link) for index, link in enumerate(links)]:
+            wait_future(future)
+    except BaseException:
+        # Ctrl+C: stop the spotdl/yt-dlp runs in flight, drop the queued links.
+        aborted = True
+        abort.set()
+        raise
+    finally:
+        pool.shutdown(wait=True, cancel_futures=aborted)
+    return plans
 
 
 def print_summary(console: Console, dashboard: Dashboard) -> None:

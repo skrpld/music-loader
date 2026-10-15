@@ -86,7 +86,7 @@ from .availability import FailureCategory
 from .config import LYRICS_MODE_LOOSE, LYRICS_MODE_STRICT
 from .deps import check_dependencies
 from .links import Link, parse_link, redact_url
-from .ui import Stats
+from .ui import PHASE_DOWNLOADING, PHASE_RESOLVING, Stats
 
 API_VERSION = 1
 # Optional capabilities, for clients that may talk to an older server.
@@ -146,6 +146,14 @@ def _int(value: Any) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
+def _queue_state(data: dict[str, Any]) -> dict[str, Any]:
+    """Link progress of a job; an unknown phase (an older worker or file) is
+    the download phase, which is all older versions had."""
+    phase = data.get("phase")
+    return {"completed": _int(data.get("completed")), "total": _int(data.get("total")),
+            "phase": phase if phase in (PHASE_RESOLVING, PHASE_DOWNLOADING) else PHASE_DOWNLOADING}
+
+
 def _link_json(link: Link) -> dict[str, str]:
     # A private link's token stays on the server; the worker needs it, the
     # app does not.
@@ -163,7 +171,9 @@ class Job:
     started_at: Optional[int] = None
     finished_at: Optional[int] = None
     message: Optional[str] = None
-    queue: dict[str, int] = field(default_factory=lambda: {"completed": 0, "total": 0})
+    # "phase": "resolving" while the links are resolved (completed = resolved
+    # links), then "downloading" (completed = finished links).
+    queue: dict[str, Any] = field(default_factory=lambda: {"completed": 0, "total": 0})
     stats: dict[str, int] = field(default_factory=lambda: asdict(Stats()))
     files: dict[int, dict[str, Any]] = field(default_factory=dict)
     log: deque = field(default_factory=lambda: deque(maxlen=_LOG_KEPT))
@@ -320,7 +330,7 @@ def _job_from_state(data: Any, saved_at: Optional[int]) -> Optional[Job]:
     job.message = _opt_text(data.get("message"))
     queue_state = data.get("queue")
     if isinstance(queue_state, dict):
-        job.queue = {"completed": _int(queue_state.get("completed")), "total": _int(queue_state.get("total"))}
+        job.queue = _queue_state(queue_state)
     stats = data.get("stats")
     if isinstance(stats, dict):
         for key in job.stats:
@@ -685,7 +695,7 @@ class JobManager:
                 job = self._jobs[self._pending.popleft()]
                 job.status = "running"
                 job.started_at = _now_ms()
-                job.queue = {"completed": 0, "total": len(job.links)}
+                job.queue = {"completed": 0, "total": len(job.links), "phase": PHASE_RESOLVING}
                 self._running = job
                 self._changed(save=True)
             self.console.print(f"[cyan]Job {job.id} started[/cyan]")
@@ -884,7 +894,7 @@ class JobManager:
                 job.errors.append(entry)
                 job.error_count += 1
         elif kind == "queue":
-            job.queue = {"completed": _int(event.get("completed")), "total": _int(event.get("total"))}
+            job.queue = _queue_state(event)
         elif kind == "stats" and isinstance(event.get("stats"), dict):
             for key, value in event["stats"].items():
                 if key in job.stats:

@@ -130,6 +130,7 @@
     <string name="status_failed">Сбой</string>
     <string name="percent">%1$d%%</string>
     <string name="progress_links">Ссылки: %1$d из %2$d</string>
+    <string name="progress_links_resolving">Разбор ссылок: %1$d из %2$d</string>
     <string name="progress_tracks">Треки: %1$d из %2$d</string>
     <string name="progress_tracks_resolving">Поиск треков…</string>
     <string name="progress_slot_idle">Ожидание трека…</string>

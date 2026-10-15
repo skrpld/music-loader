@@ -1,3 +1,3 @@
 """Music Loader — Spotify & SoundCloud downloader with metadata, verified lyrics and playlist support."""
 
-__version__ = "2.4.0"
+__version__ = "2.5.0"
