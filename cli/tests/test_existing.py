@@ -287,7 +287,7 @@ def test_soundcloud_existing_tracks(tmp_path, monkeypatch, mode, expected):
     ctx.index.add({"id": "2", "title": "Old", "uploader": "Alpha"}, old)
     before = _frames(old)
     jobs = [sc.TrackJob(info={"id": "1", "webpage_url": "u1"}), sc.TrackJob(info={"id": "2", "webpage_url": "u2"})]
-    assert _run(ctx, jobs, monkeypatch) == expected
+    assert sorted(_run(ctx, jobs, monkeypatch)) == expected
     stats = _stats(out)
     assert stats["soundcloud_tracks_skipped"] == 2
     assert stats["soundcloud_tracks_outdated"] == (1 if mode == EXISTING_KEEP else 0)
