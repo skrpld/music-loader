@@ -32,6 +32,10 @@ download (50 tracks per request) or, failing that, from yt-dlp's error, counted
 as "unavailable", listed in the run's unavailable-tracks file and skipped; the
 job still completes. See availability.py. With `--soundcloud-fallback` such a
 track is looked up on YouTube Music first (fallback.py).
+
+The same track JSON tells who uploaded each track: before the first download
+the accounts of the job are decided (an artist under another name, a reupload
+account; see accounts.py), so every file gets its artist and folder at once.
 """
 from __future__ import annotations
 
@@ -49,6 +53,8 @@ from queue import Queue
 from typing import Any
 from urllib.parse import urlsplit
 
+from .accounts import RunAccounts
+from .artist_lookup import LibraryCatalog, OnlineServices
 from .artists import get_registry
 from .availability import (
     RATE_LIMIT_RE as _RATE_LIMIT_RE,
@@ -91,9 +97,10 @@ from .soundcloud_meta import (
     TrackMeta,
     build_meta,
     context_from_set,
+    info_from_api,
 )
 from .tags import SOURCE_DESC, SOURCE_URL_DESC, audio_duration, read_tags, read_txxx, write_tags
-from .text_utils import parse_soundcloud_title
+from .text_utils import normalize_name, parse_soundcloud_title
 
 # yt-dlp's default (--newline) progress line, e.g.:
 # [download] 45.2% of ~3.45MiB at 1.23MiB/s ETA 00:02
@@ -164,6 +171,8 @@ class _Context:
     archive: Any = None
     registry: Any = None
     attempts: Any = None
+    # Account decisions of the job (accounts.RunAccounts).
+    accounts: Any = None
     results: dict[str, Path] = field(default_factory=dict)
     # Files renamed by --recheck, so playlists can follow them.
     moves: list[tuple[Path, Path]] = field(default_factory=list)
@@ -560,42 +569,96 @@ def _download_one(job: TrackJob, ctx: _Context, slot: int, source_url: str | Non
 
 
 def _precheck(jobs: list[TrackJob], ctx: _Context) -> None:
-    """Finds tracks SoundCloud does not give out before anything is downloaded.
+    """Fetches SoundCloud's track JSON of the job before anything is
+    downloaded: to find the tracks it does not give out, and to decide the
+    accounts of the job (accounts.py).
 
-    SoundCloud's track JSON lists every stream of a track and whether it is
-    encrypted or a preview; asking for 50 tracks at once costs one request
-    instead of a failed download per track, which matters against the budget
-    of about 600 requests per 10 minutes on a 200-track album. Tracks already
-    in the library are left out. Whatever cannot be checked here is caught
-    from yt-dlp's error after the download attempt."""
-    if ctx.api.disabled:
+    The JSON lists every stream of a track and whether it is encrypted or a
+    preview; asking for 50 tracks at once costs one request instead of a
+    failed download per track, which matters against the budget of about 600
+    requests per 10 minutes on a 200-track album. Tracks already in the library
+    are left out: the index knows their title, uploader and length. Whatever
+    cannot be checked here is caught from yt-dlp's error after the download
+    attempt."""
+    # Tracks not in the library yet; with --recheck every track is written again.
+    missing = {job.track_id for job in jobs if ctx.index.find(job.info) is None}
+    pending = [job for job in jobs if ctx.config.recheck or job.track_id in missing]
+    if not pending:
         return
-    ids = [job.track_id for job in jobs if ctx.index.find(job.info) is None]
-    if not ids:
-        return
-    ctx.dashboard.start_file(label="SoundCloud: checking which tracks can be downloaded...")
-    try:
-        for start in range(0, len(ids), BATCH_SIZE):
-            ctx.gate.wait(ctx.abort)
-            try:
-                found = ctx.api.tracks(ids[start:start + BATCH_SIZE])
-            except Exception as exc:
-                if _RATE_LIMIT_RE.search(str(exc)):
-                    ctx.gate.trip()
-                ctx.dashboard.log("[SoundCloud] Could not check availability up front; "
-                                  "tracks are checked while downloading")
-                return
-            for track_id, data in found.items():
-                reason = classify_track(data)
-                if reason is not None:
-                    ctx.unavailable[track_id] = UnavailableTrack.from_api(data, reason)
-    finally:
-        ctx.dashboard.finish_file()
+    ids = list(dict.fromkeys(job.track_id for job in jobs if job.track_id in missing))
+    found: dict[str, dict] = {}
+    if ids and not ctx.api.disabled:
+        ctx.dashboard.start_file(label="SoundCloud: checking which tracks can be downloaded...")
+        try:
+            for start in range(0, len(ids), BATCH_SIZE):
+                ctx.gate.wait(ctx.abort)
+                if ctx.abort.is_set():
+                    raise DownloadAborted()
+                try:
+                    found.update(ctx.api.tracks(ids[start:start + BATCH_SIZE]))
+                except Exception as exc:
+                    if _RATE_LIMIT_RE.search(str(exc)):
+                        ctx.gate.trip()
+                    ctx.dashboard.log("[SoundCloud] Could not check the tracks up front; "
+                                      "they are checked while downloading")
+                    break
+        finally:
+            ctx.dashboard.finish_file()
+    for track_id, data in found.items():
+        if track_id not in missing:
+            continue
+        reason = classify_track(data)
+        if reason is not None:
+            ctx.unavailable[track_id] = UnavailableTrack.from_api(data, reason)
     if ctx.unavailable:
         ctx.dashboard.log(
             f"[SoundCloud] {len(ctx.unavailable)} track(s) cannot be downloaded from SoundCloud "
             "(DRM, preview only or blocked) and will be skipped"
         )
+    _decide_accounts(jobs, pending, found, ctx)
+
+
+def _decide_accounts(jobs: list[TrackJob], pending: list[TrackJob], found: dict[str, dict],
+                     ctx: _Context) -> None:
+    """Fills in what the listing left out (title, uploader, length) and lets
+    accounts.py decide the job's accounts. Never fails the job."""
+    if ctx.accounts is None:
+        return
+    for job in jobs:
+        data = found.get(job.track_id)
+        if data is not None:
+            for key, value in info_from_api(data).items():
+                if value not in (None, "", []) and not job.info.get(key):
+                    job.info[key] = value
+    # Tracks already in the library: what the index remembers of them. Entries
+    # of older versions have no uploader id; the uploader's name gives it.
+    ids_by_name = {
+        normalize_name(str(job.info.get("uploader") or "")): str(job.info["uploader_id"])
+        for job in jobs if job.info.get("uploader_id") and job.info.get("uploader")
+    }
+    infos: list[dict[str, Any]] = []
+    for job in jobs:
+        if job.info.get("uploader_id") and job.info.get("title"):
+            infos.append(job.info)
+            continue
+        entry = ctx.index.entry(job.track_id)
+        if not entry or not entry.get("artist") or not entry.get("title"):
+            continue
+        account_id = entry.get("uploader_id") or ids_by_name.get(normalize_name(str(entry["artist"])))
+        if account_id:
+            infos.append({"id": job.track_id, "title": entry["title"], "uploader": entry["artist"],
+                          "uploader_id": str(account_id), "duration": entry.get("duration")})
+    new_ids = {job.track_id for job in pending if job.track_id not in ctx.unavailable}
+    ctx.dashboard.start_file(label="SoundCloud: checking the artist accounts...")
+    try:
+        ctx.accounts.evaluate(infos, new_ids, abort=ctx.abort.is_set)
+    except Exception as exc:
+        ctx.dashboard.log_error("Artists", f"Could not check the artist accounts: {exc}")
+        debuglog.event("accounts", "failed", error=str(exc))
+    finally:
+        ctx.dashboard.finish_file()
+    if ctx.abort.is_set():
+        raise DownloadAborted()
 
 
 def _fallback_download(
@@ -610,7 +673,7 @@ def _fallback_download(
         return None, "no length to compare, not looked up elsewhere"
     info = dict(job.info)
     info["duration"] = duration
-    meta = build_meta(info, job.album, ctx.registry, ctx.config.soundcloud_format)
+    meta = build_meta(info, job.album, ctx.registry, ctx.config.soundcloud_format, ctx.accounts)
     wanted = Wanted(meta.title, tuple(meta.main_artists), duration)
     ctx.dashboard.start_file(label=f"{_FALLBACK_LABEL}: looking for '{meta.title[:50]}'", slot=slot)
     match, checked = find_match(wanted, ctx.yt, ctx.abort.is_set)
@@ -746,7 +809,8 @@ def _postprocess(job: TrackJob, raw_path: Path, info: dict[str, Any], ctx: _Cont
         ctx.archive.add(track_id)
         return _Processed(True, existing, True)
 
-    meta = build_meta(info, _album_for(job, info, ctx), ctx.registry, ctx.config.soundcloud_format)
+    meta = build_meta(info, _album_for(job, info, ctx), ctx.registry, ctx.config.soundcloud_format,
+                      ctx.accounts)
     if info.get(_SOURCE_KEY):
         meta.tags.extra[SOURCE_DESC] = _FALLBACK_LABEL
         meta.tags.extra[SOURCE_URL_DESC] = str(info[_SOURCE_KEY])
@@ -807,7 +871,8 @@ def _postprocess(job: TrackJob, raw_path: Path, info: dict[str, Any], ctx: _Cont
 def _retag(job: TrackJob, existing: Path, info: dict[str, Any], ctx: _Context) -> _Processed:
     """--recheck of a track that is already in the library: current tags,
     current folder/name, lyrics redone by the caller."""
-    meta = build_meta(info, _album_for(job, info, ctx), ctx.registry, ctx.config.soundcloud_format)
+    meta = build_meta(info, _album_for(job, info, ctx), ctx.registry, ctx.config.soundcloud_format,
+                      ctx.accounts)
     # write_tags replaces every frame it owns: keep the note of a file that
     # was taken from another source.
     for desc in (SOURCE_DESC, SOURCE_URL_DESC):
@@ -981,6 +1046,17 @@ class SoundCloudBatch:
             _cleanup_stale_staging(staging_dir)
             index = get_index(soundcloud_dir)
             migrate_layout(index, self.dashboard)
+            registry = get_registry(config.music_dir / ARTISTS_FILENAME)
+            api = _shared_api()
+            abort = self.abort
+            services = OnlineServices(
+                config, api,
+                soundcloud_gate=lambda: _SHARED_GATE.wait(abort),
+                on_rate_limit=_SHARED_GATE.trip,
+            )
+            accounts = RunAccounts(
+                registry, self.dashboard, LibraryCatalog(config.music_dir, soundcloud_dir), services, index,
+            )
             self._ctx = _Context(
                 config=config,
                 soundcloud_dir=soundcloud_dir,
@@ -989,12 +1065,13 @@ class SoundCloudBatch:
                 lyrics=self.lyrics if config.lyrics_enabled else None,
                 abort=self.abort,
                 yt=yt,
-                api=_shared_api(),
+                api=api,
                 gate=_SHARED_GATE,
                 index=index,
                 archive=SoundCloudArchive(soundcloud_dir / ARCHIVE_FILENAME),
-                registry=get_registry(config.music_dir / ARTISTS_FILENAME),
+                registry=registry,
                 attempts=get_attempts(soundcloud_dir / LYRICS_ATTEMPTS_FILENAME),
+                accounts=accounts,
             )
             return self._ctx
 

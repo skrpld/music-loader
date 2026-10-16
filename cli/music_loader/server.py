@@ -21,6 +21,9 @@ the first start (printed at startup).
                                       "debug_log": true
     DELETE /api/v1/jobs/<id>          remove a finished job from the list
     GET    /api/v1/events             Server-Sent Events: a "state" event on every change
+    GET    /api/v1/artists            SoundCloud accounts and their artist names (feature "artists")
+    POST   /api/v1/artists/<id>/<action>  change one: action "set" ({"name": "..."}), "keep",
+                                      "reuploader", "accept", "reject" or "unlock"
 
 Job options: {"lyrics": "strict" | "loose" | "off", "recheck": false,
 "soundcloud_reposts": false, "soundcloud_likes": false, "soundcloud_fallback": false,
@@ -71,6 +74,13 @@ that was queued or running when the process died is never run again by
 itself: it comes back as cancelled or failed with an "Interrupted" message. A
 file that cannot be read is ignored.
 
+Artists (feature "artists"): the decision per SoundCloud account (see
+accounts.py), the same list and actions as `music-loader artists`. A change
+is written to the library's `.music-loader-artists.json` at once and applies
+from the next job (the running one keeps what it decided); `recheck` applies
+it to files already downloaded. A finished job lists its decisions in
+`artists`: {"alias": [...], "suggestion": [...], "undetermined": [...]}.
+
 `GET /api/v1/info` (and every `state` event) lists the server's `features`
 ("retry", "auto_retry", "debug_log"); a client talking to an older server
 finds the list (or an entry) missing and leaves those actions out.
@@ -107,8 +117,12 @@ from rich.markup import escape
 
 from . import __version__
 from .cli import _positive_int
+from .accounts import ACTIONS as _ARTIST_ACTIONS
+from .accounts import AccountBook, AccountError, apply_action, sorted_accounts
+from .artists import ArtistRegistry
 from .availability import FailureCategory
 from .config import (
+    ARTISTS_FILENAME,
     FEAT_MODES,
     LOGS_DIRNAME,
     LYRICS_MODE_LOOSE,
@@ -122,11 +136,11 @@ from .config import (
 )
 from .deps import check_dependencies
 from .links import Link, parse_link, redact_url
-from .ui import PHASE_DOWNLOADING, PHASE_RESOLVING, Stats
+from .ui import ARTIST_NOTE_KINDS, PHASE_DOWNLOADING, PHASE_RESOLVING, Stats
 
 API_VERSION = 1
 # Optional capabilities, for clients that may talk to an older server.
-FEATURES = ("retry", "auto_retry", "debug_log", "soundcloud_format", "lyrics_settings")
+FEATURES = ("retry", "auto_retry", "debug_log", "soundcloud_format", "lyrics_settings", "artists")
 DEFAULT_PORT = 8765
 TOKEN_ENV = "MUSIC_LOADER_TOKEN"
 TOKEN_FILENAME = "server-token"
@@ -135,6 +149,7 @@ _JOBS_FILE_VERSION = 1
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9._~+/=-]{16,512}")
 _JOB_ID_RE = re.compile(r"[0-9a-f]{1,64}")
+_ACCOUNT_ID_RE = re.compile(r"[0-9]{1,20}")
 _LYRICS_MODES = (LYRICS_MODE_STRICT, LYRICS_MODE_LOOSE, "off")
 _FINISHED = {"completed", "cancelled", "failed"}
 _BOOL_OPTIONS = ("recheck", "soundcloud_reposts", "soundcloud_likes", "soundcloud_fallback", "auto_retry",
@@ -162,6 +177,7 @@ _AUTO_RETRY_DELAYS = (15 * 60, 30 * 60, 60 * 60)
 _RETRY_POLL_SECONDS = 30.0
 # A due retry that finds the queue full is tried again after this long.
 _QUEUE_FULL_RECHECK_SECONDS = 60
+_ARTIST_NOTES_KEPT = 200
 _STREAM_LOG = 50
 _STREAM_ERRORS = 20
 _STREAM_INTERVAL = 0.5
@@ -229,6 +245,8 @@ class Job:
     retry_of: Optional[str] = None
     # When the server queues the failed tracks again (epoch ms), if it waits for that.
     retry_at: Optional[int] = None
+    # Artist decisions of the run (ui.ARTIST_NOTE_KINDS -> texts).
+    artists: dict[str, list[str]] = field(default_factory=lambda: {kind: [] for kind in ARTIST_NOTE_KINDS})
 
     @property
     def finished(self) -> bool:
@@ -281,6 +299,7 @@ class Job:
             runlog=self.runlog,
             unavailable_log=self.unavailable_log,
             debug_log=self.debug_log,
+            artists={kind: list(items) for kind, items in self.artists.items()},
             failed_items=[
                 {"url": redact_url(item["url"]), "service": item["service"], "title": item["title"],
                  "category": item["category"],
@@ -316,6 +335,7 @@ class Job:
             "attempt": self.attempt,
             "retry_of": self.retry_of,
             "retry_at": self.retry_at,
+            "artists": {kind: list(items) for kind, items in self.artists.items()},
         }
 
 
@@ -386,6 +406,12 @@ def _job_from_state(data: Any, saved_at: Optional[int]) -> Optional[Job]:
     for item in raw_failed if isinstance(raw_failed, list) else []:
         if isinstance(item, dict):
             JobManager._apply_failure(job, item)
+    raw_artists = data.get("artists")
+    if isinstance(raw_artists, dict):
+        for kind in ARTIST_NOTE_KINDS:
+            items = raw_artists.get(kind)
+            if isinstance(items, list):
+                job.artists[kind] = [_text(item)[:300] for item in items if isinstance(item, str)][:_ARTIST_NOTES_KEPT]
     attempt = _int(data.get("attempt"))
     job.attempt = min(max(attempt, 0), len(_AUTO_RETRY_DELAYS))
     retry_of = data.get("retry_of")
@@ -495,6 +521,23 @@ class JobManager:
         if path.parent != logs or not path.name.startswith("debug-") or not path.is_file():
             return None
         return path
+
+    # -- artists --------------------------------------------------------------------
+    def _artist_book(self) -> AccountBook:
+        return AccountBook(ArtistRegistry(self.music_dir / ARTISTS_FILENAME))
+
+    def artists(self) -> list[dict[str, Any]]:
+        return [item.public() for item in sorted_accounts(self._artist_book().all())]
+
+    def artist_action(self, account_id: str, action: str, name: Optional[str]) -> dict[str, Any]:
+        """Applies a user action to an account. Raises JobNotFound for an
+        unknown account, AccountError for an action that does not apply."""
+        book = self._artist_book()
+        if book.get(account_id) is None:
+            raise JobNotFound(account_id)
+        account = apply_action(book, action, account_id, name)
+        book.registry.flush()
+        return account.public()
 
     def _state(self) -> dict[str, Any]:
         running = self._running
@@ -980,6 +1023,11 @@ class JobManager:
             job.unavailable_log = _text(event.get("path")) or None
         elif kind == "debug_log":
             job.debug_log = _text(event.get("path")) or None
+        elif kind == "artists":
+            notes = job.artists.get(_text(event.get("kind")))
+            text = _text(event.get("text"))[:300]
+            if notes is not None and text and text not in notes and len(notes) < _ARTIST_NOTES_KEPT:
+                notes.append(text)
 
     @staticmethod
     def _apply_failure(job: Job, event: dict[str, Any]) -> None:
@@ -1155,6 +1203,17 @@ def _parse_retry_request(body: bytes) -> str:
     return scope
 
 
+def _parse_artist_request(body: bytes) -> str:
+    try:
+        request = json.loads(body.decode("utf-8") or "null")
+    except (UnicodeDecodeError, ValueError):
+        raise _RequestError(HTTPStatus.BAD_REQUEST, "Body is not valid JSON")
+    name = request.get("name") if isinstance(request, dict) else None
+    if not isinstance(name, str) or not name.strip() or len(name) > 200:
+        raise _RequestError(HTTPStatus.BAD_REQUEST, "'name' must be the artist name (1-200 characters)")
+    return name
+
+
 class _Handler(BaseHTTPRequestHandler):
     server_version = f"music-loader/{__version__}"
     protocol_version = "HTTP/1.1"
@@ -1309,6 +1368,20 @@ class _Handler(BaseHTTPRequestHandler):
             if path is None:
                 raise _RequestError(HTTPStatus.NOT_FOUND, "The job has no debug log")
             return self._send_file(path, "application/x-ndjson; charset=utf-8")
+        if parts == ["artists"] and method == "GET":
+            return self._send_json(HTTPStatus.OK, {"accounts": manager.artists()})
+        if len(parts) == 3 and parts[0] == "artists" and method == "POST":
+            account_id, action = parts[1], parts[2]
+            if not _ACCOUNT_ID_RE.fullmatch(account_id) or action not in _ARTIST_ACTIONS:
+                raise _RequestError(HTTPStatus.NOT_FOUND, "Not found")
+            name = _parse_artist_request(body) if action == "set" else None
+            try:
+                account = manager.artist_action(account_id, action, name)
+            except JobNotFound:
+                raise _RequestError(HTTPStatus.NOT_FOUND, "No such account")
+            except AccountError as exc:
+                raise _RequestError(HTTPStatus.BAD_REQUEST, str(exc))
+            return self._send_json(HTTPStatus.OK, {"account": account})
         if len(parts) == 3 and parts[0] == "jobs" and parts[2] == "retry" and method == "POST":
             scope = _parse_retry_request(body)
             try:

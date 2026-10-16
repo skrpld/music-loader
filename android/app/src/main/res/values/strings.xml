@@ -272,4 +272,41 @@
         <item quantity="other">%1$d days</item>
     </plurals>
     <string name="settings_lyrics_retry_hint">A track whose lyrics were not found is searched again after this time; Recheck the library searches again anyway</string>
+    <string name="settings_artists">Artists</string>
+    <string name="settings_artists_hint">Artist names for SoundCloud accounts and reupload accounts</string>
+    <string name="artists_description">An account\'s tracks get an artist name only when your library, Spotify or Deezer confirms it. Suggestions wait for you; whatever you choose is locked and automatic checks leave it as is.</string>
+    <string name="artists_empty_title">No accounts yet</string>
+    <string name="artists_empty_body">Accounts appear here after SoundCloud downloads.</string>
+    <string name="artists_load_failed">Could not load the accounts</string>
+    <string name="artists_waiting">Waiting for you</string>
+    <string name="artists_accounts">Accounts</string>
+    <string name="artists_status_confirmed">Artist: %1$s</string>
+    <string name="artists_status_suggestion">Suggested: %1$s</string>
+    <string name="artists_status_reuploader">Reupload account: each track gets the artist of its original</string>
+    <string name="artists_status_not_checked">Not checked yet: a service was unreachable</string>
+    <string name="artists_status_nick">Tracks keep the account name</string>
+    <string name="artists_source_library">confirmed by your library</string>
+    <string name="artists_source_spotify">confirmed by Spotify</string>
+    <string name="artists_source_deezer">confirmed by Deezer</string>
+    <string name="artists_source_manual">set by you</string>
+    <string name="artists_source_title">from track titles</string>
+    <plurals name="artists_tracks">
+        <item quantity="one">%1$d track</item>
+        <item quantity="other">%1$d tracks</item>
+    </plurals>
+    <string name="artists_locked">Locked</string>
+    <string name="artists_name">Artist name</string>
+    <string name="artists_set">Use this name</string>
+    <string name="artists_keep">Keep the account name</string>
+    <string name="artists_reuploader">Reupload account</string>
+    <string name="artists_unlock">Unlock</string>
+    <string name="artists_unlock_hint">The next download checks the account again</string>
+    <string name="artists_open_profile">Open the profile</string>
+    <string name="action_accept">Accept</string>
+    <string name="action_reject">Reject</string>
+    <string name="action_close">Close</string>
+    <string name="job_artists">Artists</string>
+    <string name="job_artists_alias">Artist name</string>
+    <string name="job_artists_suggestion">Suggestion · review in Settings → Artists</string>
+    <string name="job_artists_undetermined">Artist not determined</string>
 </resources>

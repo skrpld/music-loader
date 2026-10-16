@@ -186,6 +186,11 @@ class ServerRepository(
     /** Saves the job's debug log to [target] (phone mode and a server alike). */
     suspend fun downloadDebugLog(id: String, target: File) = api.downloadDebugLog(server(), id, target)
 
+    suspend fun artists(): List<ArtistAccount> = api.artists(server())
+
+    suspend fun artistAction(id: String, action: AccountAction, name: String? = null): ArtistAccount =
+        api.artistAction(server(), id, action, name)
+
     /** Checks a server that is not saved yet. */
     suspend fun test(server: ServerConfig): ServerInfo = api.info(server)
 }

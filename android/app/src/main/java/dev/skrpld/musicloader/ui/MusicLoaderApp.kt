@@ -23,8 +23,12 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.skrpld.musicloader.R
+import dev.skrpld.musicloader.data.Features
 import dev.skrpld.musicloader.data.JobStatus
+import dev.skrpld.musicloader.data.supports
 import dev.skrpld.musicloader.data.serverState
+import dev.skrpld.musicloader.ui.artists.ArtistsScreen
+import dev.skrpld.musicloader.ui.artists.ArtistsViewModel
 import dev.skrpld.musicloader.ui.download.DownloadScreen
 import dev.skrpld.musicloader.ui.download.DownloadViewModel
 import dev.skrpld.musicloader.ui.jobs.JobsPane
@@ -48,10 +52,13 @@ fun MusicLoaderApp(
     downloadViewModel: DownloadViewModel,
     jobsViewModel: JobsViewModel,
     settingsViewModel: SettingsViewModel,
+    artistsViewModel: ArtistsViewModel,
     appVersion: String,
     dynamicColorAvailable: Boolean,
 ) {
     var destination by rememberSaveable { mutableStateOf(Destination.Download) }
+    // Settings → Artists, shown in place of the settings while open.
+    var artistsOpen by rememberSaveable { mutableStateOf(false) }
     val connection by mainViewModel.connection.collectAsStateWithLifecycle()
     val pendingJobs = connection.serverState?.jobs?.count {
         it.status == JobStatus.Running || it.status == JobStatus.Queued
@@ -60,8 +67,10 @@ fun MusicLoaderApp(
     LaunchedEffect(downloadViewModel) {
         downloadViewModel.shareReceived.collect { destination = Destination.Download }
     }
+    val artistsSupported = connection.supports(Features.Artists)
+    val showArtists = artistsOpen && artistsSupported && destination == Destination.Settings
     BackHandler(enabled = destination != Destination.Download) {
-        destination = Destination.Download
+        if (showArtists) artistsOpen = false else destination = Destination.Download
     }
 
     NavigationSuiteScaffold(
@@ -70,7 +79,10 @@ fun MusicLoaderApp(
                 val selected = item == destination
                 NavigationSuiteItem(
                     selected = selected,
-                    onClick = { destination = item },
+                    onClick = {
+                        if (item == Destination.Settings && destination == Destination.Settings) artistsOpen = false
+                        destination = item
+                    },
                     icon = {
                         Icon(
                             painter = painterResource(if (selected) item.selectedIcon else item.icon),
@@ -111,12 +123,25 @@ fun MusicLoaderApp(
                     onOpenSettings = { destination = Destination.Settings },
                     modifier = Modifier.fillMaxSize(),
                 )
-                Destination.Settings -> SettingsScreen(
-                    viewModel = settingsViewModel,
-                    appVersion = appVersion,
-                    dynamicColorAvailable = dynamicColorAvailable,
-                    modifier = Modifier.fillMaxSize(),
-                )
+                Destination.Settings -> if (showArtists) {
+                    ArtistsScreen(
+                        viewModel = artistsViewModel,
+                        onBack = { artistsOpen = false },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    SettingsScreen(
+                        viewModel = settingsViewModel,
+                        appVersion = appVersion,
+                        dynamicColorAvailable = dynamicColorAvailable,
+                        onOpenArtists = if (artistsSupported) {
+                            { artistsOpen = true }
+                        } else {
+                            null
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
         }
     }

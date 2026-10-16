@@ -566,6 +566,11 @@ def format_title(parsed: ParsedTitle, feat_in_title: bool = True, keep_producers
     return text
 
 
+def with_featured(base_title: str, featured: list[str]) -> str:
+    """A title with its featured artists as "(feat. A, B)" at the end."""
+    return f"{base_title} (feat. {', '.join(featured)})" if featured else base_title
+
+
 # -- lyrics helpers ----------------------------------------------------------------
 def variant_markers(title: str | None) -> frozenset[str]:
     """Version markers of a title ("sped up", "remix", ...)."""

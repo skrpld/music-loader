@@ -95,6 +95,22 @@ class MusicLoaderApi(
         }
     }
 
+    /** SoundCloud accounts and their artist names. Needs [Features.Artists]. */
+    suspend fun artists(server: ServerConfig): List<ArtistAccount> =
+        json.decodeFromString<ArtistAccountsEnvelope>(execute(request(server, "artists").build())).accounts
+
+    /** One action on an account; [name] only for [AccountAction.SetName]. Needs [Features.Artists]. */
+    suspend fun artistAction(server: ServerConfig, id: String, action: AccountAction, name: String?): ArtistAccount {
+        val body = if (action == AccountAction.SetName) {
+            json.encodeToString(ArtistNameRequest.serializer(), ArtistNameRequest(name.orEmpty())).toRequestBody(JSON)
+        } else {
+            ByteArray(0).toRequestBody(JSON)
+        }
+        return json.decodeFromString<ArtistAccountEnvelope>(
+            execute(request(server, "artists", id, action.wire).post(body).build()),
+        ).account
+    }
+
     suspend fun delete(server: ServerConfig, id: String) {
         execute(request(server, "jobs", id).delete().build())
     }

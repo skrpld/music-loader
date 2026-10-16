@@ -9,6 +9,10 @@ this version carry the SoundCloud id (TXXX:SOUNDCLOUD_ID); files written by
 older versions are matched by the uploader/title/duration they were tagged
 with. That scan reads every file, so it runs lazily - only when an id lookup
 misses - once per run, and outside the main lock.
+
+The same file keeps, under the reserved key `ORIGINALS_KEY`, the original
+artist found for a track of a reupload account (accounts.py), so that
+search runs once per track. Track ids are numeric and never collide with it.
 """
 from __future__ import annotations
 
@@ -24,6 +28,9 @@ from .tags import MUTAGEN_AVAILABLE, audio_duration, read_tags
 
 
 
+ORIGINALS_KEY = "_originals"
+
+
 def _norm(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
 
@@ -34,6 +41,7 @@ class SoundCloudIndex:
         self.path = soundcloud_dir / INDEX_FILENAME
         self._lock = threading.RLock()
         self._legacy_lock = threading.RLock()
+        self._originals: dict[str, dict[str, Any]] = {}
         self._data: dict[str, dict[str, Any]] = self._load()
         self._legacy_ids: dict[str, Path] | None = None
         self._legacy_prints: list[tuple[Path, str, str, float | None]] = []
@@ -47,6 +55,9 @@ class SoundCloudIndex:
             return {}
         if not isinstance(raw, dict):
             return {}
+        originals = raw.pop(ORIGINALS_KEY, None)
+        if isinstance(originals, dict):
+            self._originals = {str(k): v for k, v in originals.items() if isinstance(v, dict)}
         return {str(k): v for k, v in raw.items() if isinstance(v, dict)}
 
     # -- paths ----------------------------------------------------------------
@@ -170,6 +181,7 @@ class SoundCloudIndex:
                 "path": self._store(path),
                 "title": info.get("title"),
                 "artist": info.get("uploader"),
+                "uploader_id": info.get("uploader_id"),
                 "duration": info.get("duration"),
                 "webpage_url": info.get("webpage_url"),
             }
@@ -197,10 +209,29 @@ class SoundCloudIndex:
             self._legacy_ids, self._legacy_prints = None, []
         return changed
 
+    def entry(self, track_id: str) -> dict[str, Any] | None:
+        """What the index keeps of a track (title, uploader, length), if any."""
+        with self._lock:
+            entry = self._data.get(track_id)
+            return dict(entry) if entry is not None else None
+
     def webpage_url(self, track_id: str) -> str:
         with self._lock:
             entry = self._data.get(track_id) or {}
         return str(entry.get("webpage_url") or "")
+
+    def original(self, track_id: str) -> dict[str, Any] | None:
+        """The cached original-artist search of a reuploaded track."""
+        with self._lock:
+            entry = self._originals.get(track_id)
+            return dict(entry) if entry is not None else None
+
+    def set_original(self, track_id: str, data: dict[str, Any]) -> None:
+        if not track_id:
+            return
+        with self._lock:
+            self._originals[track_id] = dict(data)
+            self._dirty = True
 
     def remove(self, track_id: str) -> None:
         with self._lock:
@@ -221,7 +252,10 @@ class SoundCloudIndex:
     def _save_locked(self) -> None:
         tmp = self.path.with_name(self.path.name + ".tmp")
         try:
-            tmp.write_text(json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")
+            payload: dict[str, Any] = dict(self._data)
+            if self._originals:
+                payload[ORIGINALS_KEY] = self._originals
+            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             tmp.replace(self.path)
             self._dirty = False
             self._last_save = time.monotonic()

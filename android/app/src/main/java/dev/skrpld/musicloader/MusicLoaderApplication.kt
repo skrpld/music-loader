@@ -11,6 +11,7 @@ import dev.skrpld.musicloader.data.ServerRepository
 import dev.skrpld.musicloader.data.SettingsStore
 import dev.skrpld.musicloader.engine.LocalEngine
 import dev.skrpld.musicloader.ui.MainViewModel
+import dev.skrpld.musicloader.ui.artists.ArtistsViewModel
 import dev.skrpld.musicloader.ui.download.DownloadViewModel
 import dev.skrpld.musicloader.ui.jobs.JobsViewModel
 import dev.skrpld.musicloader.ui.settings.SettingsViewModel
@@ -45,5 +46,6 @@ class AppContainer(context: Context) {
         initializer { DownloadViewModel(repository, settings) }
         initializer { JobsViewModel(repository) }
         initializer { SettingsViewModel(repository, settings, localEngine) }
+        initializer { ArtistsViewModel(repository) }
     }
 }

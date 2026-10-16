@@ -35,6 +35,14 @@ process list; prefer the environment variables.
   private SoundCloud tokens, client ids, user tokens, passwords and
   `Authorization` values, and never records the Spotify credentials, so it can
   be attached to an issue.
+- Account checks (SoundCloud accounts with a candidate artist name, and
+  the originals of reuploaded tracks) send song titles and artist names to
+  Spotify (through spotDL), Deezer's public search (`api.deezer.com`, no
+  account or key) and SoundCloud's track search - nothing else about the
+  library. Search text loses links, `:`, `|`, slashes and leading dashes
+  before it reaches spotDL, so it cannot name a file, URL or option; an account without a candidate causes no lookups.
+- Account ids in `/api/v1/artists/<id>/...` must be numeric, and artist names
+  set by the user are limited to 200 characters.
 - All child output is decoded as UTF-8, and remote text is escaped before it
   reaches the terminal UI.
 

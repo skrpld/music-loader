@@ -1,5 +1,6 @@
 """Command-line entry point: argument parsing and the main link-processing loop."""
 import argparse
+import json
 import os
 import shlex
 import sys
@@ -11,9 +12,24 @@ from typing import Any
 
 from rich.console import Console
 from rich.markup import escape
+from rich.table import Table
 
 from . import __version__, debuglog
+from .accounts import (
+    ACTIONS,
+    STATUS_CONFIRMED,
+    STATUS_NICK,
+    STATUS_NOT_CHECKED,
+    STATUS_REUPLOADER,
+    STATUS_SUGGESTION,
+    AccountBook,
+    AccountError,
+    apply_action,
+    sorted_accounts,
+)
+from .artists import ArtistRegistry
 from .config import (
+    ARTISTS_FILENAME,
     DEFAULT_FILENAME_TEMPLATE,
     FEAT_BOTH,
     FEAT_MODES,
@@ -87,7 +103,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         description="Downloads music with metadata from Spotify and SoundCloud, "
                      "fetches verified lyrics, and prepares the library for Symfonium.",
         epilog="Server mode for the Android app: music-loader serve -o <Music folder> "
-               "(see music-loader serve --help).",
+               "(see music-loader serve --help). SoundCloud accounts and their artist names: "
+               "music-loader artists -o <Music folder> (see music-loader artists --help).",
     )
     parser.add_argument("--version", action="version", version=f"music-loader {__version__}")
     parser.add_argument(
@@ -490,6 +507,17 @@ def print_summary(console: Console, dashboard: Dashboard) -> None:
         f"[dim]{stats.lyrics_skipped} skipped[/dim]"
     )
 
+    notes = dashboard.artist_notes
+    if notes["alias"]:
+        console.print(f"Artists:    [green]accounts named after their artist:[/green] "
+                      f"{escape(', '.join(notes['alias']))}")
+    if notes["suggestion"]:
+        console.print(f"            [yellow]suggested names, check `music-loader artists`:[/yellow] "
+                      f"{escape(', '.join(notes['suggestion']))}")
+    if notes["undetermined"]:
+        console.print(f"            [yellow]reuploads whose artist could not be determined:[/yellow] "
+                      f"{escape(', '.join(notes['undetermined']))}")
+
     if dashboard.runlog is not None and dashboard.runlog.count:
         console.print(
             f"\n[yellow]{dashboard.runlog.count} failed operation(s) logged to:[/yellow] "
@@ -503,11 +531,88 @@ def print_summary(console: Console, dashboard: Dashboard) -> None:
         )
 
 
+_STATUS_LABELS = {
+    STATUS_CONFIRMED: "✅ confirmed",
+    STATUS_SUGGESTION: "💡 suggestion",
+    STATUS_REUPLOADER: "🔁 reupload account",
+    STATUS_NOT_CHECKED: "⏳ not checked",
+    STATUS_NICK: "nick as it is",
+}
+
+
+def parse_artists_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="music-loader artists",
+        description="SoundCloud accounts and the artist names they are written with. Without an "
+                    "action: the list. set, keep, reuploader and accept lock the account, so no run "
+                    "changes it again (unlock gives it back to the automatic check). A change applies to files "
+                    "downloaded from now on; --recheck applies it to the files already there.",
+        epilog="ACCOUNT is the account's id, its profile link (soundcloud.com/name) or its handle.",
+    )
+    parser.add_argument("-o", "--output", required=True, help="The Music folder.")
+    parser.add_argument("action", nargs="?", default="list", choices=("list",) + ACTIONS,
+                        help="set ACCOUNT NAME: write the account as NAME; keep ACCOUNT: keep the "
+                             "account's own name; reuploader ACCOUNT: a reupload account (each track "
+                             "gets the original's artist); accept/reject ACCOUNT: the suggested name "
+                             "(reject hides it for good); unlock ACCOUNT.")
+    parser.add_argument("account", nargs="?", help="The account (not for list).")
+    parser.add_argument("name", nargs="*", help="The artist name (set only).")
+    parser.add_argument("--json", action="store_true", help="The list as JSON.")
+    return parser.parse_args(argv)
+
+
+def artists_main(argv: list[str], console: Console | None = None) -> int:
+    console = console or Console()
+    args = parse_artists_args(argv)
+    config = AppConfig.from_output_dir(Path(args.output))
+    registry = ArtistRegistry(config.music_dir / ARTISTS_FILENAME)
+    book = AccountBook(registry)
+    if args.action == "list":
+        accounts = sorted_accounts(book.all())
+        if args.json:
+            print(json.dumps([item.public() for item in accounts], ensure_ascii=False, indent=1))
+            return 0
+        if not accounts:
+            console.print("No SoundCloud accounts yet: they are listed once a job has downloaded "
+                          "one of their tracks.")
+            return 0
+        table = Table(show_header=True, header_style="bold")
+        for column in ("Account", "Profile", "State", "Written as", "Checked"):
+            table.add_column(column)
+        for item in accounts:
+            state = _STATUS_LABELS.get(item.status, item.status) + (" 🔒" if item.locked else "")
+            written = item.alias or (f"{item.suggestion}?" if item.suggestion else item.handle)
+            table.add_row(escape(item.handle or item.id), escape(item.url), state, escape(written or ""),
+                          item.checked_at or "")
+        console.print(table)
+        return 0
+    if not args.account:
+        console.print(f"[red]'{args.action}' needs an account.[/red]")
+        return 2
+    name = " ".join(args.name).strip() or None
+    if args.action != "set" and name:
+        console.print(f"[red]'{args.action}' takes no name.[/red]")
+        return 2
+    try:
+        account = apply_action(book, args.action, args.account, name)
+    except AccountError as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]")
+        return 1
+    registry.flush()
+    written = account.alias or account.suggestion or account.handle
+    console.print(f"{escape(account.name)}: {_STATUS_LABELS.get(account.status, account.status)}"
+                  f"{' 🔒' if account.locked else ''}, written as {escape(written or '')}. "
+                  "Files already downloaded follow with --recheck.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(argv if argv is not None else sys.argv[1:])
     if argv[:1] == ["serve"]:
         from .server import main as serve_main
         return serve_main(argv[1:])
+    if argv[:1] == ["artists"]:
+        return artists_main(argv[1:])
 
     console = Console()
     args = parse_args(argv)

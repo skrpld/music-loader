@@ -16,6 +16,8 @@ Events:
                                                     (resolved links first, then finished links)
     {"type": "stats", "stats": {...Stats fields...}}
     {"type": "log", "level": "info" | "error", "source": "Spotify" | null, "text": "..."}
+    {"type": "artists", "kind": "alias" | "suggestion" | "undetermined", "text": "..."}
+                                                    (an artist decision for the job summary)
     {"type": "file", "slot": 0, "visible": true, "label": "...", "percent": 42.0,
      "speed": "...", "eta": "..."}
     {"type": "finished", "status": "completed" | "cancelled" | "failed", "message": "..."}
@@ -100,6 +102,10 @@ class EventDashboard:
             return
         self.emit({"type": "failure", "service": kind, "category": category.value,
                    "url": url, "title": redact_secrets(title)[:300]})
+
+    def record_artists(self, kind: str, text: str) -> None:
+        debuglog.event("run", "artists", kind=kind, text=text)
+        self.emit({"type": "artists", "kind": kind, "text": redact_secrets(text)[:300]})
 
     def record_lyrics(self, found: bool) -> None:
         self._bump("lyrics_ok" if found else "lyrics_fail", 1)
