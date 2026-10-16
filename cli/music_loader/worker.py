@@ -24,6 +24,11 @@ Job spec:
 
 "recheck": true (older servers) is read as "existing": "all". Spotify
 credentials are read from the environment, as in the CLI.
+
+A library check (check.py) is the spec with "type": "check", no links and
+"rules": [...] (default: every rule), "fix": false; the lyrics, SoundCloud
+formatting and worker options above apply to its fix. Its report is the
+"check" event.
 """
 from __future__ import annotations
 
@@ -95,6 +100,8 @@ def build_config(spec: dict[str, Any]) -> AppConfig:
 
 
 def run(spec: dict[str, Any], events: EventDashboard) -> int:
+    if spec.get("type") == "check":
+        return run_check(spec, events)
     # Imported here: cli pulls in every pipeline module, and a broken
     # install should still be reported as an event, not a bare traceback.
     from .cli import process_links
@@ -144,6 +151,37 @@ def run(spec: dict[str, Any], events: EventDashboard) -> int:
         return 130
     finally:
         debuglog.deactivate()
+    events.emit({"type": "finished", "status": "completed", "message": None})
+    return 0
+
+
+def run_check(spec: dict[str, Any], events: EventDashboard) -> int:
+    """A library check job (check.py); cancelled like a download job."""
+    from . import check
+
+    try:
+        rules = check.parse_rules(spec["rules"]) if "rules" in spec else check.RULES
+    except ValueError as exc:
+        events.emit({"type": "finished", "status": "failed", "message": f"Bad rules: {exc}"})
+        return 1
+    config = build_config(spec)
+    if not config.music_dir.is_dir():
+        events.emit({"type": "finished", "status": "failed",
+                     "message": f"The library folder '{config.music_dir}' does not exist"})
+        return 1
+    do_fix = spec.get("fix") is True
+    if do_fix:
+        try:
+            events.runlog = RunLog(config.music_dir / LOGS_DIRNAME)
+            events.emit({"type": "runlog", "path": str(events.runlog.path)})
+        except OSError as exc:
+            events.log(f"[Server] Could not create the failure log: {exc}")
+    try:
+        check.run(config, rules, do_fix, events)
+    except KeyboardInterrupt:
+        events.finish_file(None)
+        events.emit({"type": "finished", "status": "cancelled", "message": None})
+        return 130
     events.emit({"type": "finished", "status": "completed", "message": None})
     return 0
 

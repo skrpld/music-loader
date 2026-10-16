@@ -210,13 +210,15 @@ def write_tags(path: Path, tags: TrackTags, cover: bytes | None = None) -> None:
 
 
 def read_tags(path: Path, is_known: Callable[[str], bool] | None = None) -> dict:
-    """The few fields the library checks need; empty values when unreadable.
+    """The few fields the library checks need; empty values (and `readable`
+    False) when the file has no readable ID3 tag.
 
     `is_known` (for example `ArtistRegistry.is_known`) keeps names that
     contain the separator, like "AC/DC", in one piece."""
     result = {
         "title": "", "artists": [], "album": "", "album_artist": "",
         "url": "", "soundcloud_id": "", "spotify_id": "", "format": 0, "has_lyrics": False,
+        "has_cover": False, "readable": False,
     }
     if not MUTAGEN_AVAILABLE:
         return result
@@ -247,6 +249,8 @@ def read_tags(path: Path, is_known: Callable[[str], bool] | None = None) -> dict
     result["has_lyrics"] = any(
         str(getattr(frame, "text", "")).strip() for frame in id3.getall("USLT")
     ) or bool(id3.getall("SYLT"))
+    result["has_cover"] = any(getattr(frame, "data", b"") for frame in id3.getall("APIC"))
+    result["readable"] = True
     return result
 
 

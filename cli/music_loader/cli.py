@@ -12,6 +12,7 @@ from typing import Any
 
 from rich.console import Console
 from rich.markup import escape
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 from rich.table import Table
 
 from . import __version__, debuglog
@@ -28,6 +29,10 @@ from .accounts import (
     sorted_accounts,
 )
 from .artists import ArtistRegistry
+from .check import RULES as CHECK_RULES
+from .check import Report as CheckReport
+from .check import parse_rules, select_rules
+from .check import run as run_check
 from .config import (
     ARTISTS_FILENAME,
     DEFAULT_FILENAME_TEMPLATE,
@@ -100,28 +105,7 @@ def _positive_int(value: str) -> int:
     return number
 
 
-def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        prog="music-loader",
-        description="Downloads music with metadata from Spotify and SoundCloud, "
-                     "fetches verified lyrics, and prepares the library for Symfonium.",
-        epilog="Server mode for the Android app: music-loader serve -o <Music folder> "
-               "(see music-loader serve --help). SoundCloud accounts and their artist names: "
-               "music-loader artists -o <Music folder> (see music-loader artists --help).",
-    )
-    parser.add_argument("--version", action="version", version=f"music-loader {__version__}")
-    parser.add_argument(
-        "source",
-        nargs="*",
-        help="Spotify/SoundCloud link(s), or a path to a .txt file with one link per line. "
-             "If omitted, you will be prompted interactively.",
-    )
-    parser.add_argument(
-        "-o", "--output",
-        default=None,
-        help="Target Music folder. If omitted, you will be prompted interactively.",
-    )
-
+def _lyrics_options(parser: argparse.ArgumentParser) -> None:
     lyrics = parser.add_argument_group("lyrics")
     lyrics.add_argument(
         "--no-lyrics",
@@ -176,41 +160,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Number of parallel lyrics workers (default: 2).",
     )
 
-    library = parser.add_argument_group("library")
-    library.add_argument(
-        "--existing",
-        choices=EXISTING_MODES,
-        default=None,
-        help="Tracks that are already downloaded: 'keep' (default) leaves them as they are and only "
-             "binds their id to the file; 'outdated' rewrites the ones written in an older format or "
-             "with an artist that changed since; 'all' rewrites every one. A rewrite applies the "
-             "current rules: tags, folder and file name, broken/preview files, lyrics.",
-    )
-    library.add_argument(
-        "--recheck",
-        action="store_true",
-        help="The same as --existing all.",
-    )
 
-    soundcloud = parser.add_argument_group("SoundCloud")
-    soundcloud.add_argument(
-        "--soundcloud-reposts",
-        action="store_true",
-        help="For a profile link, also download the profile's reposts.",
-    )
-    soundcloud.add_argument(
-        "--soundcloud-likes",
-        action="store_true",
-        help="For a profile link, also download the profile's likes.",
-    )
-    soundcloud.add_argument(
-        "--soundcloud-fallback",
-        action="store_true",
-        help="For a track SoundCloud does not give out (DRM-protected, preview only, blocked), "
-             "look for the same track on YouTube Music and take it from there when artist, "
-             "title, version and length all match. It is another recording or master, so it is "
-             "off by default; the file's tags say where it came from.",
-    )
+def _soundcloud_worker_options(soundcloud) -> None:
     soundcloud.add_argument(
         "--soundcloud-download-workers",
         type=_positive_int,
@@ -225,6 +176,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Number of parallel SoundCloud conversion/tagging workers (default: 4).",
     )
 
+
+def _format_options(parser: argparse.ArgumentParser) -> None:
     formatting = parser.add_argument_group(
         "SoundCloud formatting",
         "How SoundCloud titles are written. --existing all applies a change to tracks already there.",
@@ -262,20 +215,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
              "file name rules and length limit apply.",
     )
 
-    diagnostics = parser.add_argument_group("diagnostics")
-    diagnostics.add_argument(
-        "--debug-log",
-        nargs="?",
-        const="",
-        default=None,
-        metavar="PATH",
-        help="Write a detailed debug log of the run: how every link was resolved, raw "
-             "SoundCloud metadata, title parsing, final tags/folder/file name, what spotDL "
-             "matched, every lyrics query and candidate with its verdict. Secrets are masked. "
-             f"Without PATH (or with a folder) the file goes to {LOGS_DIRNAME}/debug-<time>.jsonl "
-             "in the Music folder. Off by default.",
-    )
 
+def _spotify_options(parser: argparse.ArgumentParser) -> None:
     spotify = parser.add_argument_group("Spotify")
     spotify.add_argument(
         "--spotify-threads",
@@ -297,6 +238,87 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
              f"environment variable: command-line arguments are visible to other users "
              f"of the machine.",
     )
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="music-loader",
+        description="Downloads music with metadata from Spotify and SoundCloud, "
+                     "fetches verified lyrics, and prepares the library for Symfonium.",
+        epilog="Server mode for the Android app: music-loader serve -o <Music folder> "
+               "(see music-loader serve --help). SoundCloud accounts and their artist names: "
+               "music-loader artists -o <Music folder> (see music-loader artists --help). A check of "
+               "the whole library: music-loader check -o <Music folder> (see music-loader check --help).",
+    )
+    parser.add_argument("--version", action="version", version=f"music-loader {__version__}")
+    parser.add_argument(
+        "source",
+        nargs="*",
+        help="Spotify/SoundCloud link(s), or a path to a .txt file with one link per line. "
+             "If omitted, you will be prompted interactively.",
+    )
+    parser.add_argument(
+        "-o", "--output",
+        default=None,
+        help="Target Music folder. If omitted, you will be prompted interactively.",
+    )
+
+    _lyrics_options(parser)
+
+    library = parser.add_argument_group("library")
+    library.add_argument(
+        "--existing",
+        choices=EXISTING_MODES,
+        default=None,
+        help="Tracks that are already downloaded: 'keep' (default) leaves them as they are and only "
+             "binds their id to the file; 'outdated' rewrites the ones written in an older format or "
+             "with an artist that changed since; 'all' rewrites every one. A rewrite applies the "
+             "current rules: tags, folder and file name, broken/preview files, lyrics.",
+    )
+    library.add_argument(
+        "--recheck",
+        action="store_true",
+        help="The same as --existing all.",
+    )
+
+    soundcloud = parser.add_argument_group("SoundCloud")
+    soundcloud.add_argument(
+        "--soundcloud-reposts",
+        action="store_true",
+        help="For a profile link, also download the profile's reposts.",
+    )
+    soundcloud.add_argument(
+        "--soundcloud-likes",
+        action="store_true",
+        help="For a profile link, also download the profile's likes.",
+    )
+    soundcloud.add_argument(
+        "--soundcloud-fallback",
+        action="store_true",
+        help="For a track SoundCloud does not give out (DRM-protected, preview only, blocked), "
+             "look for the same track on YouTube Music and take it from there when artist, "
+             "title, version and length all match. It is another recording or master, so it is "
+             "off by default; the file's tags say where it came from.",
+    )
+    _soundcloud_worker_options(soundcloud)
+
+    _format_options(parser)
+
+    diagnostics = parser.add_argument_group("diagnostics")
+    diagnostics.add_argument(
+        "--debug-log",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="PATH",
+        help="Write a detailed debug log of the run: how every link was resolved, raw "
+             "SoundCloud metadata, title parsing, final tags/folder/file name, what spotDL "
+             "matched, every lyrics query and candidate with its verdict. Secrets are masked. "
+             f"Without PATH (or with a folder) the file goes to {LOGS_DIRNAME}/debug-<time>.jsonl "
+             "in the Music folder. Off by default.",
+    )
+
+    _spotify_options(parser)
     args = parser.parse_args(argv)
     if args.recheck:
         if args.existing not in (None, EXISTING_ALL):
@@ -386,6 +408,26 @@ def resolve_spotify_credentials(args: argparse.Namespace) -> tuple[str | None, s
     if not client_id or not client_secret:
         return None, None
     return client_id, client_secret
+
+
+def build_config(args: argparse.Namespace, output: str) -> AppConfig:
+    """The run's settings from the options of `music-loader` or `music-loader
+    check` (which has no download-only options)."""
+    config = AppConfig.from_output_dir(Path(output))
+    config.soundcloud_postprocess_workers = args.soundcloud_workers
+    config.soundcloud_download_workers = args.soundcloud_download_workers
+    config.lyrics_workers = args.lyrics_workers
+    config.spotify_threads = args.spotify_threads
+    config.spotify_client_id, config.spotify_client_secret = resolve_spotify_credentials(args)
+    config.lyrics_enabled = not args.no_lyrics
+    config.lyrics_mode = LYRICS_MODE_LOOSE if args.lyrics_loose else LYRICS_MODE_STRICT
+    config.lyrics_settings = LyricsSettings.from_args(args)
+    config.existing = getattr(args, "existing", EXISTING_KEEP)
+    config.soundcloud_reposts = getattr(args, "soundcloud_reposts", False)
+    config.soundcloud_likes = getattr(args, "soundcloud_likes", False)
+    config.soundcloud_fallback = getattr(args, "soundcloud_fallback", False)
+    config.soundcloud_format = SoundCloudFormat.from_args(args)
+    return config
 
 
 def process_links(links: list[Link], config: AppConfig, dashboard: Dashboard) -> None:
@@ -634,6 +676,178 @@ def artists_main(argv: list[str], console: Console | None = None) -> int:
     return 0
 
 
+def parse_check_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="music-loader check",
+        description="Checks every file of the library against a set of rules and lists what is wrong, "
+                    "grouped by problem. Nothing is changed without --fix.",
+        epilog="Rules: id (the file carries its SoundCloud or Spotify id), cover (an embedded cover), "
+               "lyrics (lyrics, or a search that found nothing), artist (written the way the artist "
+               "registry and the account decisions say now), format (written under the current rules), "
+               "duplicates (two files with the same id), available (the track still exists on its "
+               "platform; needs the network, cached for 7 days). The full list, with paths and links, "
+               f"goes to {LOGS_DIRNAME}/check-<time>.log in the Music folder.",
+    )
+    parser.add_argument(
+        "-o", "--output",
+        default=None,
+        help="The Music folder. If omitted, you will be prompted interactively.",
+    )
+    parser.add_argument(
+        "--fix",
+        action="store_true",
+        help="Fix what can be fixed automatically, then check again: write a missing id into a file "
+             "that is still recognised, rewrite tracks without a cover, with an outdated artist or "
+             "written by an older version (like --existing outdated: tags, cover, folder, file name), "
+             "search missing lyrics with the lyrics options below. Never deletes an audio file; "
+             "duplicates and removed tracks are only reported.",
+    )
+    parser.add_argument(
+        "--rules",
+        type=_checked(parse_rules, str),
+        default=None,
+        metavar="LIST",
+        help=f"Only these rules, comma-separated (default: all: {','.join(CHECK_RULES)}).",
+    )
+    parser.add_argument(
+        "--skip-rules",
+        type=_checked(parse_rules, str),
+        default=(),
+        metavar="LIST",
+        help="Leave these rules out, comma-separated.",
+    )
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="No network: leaves out the 'available' rule.",
+    )
+    _lyrics_options(parser)
+    _soundcloud_worker_options(parser.add_argument_group("SoundCloud", "Used by --fix."))
+    _format_options(parser)
+    _spotify_options(parser)
+    args = parser.parse_args(argv)
+    try:
+        args.rules = select_rules(args.rules, args.skip_rules, args.offline)
+    except ValueError as exc:
+        parser.error(str(exc))
+    return args
+
+
+class _CheckProgress:
+    """The progress of a check without --fix: one bar, nothing to download.
+    Has the few dashboard methods check.scan uses."""
+
+    def __init__(self, console: Console):
+        self.console = console
+        self.check_report: dict | None = None
+        self.progress = Progress(
+            SpinnerColumn(), TextColumn("{task.description}", markup=False), BarColumn(), TaskProgressColumn(),
+            console=console, transient=True,
+        )
+        self._task = self.progress.add_task("", total=100, visible=False)
+
+    def __enter__(self) -> "_CheckProgress":
+        self.progress.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.progress.stop()
+
+    def log(self, message: str) -> None:
+        self.console.print(message, style="dim", markup=False, highlight=False)
+
+    def log_error(self, source: str, message: str) -> None:
+        self.console.print(f"[{source}][!] {message}", style="red", markup=False, highlight=False)
+
+    def start_file(self, label: str, slot: int = 0) -> None:
+        self.progress.update(self._task, description=label, completed=0, visible=True)
+
+    def update_file(self, percent: float | None = None, label: str | None = None,
+                    speed: str | None = None, eta: str | None = None, slot: int = 0) -> None:
+        fields: dict[str, Any] = {}
+        if label is not None:
+            fields["description"] = label
+        if percent is not None:
+            fields["completed"] = percent
+        self.progress.update(self._task, visible=True, **fields)
+
+    def finish_file(self, slot: int | None = 0) -> None:
+        self.progress.update(self._task, visible=False)
+
+    def record_check(self, report: dict) -> None:
+        self.check_report = report
+
+
+_CHECK_SHOWN = 10
+
+
+def print_check_report(console: Console, report: CheckReport) -> None:
+    """The report of a check: a table of the problems, the first tracks of
+    each, where the full list is, and what --fix can do."""
+    console.print()
+    console.rule("Library check")
+    console.print(f"{report.tracks} file(s) checked in {escape(str(report.music_dir))}; "
+                  f"rules: {', '.join(report.rules)}", highlight=False)
+    if report.unchecked:
+        console.print(f"[yellow]{report.unchecked} track(s) could not be checked online this time[/yellow]")
+    groups = report.groups()
+    if groups:
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Problem")
+        table.add_column("Tracks", justify="right")
+        table.add_column("--fix can fix", justify="right")
+        for kind, items in groups:
+            fixable = sum(item.fixable for item in items)
+            table.add_row(escape(kind.label), str(len(items)), str(fixable) if fixable else "-")
+        console.print(table)
+        for kind, items in groups:
+            console.print(f"\n[bold]{escape(kind.label)} — {len(items)}[/bold]", highlight=False)
+            for item in items[:_CHECK_SHOWN]:
+                console.print(f"  {escape(item.track.name)}", highlight=False)
+            if len(items) > _CHECK_SHOWN:
+                console.print(f"  [dim]and {len(items) - _CHECK_SHOWN} more[/dim]")
+    if report.log_path is not None:
+        console.print(f"\nFull list with paths and links: {escape(str(report.log_path))}", highlight=False)
+    style = "green" if not report.count else "yellow"
+    console.print(f"[{style}]{escape(report.fix_note())}[/{style}]")
+
+
+def check_main(argv: list[str], console: Console | None = None) -> int:
+    console = console or Console()
+    args = parse_check_args(argv)
+    if args.fix and not check_dependencies(console):
+        return 1
+    try:
+        output = resolve_output(args.output, console)
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[yellow]Interrupted by user.[/yellow]")
+        return 130
+    config = build_config(args, output)
+    if not config.music_dir.is_dir():
+        console.print(f"[red]'{escape(str(config.music_dir))}' is not a folder.[/red]")
+        return 1
+    runlog = None
+    if args.fix:
+        try:
+            runlog = RunLog(config.music_dir / LOGS_DIRNAME)
+        except OSError as exc:
+            console.print(f"[yellow]Could not create the failure log: {escape(str(exc))}[/yellow]")
+        view: Any = Dashboard(console, source_label="Library check --fix", output_dir=str(config.music_dir),
+                              runlog=runlog)
+    else:
+        view = _CheckProgress(console)
+    try:
+        with view:
+            report = run_check(config, args.rules, args.fix, view)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted by user.[/yellow]")
+        return 130
+    print_check_report(console, report)
+    if runlog is not None and runlog.count:
+        console.print(f"[yellow]{runlog.count} failed operation(s) logged to:[/yellow] {escape(str(runlog.path))}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(argv if argv is not None else sys.argv[1:])
     if argv[:1] == ["serve"]:
@@ -641,6 +855,8 @@ def main(argv: list[str] | None = None) -> int:
         return serve_main(argv[1:])
     if argv[:1] == ["artists"]:
         return artists_main(argv[1:])
+    if argv[:1] == ["check"]:
+        return check_main(argv[1:])
 
     console = Console()
     args = parse_args(argv)
@@ -666,20 +882,7 @@ def main(argv: list[str] | None = None) -> int:
         console.print("\n[yellow]Interrupted by user.[/yellow]")
         return 130
 
-    config = AppConfig.from_output_dir(Path(output))
-    config.soundcloud_postprocess_workers = args.soundcloud_workers
-    config.soundcloud_download_workers = args.soundcloud_download_workers
-    config.lyrics_workers = args.lyrics_workers
-    config.spotify_threads = args.spotify_threads
-    config.spotify_client_id, config.spotify_client_secret = resolve_spotify_credentials(args)
-    config.lyrics_enabled = not args.no_lyrics
-    config.lyrics_mode = LYRICS_MODE_LOOSE if args.lyrics_loose else LYRICS_MODE_STRICT
-    config.lyrics_settings = LyricsSettings.from_args(args)
-    config.existing = args.existing
-    config.soundcloud_reposts = args.soundcloud_reposts
-    config.soundcloud_likes = args.soundcloud_likes
-    config.soundcloud_fallback = args.soundcloud_fallback
-    config.soundcloud_format = SoundCloudFormat.from_args(args)
+    config = build_config(args, output)
     try:
         config.ensure_dirs()
     except OSError as exc:

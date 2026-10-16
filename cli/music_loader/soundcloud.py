@@ -1163,6 +1163,20 @@ class SoundCloudBatch:
             )
         return plan
 
+    def plan_tracks(self, tracks: list[dict[str, Any]]) -> SoundCloudPlan:
+        """A resolved plan of tracks already known by id (the library check's
+        --fix): `tracks` are info dicts with at least "id" and "webpage_url".
+        Nothing is listed; the pipeline fetches each track's metadata itself."""
+        jobs = []
+        for info in tracks:
+            track_id = str(info.get("id") or "")
+            if _ID_RE.match(track_id) and info.get("webpage_url"):
+                jobs.append(TrackJob(info={**info, "id": track_id}))
+        first = jobs[0].url if jobs else ""
+        plan = SoundCloudPlan(Link("soundcloud", first, "track"), jobs=_merge([jobs]))
+        plan.resolved = self._context() is not None
+        return plan
+
     @staticmethod
     def track_count(plans: list[SoundCloudPlan]) -> int:
         """Tracks the job will process: every track once, however many links
@@ -1381,6 +1395,16 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
             ok, actual = _duration_ok(existing, info.get("duration"))
             if ok:
                 hand_over(job, "retag", existing, info)
+                return
+            if config.keep_files:
+                # The library check's --fix never replaces a file.
+                ctx.fail(job)
+                dashboard.record_track("soundcloud", "failed")
+                dashboard.log_error(
+                    "SoundCloud",
+                    f"'{existing.name}' is {actual or 0:.0f}s instead of {float(info.get('duration') or 0):.0f}s; "
+                    "left as it is (its link with --existing all, 'Update all', downloads it again)",
+                )
                 return
             dashboard.log(
                 f"[SoundCloud] Update: '{existing.name}' is {actual or 0:.0f}s instead of "

@@ -72,6 +72,11 @@ class SoundCloudIndex:
         except (OSError, ValueError):
             return str(path)
 
+    def ids_by_path(self) -> dict[Path, str]:
+        """Every file the index knows, with its track id (the library check)."""
+        with self._lock:
+            return {self._resolve(str(entry.get("path", ""))): track_id for track_id, entry in self._data.items()}
+
     def known_paths(self) -> set[Path]:
         with self._lock:
             return {self._resolve(str(entry.get("path", ""))) for entry in self._data.values()}

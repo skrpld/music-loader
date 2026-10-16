@@ -448,7 +448,19 @@ class SpotifyBatch:
         path spotDL gives each. Raises KeyboardInterrupt when the job is being
         cancelled; every other problem fails only this link."""
         plan = SpotifyPlan(link)
-        url = link.url
+        self._resolve([link.url], plan, slot)
+        return plan
+
+    def resolve_urls(self, urls: list[str], slot: int = 0) -> SpotifyPlan:
+        """One `spotdl save` of several track links at once (the library
+        check's --fix); the plan's link is the first of them."""
+        plan = SpotifyPlan(Link("spotify", urls[0] if urls else "", "track"))
+        if urls:
+            self._resolve(urls, plan, slot)
+        return plan
+
+    def _resolve(self, urls: list[str], plan: SpotifyPlan, slot: int) -> None:
+        url = urls[0] if len(urls) == 1 else f"{len(urls)} tracks"
         dashboard = self.dashboard
         dashboard.log(f"[Spotify] Resolving: {url}")
         dashboard.start_file(label="Spotify: preparing...", slot=slot)
@@ -459,15 +471,15 @@ class SpotifyBatch:
             tool = self._setup()
             if tool is None:
                 if self._unreachable:
-                    dashboard.record_failure("spotify", FailureCategory.NETWORK, url)
-                return plan
+                    dashboard.record_failure("spotify", FailureCategory.NETWORK, urls[0])
+                return
             dashboard.update_file(label=f"Spotify: resolving {url[:60]}", slot=slot)
             work_dir = Path(tempfile.mkdtemp(prefix="music-loader-spotify-"))
             save_file = work_dir / "query.spotdl"
             m3u_file = work_dir / "paths.m3u8"
             run = _Run(dashboard, self.config.music_dir, count_tracks=False, slot=slot)
             code = run_streamed(
-                tool.base + ["save", url, "--save-file", str(save_file), "--m3u", str(m3u_file)] + tool.common,
+                tool.base + ["save", *urls, "--save-file", str(save_file), "--m3u", str(m3u_file)] + tool.common,
                 run.on_line, on_idle=run.on_idle, timeout=SUBPROCESS_TIMEOUT_SECONDS, env=tool.env,
                 should_abort=self.abort.is_set,
             )
@@ -482,13 +494,13 @@ class SpotifyBatch:
                 category = (FailureCategory.RATE_LIMITED if run.refused
                             else FailureCategory.NETWORK if code == -1
                             else failure_category(run.tail))
-                dashboard.record_failure("spotify", category, url)
-                return plan
+                dashboard.record_failure("spotify", category, urls[0])
+                return
             try:
                 raw = json.loads(save_file.read_text(encoding="utf-8"))
             except (OSError, ValueError) as exc:
                 dashboard.log_error("Spotify", f"Could not read spotdl's song list: {exc}")
-                return plan
+                return
             song_data = [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
             paths = _read_m3u(m3u_file)
             if len(paths) != len(song_data):
@@ -500,7 +512,7 @@ class SpotifyBatch:
             ]
             if not songs:
                 dashboard.log_error("Spotify", f"spotdl found no tracks for '{url}'")
-                return plan
+                return
             plan.songs = songs
             plan.resolved = True
             if debuglog.enabled():
@@ -509,7 +521,7 @@ class SpotifyBatch:
                     for song in songs
                 ])
             dashboard.log(f"[Spotify] Found {len(songs)} track(s) in {url}")
-            return plan
+            return
         finally:
             dashboard.finish_file(slot)
             if work_dir is not None:
@@ -793,7 +805,7 @@ def _to_rewrite(songs: list[_Song], existed: set[str], config: AppConfig,
 def _remove_duplicates(songs: list[_Song], rewrite: set[str], config: AppConfig, dashboard) -> None:
     """Copies of a rewritten Spotify track under other paths (an older
     layout, a renamed album) only clutter the library."""
-    if not rewrite:
+    if not rewrite or config.keep_files:
         return
     library = get_library(config.music_dir, [config.soundcloud_dir])
     for song in songs:
