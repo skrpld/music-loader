@@ -44,7 +44,8 @@ An explicit token must be at least 16 characters of letters, digits and
 
 - Jobs run one after another, each in its own worker process
   (`python -m music_loader.worker`).
-- Options per job: lyrics mode (strict / loose / off), `--recheck`,
+- Options per job: lyrics mode (strict / loose / off), `existing`
+  (tracks already in the library, below),
   SoundCloud reposts and likes, `soundcloud_fallback` (look for tracks
   SoundCloud does not give out on YouTube Music, off by default) and
   `auto_retry` (queue failed tracks again after a cooldown, off by
@@ -123,7 +124,7 @@ Queue request:
 ```json
 {
   "links": ["https://open.spotify.com/album/...", "https://soundcloud.com/..."],
-  "options": {"lyrics": "strict", "recheck": false, "soundcloud_reposts": false, "soundcloud_likes": false,
+  "options": {"lyrics": "strict", "existing": "keep", "soundcloud_reposts": false, "soundcloud_likes": false,
               "soundcloud_fallback": false, "auto_retry": false, "debug_log": false,
               "soundcloud_feat": "both", "soundcloud_keep_producers": false,
               "soundcloud_keep_versions": true, "soundcloud_strip_promo": true,
@@ -139,6 +140,19 @@ A job's `queue` is `{"completed", "total", "phase"}`: while `phase` is
 `downloading` and `completed` counts finished links. The track totals in
 `stats` (`*_tracks_total`) are set once every link is resolved, before the
 first download, and stay 0 until then.
+
+`existing` (feature `existing_tracks`) is the CLI's `--existing`
+([Existing tracks](../explanation/how-it-works.md#existing-tracks-keep-update-outdated-update-all)):
+`"keep"` (default) skips a track already in the library and only binds its id
+to the file, `"outdated"` rewrites it when it is outdated (an older format, a
+changed artist), `"all"` always rewrites it. The older `"recheck": true` means
+`"existing": "all"`; a job lists both (`recheck` is `true` exactly for
+`"all"`), so older clients show and repeat it correctly. `"recheck": true`
+together with another `existing` is refused with 400, and so is an unknown
+value. With `"keep"`, `stats` counts the outdated tracks the run kept in
+`spotify_tracks_outdated` and `soundcloud_tracks_outdated` (they are also in
+`*_tracks_skipped`); the app shows "N tracks are in an older format" on the
+job screen.
 
 In a job's `stats`, `soundcloud_tracks_unavailable` counts tracks SoundCloud does
 not give out (DRM, preview, blocked). They are skipped, not failures: a job
@@ -176,11 +190,13 @@ stops the wait. The timer is saved with the job history, so it survives a
 restart (see [History across restarts](#history-across-restarts)).
 
 `GET /api/v1/info` and every `state` event carry `features`
-(`["retry", "auto_retry", "debug_log", "soundcloud_format", "lyrics_settings", "artists"]`).
+(`["retry", "auto_retry", "debug_log", "soundcloud_format", "lyrics_settings", "artists", "existing_tracks"]`).
 An older server has no such list (or lacks an entry); the Android app then hides
 the retry actions, the debug log switch or Settings → Artists. A server without `soundcloud_format`
 ignores the formatting options and writes the default format; one without
-`lyrics_settings` ignores the lyrics settings and uses the defaults.
+`lyrics_settings` ignores the lyrics settings and uses the defaults; one without
+`existing_tracks` only knows `recheck` (the app sends it for *Update all* and
+disables *Update outdated*).
 
 ### Artists
 

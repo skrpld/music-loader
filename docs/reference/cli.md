@@ -23,9 +23,10 @@ music-loader artists -o <MUSIC_FOLDER> [--json] [ACTION ACCOUNT [NAME]]
 | `--lyrics-synced-only` | off | Save synced lyrics only; by default plain text is embedded when no synced lyrics match |
 | `--lyrics-length-tolerance SECONDS` | `10` | Loose mode: the largest length difference (2–60 s) for plain text. Synced lyrics always need ±2 s |
 | `--lyrics-original-for-versions` | off | Strict mode: a sped-up, slowed, 8D or bass-boosted upload may take the original's plain lyrics, never its timestamps (loose mode always allows it) |
-| `--lyrics-retry-days DAYS` | `7` | Search a track whose lyrics were not found again after this many days; `0` = on every run. `--recheck` always searches again |
+| `--lyrics-retry-days DAYS` | `7` | Search a track whose lyrics were not found again after this many days; `0` = on every run. A rewritten track (`--existing`) is always searched again |
 | `--lyrics-workers N` | `2` | Parallel lyrics lookups |
-| `--recheck` | off | Check already downloaded tracks against the current rules again: tags, folder and file name, broken/preview files, lyrics |
+| `--existing MODE` | `keep` | Tracks already in the library: `keep` leaves them as they are and only binds their id to the file; `outdated` rewrites the ones written in an older format or with an artist that changed since; `all` rewrites every one. A rewrite applies the current rules: tags, folder and file name, broken/preview files, lyrics. With `keep` the summary counts the outdated tracks of the run. See [Existing tracks](../explanation/how-it-works.md#existing-tracks-keep-update-outdated-update-all) |
+| `--recheck` | off | The same as `--existing all` (cannot be combined with another `--existing`) |
 | `--soundcloud-reposts` | off | Profile link: also download the profile's reposts |
 | `--soundcloud-likes` | off | Profile link: also download the profile's likes |
 | `--soundcloud-fallback` | off | For a track SoundCloud does not give out (DRM, preview only, blocked), take the same track from YouTube Music when artist, title, version and length match; the tags say where it came from |
@@ -115,7 +116,7 @@ music-loader artists -o ~/Music reuploader slmndk       # each track gets the or
 handle. Every action but `reject` and `unlock` locks the account: no run changes it again. The list
 shows each account's state (confirmed, suggestion, reupload account, not checked, account name), the
 name its tracks get, where that came from and when it was checked; suggestions come first. A change
-applies to files downloaded from then on; `--recheck` applies it to the files already there.
+applies to files downloaded from then on; `--existing outdated` applies it to the files already there.
 
 ## Debug log
 

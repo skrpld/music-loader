@@ -17,7 +17,8 @@ is ready for a player such as [Symfonium](https://symfonium.app/).
   SoundCloud credits hidden in titles (`A + B - song [prod. X]`, `ft.`, `W`) become proper tags;
   one artist is spelled the same way across the whole library.
 - **Checks**: Go+ previews, cut-off and interrupted files are rejected; duplicates and moved files
-  are detected; `--recheck` brings old downloads up to the current rules.
+  are detected; every file carries its track id and format version, and `--existing outdated`
+  brings old downloads up to the current rules.
 - **Three front-ends**: a terminal tool with a live dashboard, an Android app that downloads on the
   phone itself (the same Python code runs inside it), and a server mode that lets the app queue
   downloads on the machine holding the library.

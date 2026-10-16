@@ -238,7 +238,9 @@ the server's [`/api/v1/artists`](../reference/server.md#artists) and the app's
 Settings → Artists. They live in `.music-loader-artists.json` under the key
 `_accounts` (older versions keep it untouched); writes merge with the file,
 so a change made while a job runs is not lost. A change applies to files
-downloaded from then on; `--recheck` applies it to the files already there.
+downloaded from then on; `--existing outdated` applies it to the files already
+there (a changed decision makes the account's files outdated, see
+[Existing tracks](#existing-tracks-keep-update-outdated-update-all)).
 
 ### Formatting settings
 
@@ -265,10 +267,12 @@ tracks; `{track:02}` sets the padding), `{title}` (exactly once), `{artist}`
 (main artists), `{album}` and `{album_artist}`. No `/` or `\`: the folder
 layout is fixed.
 
-Settings apply to new downloads. `--recheck` (or *Recheck* in the app)
-brings tracks already in the library in line - tags, folder and file name,
-with `.sc_index.json`, the `.lrc` files and the playlists following the moved
-files.
+Settings apply to new downloads. `--existing all` (or *Existing tracks:
+Update all* in the app) brings tracks already in the library in line - tags,
+folder and file name, with `.sc_index.json`, the `.lrc` files and the
+playlists following the moved files. A changed setting does not make a file
+"outdated": that is the format version, which only changes with a new
+version of music-loader.
 
 ## Lyrics
 
@@ -347,7 +351,7 @@ Settings → Lyrics.
 spotDL's own lyrics (Genius at 55 % similarity plus an unverified `.lrc`
 search) are disabled; Spotify tracks go through the same verified lookup.
 
-## Checks and `--recheck`
+## Checks and existing tracks
 
 Every new file is checked before it counts as downloaded:
 
@@ -362,8 +366,71 @@ Every new file is checked before it counts as downloaded:
 - Spotify: every song is checked on disk after the run, so the counters show
   what really happened (spotdl exits with 0 even when tracks failed).
 
-`--recheck` applies the current rules to tracks that are already in the
-library - useful after updating music-loader:
+### Track ids and the format version
+
+Every file is bound to its track in hidden user-defined ID3 frames
+(`TXXX`), which players do not show; the file name and the visible tags do
+not depend on them:
+
+| Frame | Value |
+|---|---|
+| `TXXX:SOUNDCLOUD_ID` | the SoundCloud track id |
+| `TXXX:SPOTIFY_ID` | the Spotify track id, next to spotDL's `WOAS` URL |
+| `TXXX:MUSIC_LOADER_FORMAT` | the version of the rules the file was written with |
+
+The format version is one number, `FORMAT_VERSION` in
+[`config.py`](../../cli/music_loader/config.py), currently `1`. It goes up
+whenever what music-loader writes changes: tag rules, title formatting, the
+folder layout, file naming. Every file written or rewritten gets the current
+number; a file without the frame (older versions, other tools) is version
+`0`.
+
+A track already in the library is **outdated** when
+
+- its format version is lower than `FORMAT_VERSION`, or
+- one of its artists changed since it was written: the artist registry now
+  spells a name on the file differently (a better source arrived), or, for
+  SoundCloud, the decision for the uploader's account changed (an alias set
+  or confirmed in Artists, a reupload account). `.sc_index.json` keeps the
+  decision each file was written with (`account`); rewriting the file stores
+  the new one, which clears the mark.
+
+### Binding files without an id
+
+A file found without its id is bound to it: only the id frames are written
+into it (the ID3 version, every other tag, the file name and the folder stay
+as they are), and the index is updated, so the next run finds it by id
+instead of comparing tags again.
+
+- SoundCloud: a file of an older version is recognised by the uploader,
+  title and length it was tagged with (`.sc_index.json` misses it, or knows
+  it without the id in the file); it gets `TXXX:SOUNDCLOUD_ID`.
+- Spotify: a file without a Spotify URL (another tool, a copy that lost its
+  tags) is recognised when its artists include the song's main artist, its
+  title is the song's title and its length is within 2 s; it gets the `WOAS`
+  URL and `TXXX:SPOTIFY_ID`. A file that has the URL but not the id gets the
+  id. The scan of the library is cached in `.spotify_index.json`.
+
+### Existing tracks: keep, update outdated, update all
+
+| Value | Command line | Job option | What happens to a track already in the library |
+|---|---|---|---|
+| Keep (default) | `--existing keep` | `existing: "keep"` | skipped; only its id is bound |
+| Update outdated | `--existing outdated` | `existing: "outdated"` | rewritten when it is outdated, kept (and bound) otherwise |
+| Update all | `--existing all` | `existing: "all"` | always rewritten |
+
+`--recheck` is the same as `--existing all`, and the job option
+`recheck: true` is read as `existing: "all"`, so older scripts and clients
+keep working. In the app this is *Existing tracks* in the download options;
+like the old *Recheck* it applies to the next job only.
+
+With *Keep*, the end of a run says how many of the tracks it touched are
+outdated: "N tracks are in an older format; run with --existing outdated
+('Update outdated') to rewrite them" (CLI summary; `spotify_tracks_outdated`
+/ `soundcloud_tracks_outdated` in the server job's stats; the app's job
+screen). Tracks the run did not touch are not counted.
+
+A rewrite applies the current rules, the way `--recheck` always did:
 
 - SoundCloud: metadata is fetched again; tags, folder and file name are
   rewritten (files from older versions move into artist/album folders, with their
@@ -375,9 +442,16 @@ library - useful after updating music-loader:
 - Lyrics are searched again with the current mode (existing ones are
   replaced; the 7-day cooldown is ignored).
 
-Without `--recheck`, a Spotify track that exists under an older folder layout
-is moved to its current path (with its `.lrc`) instead of being downloaded a
-second time.
+Rewriting uses the same path as before: moved files keep their `.lrc`, the
+indexes and playlists follow them, and an interrupted run is cleaned up by
+the same Ctrl+C handling (on the server: cancelling the job).
+
+In every mode, a Spotify track that exists under an older folder layout is
+moved to its current path (with its `.lrc`) instead of being downloaded a
+second time. A file recognised without its URL (above) stays where it is in
+*Keep*; from then on it carries the URL, so a later run treats it like any
+other file found by its URL and moves it to the current path. With *Update
+outdated* or *Update all* it moves at once and is rewritten.
 
 ## SoundCloud links
 
@@ -597,7 +671,8 @@ cli/music_loader/
 ├── spotify.py            # Spotify: resolve, check, download, verify
 ├── spotify_index.py      # Spotify URL -> files (finds moved/duplicate files)
 ├── spotify_cache.py      # remembers the web player's query hashes for spotDL's client
-├── soundcloud.py         # SoundCloud: discovery, parallel pipeline, recheck
+├── soundcloud.py         # SoundCloud: discovery, parallel pipeline, rewrites
+├── existing.py           # tracks already in the library: outdated or current
 ├── soundcloud_meta.py    # SoundCloud tags, album context, folders, covers
 ├── soundcloud_index.py   # SoundCloud id -> file index, archive
 ├── soundcloud_layout.py  # moves old "Artist - Album" SoundCloud folders to "Artist/Album"
