@@ -54,6 +54,12 @@ class MusicLoaderApi(
         return json.decodeFromString(execute(request(server, "jobs").post(body).build()))
     }
 
+    /** Starts a library check (with [JobOptions.fix] and [JobOptions.rules]). Needs [Features.LibraryCheck]. */
+    suspend fun submitCheck(server: ServerConfig, options: JobOptions): SubmitResponse {
+        val body = json.encodeToString(CheckRequest.serializer(), CheckRequest(options)).toRequestBody(JSON)
+        return json.decodeFromString(execute(request(server, "jobs").post(body).build()))
+    }
+
     suspend fun cancel(server: ServerConfig, id: String): Job {
         val body = ByteArray(0).toRequestBody(JSON)
         return json.decodeFromString<JobEnvelope>(

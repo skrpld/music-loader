@@ -284,6 +284,7 @@
         <item quantity="other">%1$d days</item>
     </plurals>
     <string name="settings_lyrics_retry_hint">A track whose lyrics were not found is searched again after this time; updating existing tracks searches again anyway</string>
+    <string name="settings_library">Library</string>
     <string name="settings_artists">Artists</string>
     <string name="settings_artists_hint">Artist names for SoundCloud accounts and reupload accounts</string>
     <string name="artists_description">An account\'s tracks get an artist name only when your library, Spotify or Deezer confirms it. Suggestions wait for you; whatever you choose is locked and automatic checks leave it as is.</string>
@@ -321,4 +322,59 @@
     <string name="job_artists_alias">Artist name</string>
     <string name="job_artists_suggestion">Suggestion · review in Settings → Artists</string>
     <string name="job_artists_undetermined">Artist not determined</string>
+    <!-- Library check -->
+    <string name="check_title">Check the library</string>
+    <string name="check_settings_hint">Find tracks without a cover, lyrics or link, outdated files and duplicates, and fix them</string>
+    <string name="check_description">The check reads every file in the music folder and changes nothing. Fix rewrites the tags, covers and lyrics it can from SoundCloud and Spotify; it never deletes an audio file.</string>
+    <string name="check_rules">What to check</string>
+    <string name="check_rule_id">Track link</string>
+    <string name="check_rule_cover">Cover</string>
+    <string name="check_rule_lyrics">Lyrics</string>
+    <string name="check_rule_artist">Artist</string>
+    <string name="check_rule_format">Format version</string>
+    <string name="check_rule_duplicates">Duplicates</string>
+    <string name="check_rule_available">Still on the platform</string>
+    <string name="check_rule_available_hint">Still on the platform asks SoundCloud and Spotify; answers are kept for a week.</string>
+    <string name="action_check">Check</string>
+    <string name="action_fix">Fix</string>
+    <string name="check_running">Checking the library</string>
+    <string name="check_fixing">Fixing the library</string>
+    <string name="check_failed">The check did not finish</string>
+    <string name="check_cancelled">The check was cancelled</string>
+    <string name="check_never">The library has not been checked yet</string>
+    <string name="check_never_body">Choose what to check and tap Check.</string>
+    <string name="check_report">Report</string>
+    <string name="check_no_problems">No problems found</string>
+    <string name="check_fix_note">Fix can fix %1$d of %2$d problems</string>
+    <string name="check_fix_none">None of these problems can be fixed automatically</string>
+    <string name="check_fixed_note">Fixed %1$d of %2$d problems; %3$d left</string>
+    <string name="check_unchecked">%1$d track(s) could not be asked whether they still exist</string>
+    <string name="check_log">Full list</string>
+    <string name="check_fixable_count">%1$d can be fixed</string>
+    <string name="check_item_fixable">Can be fixed</string>
+    <string name="check_more">And %1$d more; the full list is in the log file</string>
+    <string name="check_fix_confirm_title">Fix %1$d problems?</string>
+    <string name="check_fix_confirm_body">Tracks are rewritten from SoundCloud and Spotify and missing lyrics are searched. No audio file is deleted.</string>
+    <string name="check_kind_no_id">Not linked to its track</string>
+    <string name="check_kind_no_cover">No cover</string>
+    <string name="check_kind_no_lyrics">No lyrics</string>
+    <string name="check_kind_artist_changed">Artist written differently</string>
+    <string name="check_kind_artist_unknown">Artist not determined</string>
+    <string name="check_kind_old_format">Written by an older version</string>
+    <string name="check_kind_duplicate">Duplicate files</string>
+    <string name="check_kind_removed">Removed from the platform</string>
+    <string name="job_check_title">Library check</string>
+    <string name="job_check_fix_title">Library check and fix</string>
+    <string name="job_check_problems">Problems: %1$d · Can fix: %2$d</string>
+    <string name="job_check_fixed">Fixed: %1$d · Left: %2$d</string>
+    <string name="job_option_fix">Fix</string>
+    <string name="notification_checking">Checking the library</string>
+    <plurals name="check_files">
+        <item quantity="one">%1$d file checked</item>
+        <item quantity="other">%1$d files checked</item>
+    </plurals>
+    <plurals name="check_problems">
+        <item quantity="one">%1$d problem</item>
+        <item quantity="other">%1$d problems</item>
+    </plurals>
 </resources>

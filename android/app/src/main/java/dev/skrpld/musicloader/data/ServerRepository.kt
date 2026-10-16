@@ -170,6 +170,14 @@ class ServerRepository(
         return response
     }
 
+    /** Starts a library check; [JobOptions.fix] makes it fix what it can. */
+    suspend fun submitCheck(options: JobOptions): SubmitResponse {
+        val server = server()
+        val response = api.submitCheck(server, options)
+        if (settingsStore.settings.first().mode == DownloadMode.Phone) local.onJobSubmitted()
+        return response
+    }
+
     suspend fun job(id: String): Job = api.job(server(), id)
 
     /** Queues a finished job again and returns the new job. */

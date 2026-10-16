@@ -288,6 +288,7 @@
         <item quantity="other">%1$d дня</item>
     </plurals>
     <string name="settings_lyrics_retry_hint">Трек без найденного текста ищется снова через это время; при обновлении уже скачанных треков поиск идёт в любом случае</string>
+    <string name="settings_library">Библиотека</string>
     <string name="settings_artists">Артисты</string>
     <string name="settings_artists_hint">Имена артистов для аккаунтов SoundCloud и аккаунты перезаливов</string>
     <string name="artists_description">Треки аккаунта получают имя артиста, только когда его подтверждает ваша библиотека, Spotify или Deezer. Предложения ждут вашего решения; выбранное вами закрепляется, и автоматические проверки его не меняют.</string>
@@ -327,4 +328,63 @@
     <string name="job_artists_alias">Имя артиста</string>
     <string name="job_artists_suggestion">Предложение · проверьте в Настройки → Артисты</string>
     <string name="job_artists_undetermined">Артист не определён</string>
+    <!-- Проверка библиотеки -->
+    <string name="check_title">Проверить библиотеку</string>
+    <string name="check_settings_hint">Найти треки без обложки, текста или привязки, устаревшие файлы и дубликаты и исправить их</string>
+    <string name="check_description">Проверка читает все файлы в папке с музыкой и ничего не меняет. «Исправить» перезаписывает теги, обложки и тексты, которые можно взять из SoundCloud и Spotify; аудиофайлы никогда не удаляются.</string>
+    <string name="check_rules">Что проверять</string>
+    <string name="check_rule_id">Привязка к треку</string>
+    <string name="check_rule_cover">Обложка</string>
+    <string name="check_rule_lyrics">Текст</string>
+    <string name="check_rule_artist">Артист</string>
+    <string name="check_rule_format">Версия формата</string>
+    <string name="check_rule_duplicates">Дубликаты</string>
+    <string name="check_rule_available">Есть на платформе</string>
+    <string name="check_rule_available_hint">«Есть на платформе» спрашивает SoundCloud и Spotify; ответы хранятся неделю.</string>
+    <string name="action_check">Проверить</string>
+    <string name="action_fix">Исправить</string>
+    <string name="check_running">Проверка библиотеки</string>
+    <string name="check_fixing">Исправление библиотеки</string>
+    <string name="check_failed">Проверка не завершилась</string>
+    <string name="check_cancelled">Проверка отменена</string>
+    <string name="check_never">Библиотека ещё не проверялась</string>
+    <string name="check_never_body">Выберите, что проверить, и нажмите «Проверить».</string>
+    <string name="check_report">Отчёт</string>
+    <string name="check_no_problems">Проблем не найдено</string>
+    <string name="check_fix_note">«Исправить» исправит %1$d из %2$d проблем</string>
+    <string name="check_fix_none">Ни одну из этих проблем нельзя исправить автоматически</string>
+    <string name="check_fixed_note">Исправлено %1$d из %2$d проблем; осталось %3$d</string>
+    <string name="check_unchecked">Не удалось узнать, есть ли ещё на платформе треков: %1$d</string>
+    <string name="check_log">Полный список</string>
+    <string name="check_fixable_count">Можно исправить: %1$d</string>
+    <string name="check_item_fixable">Можно исправить</string>
+    <string name="check_more">И ещё %1$d; полный список — в файле журнала</string>
+    <string name="check_fix_confirm_title">Исправить проблемы (%1$d)?</string>
+    <string name="check_fix_confirm_body">Треки перезаписываются из SoundCloud и Spotify, недостающие тексты ищутся заново. Аудиофайлы не удаляются.</string>
+    <string name="check_kind_no_id">Не привязан к треку</string>
+    <string name="check_kind_no_cover">Нет обложки</string>
+    <string name="check_kind_no_lyrics">Нет текста</string>
+    <string name="check_kind_artist_changed">Артист записан иначе</string>
+    <string name="check_kind_artist_unknown">Артист не определён</string>
+    <string name="check_kind_old_format">Записан старой версией</string>
+    <string name="check_kind_duplicate">Дубликаты файлов</string>
+    <string name="check_kind_removed">Удалён с платформы</string>
+    <string name="job_check_title">Проверка библиотеки</string>
+    <string name="job_check_fix_title">Проверка и исправление библиотеки</string>
+    <string name="job_check_problems">Проблем: %1$d · Можно исправить: %2$d</string>
+    <string name="job_check_fixed">Исправлено: %1$d · Осталось: %2$d</string>
+    <string name="job_option_fix">Исправление</string>
+    <string name="notification_checking">Проверка библиотеки</string>
+    <plurals name="check_files">
+        <item quantity="one">Проверен %1$d файл</item>
+        <item quantity="few">Проверено %1$d файла</item>
+        <item quantity="many">Проверено %1$d файлов</item>
+        <item quantity="other">Проверено %1$d файла</item>
+    </plurals>
+    <plurals name="check_problems">
+        <item quantity="one">%1$d проблема</item>
+        <item quantity="few">%1$d проблемы</item>
+        <item quantity="many">%1$d проблем</item>
+        <item quantity="other">%1$d проблемы</item>
+    </plurals>
 </resources>

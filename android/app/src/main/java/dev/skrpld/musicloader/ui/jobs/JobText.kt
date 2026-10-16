@@ -34,6 +34,9 @@ fun linkKindName(kind: String): String = stringResource(
 /** "Spotify · Album", "SoundCloud · Profile and 2 more links". */
 @Composable
 fun jobTitle(job: Job): String {
+    if (job.isCheck) {
+        return stringResource(if (job.options.fix == true) R.string.job_check_fix_title else R.string.job_check_title)
+    }
     val first = job.links.firstOrNull() ?: return stringResource(R.string.job_untitled)
     val base = stringResource(R.string.job_link_title, serviceName(first.service), linkKindName(first.kind))
     val more = job.linkCount - 1
@@ -43,6 +46,7 @@ fun jobTitle(job: Job): String {
 /** "Downloaded: 12 · Already had: 3 · Failed: 1 · Unavailable: 2". */
 @Composable
 fun trackSummary(job: Job): String {
+    if (job.isCheck) return checkSummary(job)
     val stats = job.stats
     val parts = buildList {
         add(stringResource(R.string.stat_downloaded_count, stats.tracksDone))
@@ -51,6 +55,18 @@ fun trackSummary(job: Job): String {
         if (stats.tracksUnavailable > 0) add(stringResource(R.string.stat_unavailable_count, stats.tracksUnavailable))
     }
     return parts.joinToString(" · ")
+}
+
+/** "Problems: 58 · Can fix: 52", or "Fixed: 50 · Left: 8" after a fix; empty until the report is in. */
+@Composable
+fun checkSummary(job: Job): String {
+    val report = job.check ?: return ""
+    val fixed = report.fixed
+    return when {
+        report.fix && fixed != null -> stringResource(R.string.job_check_fixed, fixed, report.problems)
+        report.problems == 0 -> stringResource(R.string.check_no_problems)
+        else -> stringResource(R.string.job_check_problems, report.problems, report.fixable)
+    }
 }
 
 /** A finished job with failed links or tracks is shown as "done with errors"; unavailable tracks are not failures. */

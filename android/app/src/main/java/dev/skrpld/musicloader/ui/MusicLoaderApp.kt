@@ -29,6 +29,8 @@ import dev.skrpld.musicloader.data.supports
 import dev.skrpld.musicloader.data.serverState
 import dev.skrpld.musicloader.ui.artists.ArtistsScreen
 import dev.skrpld.musicloader.ui.artists.ArtistsViewModel
+import dev.skrpld.musicloader.ui.check.LibraryCheckScreen
+import dev.skrpld.musicloader.ui.check.LibraryCheckViewModel
 import dev.skrpld.musicloader.ui.download.DownloadScreen
 import dev.skrpld.musicloader.ui.download.DownloadViewModel
 import dev.skrpld.musicloader.ui.jobs.JobsPane
@@ -53,12 +55,14 @@ fun MusicLoaderApp(
     jobsViewModel: JobsViewModel,
     settingsViewModel: SettingsViewModel,
     artistsViewModel: ArtistsViewModel,
+    libraryCheckViewModel: LibraryCheckViewModel,
     appVersion: String,
     dynamicColorAvailable: Boolean,
 ) {
     var destination by rememberSaveable { mutableStateOf(Destination.Download) }
-    // Settings → Artists, shown in place of the settings while open.
+    // Settings → Artists and Settings → Check the library, shown in place of the settings while open.
     var artistsOpen by rememberSaveable { mutableStateOf(false) }
+    var checkOpen by rememberSaveable { mutableStateOf(false) }
     val connection by mainViewModel.connection.collectAsStateWithLifecycle()
     val pendingJobs = connection.serverState?.jobs?.count {
         it.status == JobStatus.Running || it.status == JobStatus.Queued
@@ -69,8 +73,14 @@ fun MusicLoaderApp(
     }
     val artistsSupported = connection.supports(Features.Artists)
     val showArtists = artistsOpen && artistsSupported && destination == Destination.Settings
+    val checkSupported = connection.supports(Features.LibraryCheck)
+    val showCheck = checkOpen && checkSupported && destination == Destination.Settings
     BackHandler(enabled = destination != Destination.Download) {
-        if (showArtists) artistsOpen = false else destination = Destination.Download
+        when {
+            showCheck -> checkOpen = false
+            showArtists -> artistsOpen = false
+            else -> destination = Destination.Download
+        }
     }
 
     NavigationSuiteScaffold(
@@ -80,7 +90,10 @@ fun MusicLoaderApp(
                 NavigationSuiteItem(
                     selected = selected,
                     onClick = {
-                        if (item == Destination.Settings && destination == Destination.Settings) artistsOpen = false
+                        if (item == Destination.Settings && destination == Destination.Settings) {
+                            artistsOpen = false
+                            checkOpen = false
+                        }
                         destination = item
                     },
                     icon = {
@@ -123,7 +136,13 @@ fun MusicLoaderApp(
                     onOpenSettings = { destination = Destination.Settings },
                     modifier = Modifier.fillMaxSize(),
                 )
-                Destination.Settings -> if (showArtists) {
+                Destination.Settings -> if (showCheck) {
+                    LibraryCheckScreen(
+                        viewModel = libraryCheckViewModel,
+                        onBack = { checkOpen = false },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else if (showArtists) {
                     ArtistsScreen(
                         viewModel = artistsViewModel,
                         onBack = { artistsOpen = false },
@@ -136,6 +155,11 @@ fun MusicLoaderApp(
                         dynamicColorAvailable = dynamicColorAvailable,
                         onOpenArtists = if (artistsSupported) {
                             { artistsOpen = true }
+                        } else {
+                            null
+                        },
+                        onOpenLibraryCheck = if (checkSupported) {
+                            { checkOpen = true }
                         } else {
                             null
                         },

@@ -40,6 +40,7 @@ import dev.skrpld.musicloader.data.Job
 import dev.skrpld.musicloader.data.JobStatus
 import dev.skrpld.musicloader.data.ServerState
 import dev.skrpld.musicloader.data.serverState
+import dev.skrpld.musicloader.ui.check.CheckProgress
 import dev.skrpld.musicloader.ui.components.CenteredLoading
 import dev.skrpld.musicloader.ui.components.ConnectionBanner
 import dev.skrpld.musicloader.ui.components.EmptyState
@@ -225,9 +226,13 @@ private fun ActiveJobCard(job: Job, onClick: () -> Unit, onCancel: () -> Unit, m
                     )
                 }
             }
-            JobProgressHeader(job)
-            LinkQueueProgress(job)
-            ActiveDownloads(job)
+            if (job.isCheck) {
+                CheckProgress(job)
+            } else {
+                JobProgressHeader(job)
+                LinkQueueProgress(job)
+                ActiveDownloads(job)
+            }
             if (!job.cancelRequested) {
                 OutlinedButton(
                     onClick = onCancel,

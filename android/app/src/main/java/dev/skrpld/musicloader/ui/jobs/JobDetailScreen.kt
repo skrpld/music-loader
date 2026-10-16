@@ -44,6 +44,10 @@ import dev.skrpld.musicloader.data.ExistingTracks
 import dev.skrpld.musicloader.data.Job
 import dev.skrpld.musicloader.data.JobStatus
 import dev.skrpld.musicloader.data.RetryScope
+import dev.skrpld.musicloader.ui.check.CheckProgress
+import dev.skrpld.musicloader.ui.check.checkFixNote
+import dev.skrpld.musicloader.ui.check.checkGroupIcon
+import dev.skrpld.musicloader.ui.check.checkGroupName
 import dev.skrpld.musicloader.ui.components.CenteredLoading
 import dev.skrpld.musicloader.ui.components.EmptyState
 import dev.skrpld.musicloader.ui.components.Pill
@@ -171,9 +175,13 @@ private fun JobDetailContent(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
                 ) {
                     Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        JobProgressHeader(job, showElapsed = true)
-                        LinkQueueProgress(job)
-                        ActiveDownloads(job)
+                        if (job.isCheck) {
+                            CheckProgress(job)
+                        } else {
+                            JobProgressHeader(job, showElapsed = true)
+                            LinkQueueProgress(job)
+                            ActiveDownloads(job)
+                        }
                     }
                 }
             }
@@ -186,14 +194,29 @@ private fun JobDetailContent(
         if (canRetry && job.status.isFinished) {
             item(key = "retry-actions") { RetryActions(job, onRetry) }
         }
-        if (job.status != JobStatus.Queued) {
+        val report = job.check
+        if (job.isCheck && report != null) {
+            item(key = "check-header") { SectionHeader(stringResource(R.string.check_report)) }
+            item(key = "check-summary") { Text(checkFixNote(report), style = MaterialTheme.typography.bodyLarge) }
+            itemsIndexed(report.groups, key = { _, group -> "check-${group.kind}" }) { index, group ->
+                SegmentedListItem(
+                    shapes = ListItemDefaults.segmentedShapes(index = index, count = report.groups.size),
+                    leadingContent = { Icon(painterResource(checkGroupIcon(group.kind)), contentDescription = null) },
+                    trailingContent = { Text(group.count.toString(), style = MaterialTheme.typography.titleMedium) },
+                ) {
+                    Text(text = checkGroupName(group), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        } else if (!job.isCheck && job.status != JobStatus.Queued) {
             item(key = "statistics") { JobStatistics(job, Modifier.padding(top = 8.dp)) }
         }
         item(key = "options-header") { SectionHeader(stringResource(R.string.job_options)) }
         item(key = "options") { OptionPills(job) }
 
-        item(key = "links-header") {
-            SectionHeader(stringResource(R.string.job_links_count, job.links.size))
+        if (!job.isCheck) {
+            item(key = "links-header") {
+                SectionHeader(stringResource(R.string.job_links_count, job.links.size))
+            }
         }
         itemsIndexed(job.links, key = { index, _ -> "link-$index" }) { index, link ->
             SegmentedListItem(
@@ -423,6 +446,7 @@ private fun OptionPills(job: Job) {
             text = stringResource(R.string.job_option_lyrics, lyricsModeName(options.lyricsMode)),
             icon = R.drawable.ic_lyrics,
         )
+        if (options.fix == true) Pill(text = stringResource(R.string.job_option_fix), icon = R.drawable.ic_sync)
         if (options.existingTracks != ExistingTracks.Keep) {
             Pill(
                 text = stringResource(R.string.job_option_existing, existingTracksName(options.existingTracks)),
