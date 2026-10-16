@@ -61,6 +61,10 @@ data class JobOptions(
     @SerialName("lyrics_length_tolerance") val lyricsLengthTolerance: Double = LyricsTolerance.DEFAULT,
     @SerialName("lyrics_original_for_versions") val lyricsOriginalForVersions: Boolean = false,
     @SerialName("lyrics_retry_days") val lyricsRetryDays: Int = LyricsRetry.DEFAULT,
+    /** Library check only: fix what can be fixed (needs [Features.LibraryCheck]). */
+    val fix: Boolean? = null,
+    /** Library check only: [CheckRule] names; null means every rule. */
+    val rules: List<String>? = null,
 ) {
     val lyricsMode: LyricsMode get() = LyricsMode.fromWire(lyrics)
     val featPlacement: FeatPlacement get() = FeatPlacement.fromWire(soundcloudFeat)
@@ -177,7 +181,82 @@ object Features {
 
     /** The `existing` job option (keep / outdated / all) and the outdated counters. */
     const val ExistingTracks = "existing_tracks"
+
+    /** Jobs of type "check": the library check and its fix (see check.py). */
+    const val LibraryCheck = "library_check"
 }
+
+/** What a job does: downloads links, or checks the library. */
+object JobType {
+    const val Download = "download"
+    const val Check = "check"
+}
+
+/** Rules of the library check, in the server's order (RULES in check.py). */
+enum class CheckRule(val wire: String) {
+    Id("id"),
+    Cover("cover"),
+    Lyrics("lyrics"),
+    Artist("artist"),
+    Format("format"),
+    Duplicates("duplicates"),
+    /** Asks SoundCloud and Spotify whether the tracks still exist. */
+    Available("available");
+
+    companion object {
+        fun fromWire(values: List<String>?): Set<CheckRule> =
+            values.orEmpty().mapNotNull { value -> entries.firstOrNull { it.wire == value } }.toSet()
+    }
+}
+
+/** A track with a problem; [link] opens it on its platform. */
+@Serializable
+data class CheckItem(
+    val artist: String = "",
+    val title: String = "",
+    val path: String = "",
+    val link: String = "",
+    val service: String = "",
+    val fixable: Boolean = false,
+    val detail: String = "",
+) {
+    /** "Artist — Title", or the file path when the tags have neither. */
+    val name: String
+        get() = listOf(artist, title).filter { it.isNotBlank() }.joinToString(" — ").ifBlank { path }
+}
+
+/** One kind of problem; [items] holds at most 500 of the [count] tracks (the log file has all). */
+@Serializable
+data class CheckGroup(
+    val kind: String = "",
+    val rule: String = "",
+    val label: String = "",
+    val count: Int = 0,
+    val fixable: Int = 0,
+    val items: List<CheckItem> = emptyList(),
+)
+
+/**
+ * The report of a library check. A job summary carries only the numbers; the job
+ * detail adds [rules], [groups] and the [log] path.
+ */
+@Serializable
+data class CheckReport(
+    val rules: List<String> = emptyList(),
+    val offline: Boolean = false,
+    val fix: Boolean = false,
+    val tracks: Int = 0,
+    val problems: Int = 0,
+    val fixable: Int = 0,
+    /** Problems the fix removed; null when the job did not fix. */
+    val fixed: Int? = null,
+    /** Problems before the fix; null when the job did not fix. */
+    val before: Int? = null,
+    /** Tracks whose availability could not be asked. */
+    val unchecked: Int = 0,
+    val log: String? = null,
+    val groups: List<CheckGroup> = emptyList(),
+)
 
 /** What a retry queues: every link of the job again, or only the failures worth another try. */
 enum class RetryScope(val wire: String) {
@@ -329,8 +408,14 @@ data class Job(
     @SerialName("retry_at") val retryAt: Long? = null,
     /** Artist decisions made during the job (needs [Features.Artists]). */
     val artists: JobArtists = JobArtists(),
+    /** [JobType]; an older server sends none, its jobs are downloads. */
+    val type: String = JobType.Download,
+    /** The report of a check job, once it has one. */
+    val check: CheckReport? = null,
 ) {
     val status: JobStatus get() = JobStatus.fromWire(statusWire)
+
+    val isCheck: Boolean get() = type == JobType.Check
 
     /** A finished job whose failed tracks the server will queue again by itself. */
     val isWaitingForRetry: Boolean get() = status.isFinished && retryAt != null
@@ -349,6 +434,12 @@ data class ServerState(
 data class SubmitRequest(
     val links: List<String>,
     val options: JobOptions,
+)
+
+@Serializable
+data class CheckRequest(
+    val options: JobOptions,
+    val type: String = JobType.Check,
 )
 
 @Serializable

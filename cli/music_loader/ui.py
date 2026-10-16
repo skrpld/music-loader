@@ -95,6 +95,8 @@ class Dashboard:
         self.runlog = runlog
         self._log: deque[Text] = deque(maxlen=_LOG_LINES)
         self.artist_notes: dict[str, list[str]] = {kind: [] for kind in ARTIST_NOTE_KINDS}
+        # The result of a library check (check.Report.to_json), once it is done.
+        self.check_report: dict | None = None
         self._lock = threading.RLock()
         self._started = False
 
@@ -206,6 +208,13 @@ class Dashboard:
             notes = self.artist_notes.get(kind)
             if notes is not None and text not in notes and len(notes) < _ARTIST_NOTES_KEPT:
                 notes.append(text)
+
+    def record_check(self, report: dict) -> None:
+        """The result of a library check (check.py); the command line prints
+        it itself once the live view is closed."""
+        debuglog.event("check", "report", problems=report.get("problems"), fixable=report.get("fixable"))
+        with self._lock:
+            self.check_report = report
 
     def record_lyrics(self, found: bool) -> None:
         """Records one lyrics lookup result (found / not found)."""

@@ -823,6 +823,11 @@ class LyricsAttempts:
             return False
         return (datetime.now() - last).total_seconds() < cooldown
 
+    def has(self, key: str) -> bool:
+        """Whether a search was recorded for the track at all (any mode, any age)."""
+        with self._lock:
+            return bool(key) and key in self._data
+
     def record(self, key: str, mode: str) -> None:
         if not key:
             return

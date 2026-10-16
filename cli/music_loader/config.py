@@ -78,6 +78,11 @@ COVER_MAX_SIZE = 1200
 # Hard cap for a downloaded cover, protects against a broken/hostile URL.
 COVER_MAX_BYTES = 20 * 1024 * 1024
 
+# Library check (check.py): whether a track still exists on its platform,
+# per id, so the online part of a check does not ask again for a week.
+AVAILABILITY_FILENAME = ".music-loader-availability.json"
+AVAILABILITY_CACHE_SECONDS = 7 * 24 * 60 * 60
+
 # Where per-run failure logs are written (see runlog.py). Kept as a hidden
 # subfolder of the music library so it doesn't clutter the main view but is
 # still easy to find (`ls -a`).
@@ -358,6 +363,10 @@ class AppConfig:
     # version and length all match.
     soundcloud_fallback: bool = False
     soundcloud_format: SoundCloudFormat = field(default_factory=SoundCloudFormat)
+    # The library check's --fix: a rewrite never deletes an audio file (a copy
+    # of a track elsewhere, a file whose length looks wrong) or downloads it
+    # again; such a track is reported instead.
+    keep_files: bool = False
 
     @classmethod
     def from_output_dir(cls, output_dir: Path) -> "AppConfig":

@@ -12,7 +12,8 @@ the first start (printed at startup).
 
     GET    /api/v1/info               server version, library folder, queue state
     GET    /api/v1/jobs               all jobs, newest first (summaries)
-    POST   /api/v1/jobs               queue links: {"links": [...], "options": {...}}
+    POST   /api/v1/jobs               queue links: {"links": [...], "options": {...}}, or a library
+                                      check: {"type": "check", "options": {"fix": ..., "rules": [...]}}
     GET    /api/v1/jobs/<id>          one job with its log, errors and active downloads
     POST   /api/v1/jobs/<id>/cancel   cancel a queued or running job, or the pending automatic retry
                                       of a finished one
@@ -91,6 +92,11 @@ from the next job (the running one keeps what it decided); `existing:
 "outdated"` applies it to files already downloaded. A finished job lists its decisions in
 `artists`: {"alias": [...], "suggestion": [...], "undetermined": [...]}.
 
+A job of type "check" (feature "library_check") checks the library against
+check.RULES and, with "fix": true, fixes what it can; it has no links, and
+its report is the job's `check` (the numbers in summaries, the groups in the
+detail and the history).
+
 `GET /api/v1/info` (and every `state` event) lists the server's `features`
 ("retry", "auto_retry", "debug_log"); a client talking to an older server
 finds the list (or an entry) missing and leaves those actions out.
@@ -131,6 +137,10 @@ from .accounts import ACTIONS as _ARTIST_ACTIONS
 from .accounts import AccountBook, AccountError, apply_action, sorted_accounts
 from .artists import ArtistRegistry
 from .availability import FailureCategory
+from .check import KINDS_BY_NAME as _CHECK_KINDS
+from .check import REPORT_ITEMS_KEPT as _CHECK_ITEMS_KEPT
+from .check import RULES as _CHECK_RULES
+from .check import parse_rules
 from .config import (
     ARTISTS_FILENAME,
     EXISTING_ALL,
@@ -154,7 +164,10 @@ from .ui import ARTIST_NOTE_KINDS, PHASE_DOWNLOADING, PHASE_RESOLVING, Stats
 API_VERSION = 1
 # Optional capabilities, for clients that may talk to an older server.
 FEATURES = ("retry", "auto_retry", "debug_log", "soundcloud_format", "lyrics_settings", "artists",
-            "existing_tracks")
+            "existing_tracks", "library_check")
+JOB_DOWNLOAD = "download"
+JOB_CHECK = "check"
+_JOB_TYPES = (JOB_DOWNLOAD, JOB_CHECK)
 DEFAULT_PORT = 8765
 TOKEN_ENV = "MUSIC_LOADER_TOKEN"
 TOKEN_FILENAME = "server-token"
@@ -261,6 +274,9 @@ class Job:
     retry_at: Optional[int] = None
     # Artist decisions of the run (ui.ARTIST_NOTE_KINDS -> texts).
     artists: dict[str, list[str]] = field(default_factory=lambda: {kind: [] for kind in ARTIST_NOTE_KINDS})
+    # JOB_DOWNLOAD, or JOB_CHECK for a library check (no links; its report in `check`).
+    type: str = JOB_DOWNLOAD
+    check: Optional[dict[str, Any]] = None
 
     @property
     def finished(self) -> bool:
@@ -275,6 +291,7 @@ class Job:
             services[link.service] = services.get(link.service, 0) + 1
         return {
             "id": self.id,
+            "type": self.type,
             "status": self.status,
             "created_at": self.created_at,
             "started_at": self.started_at,
@@ -294,6 +311,7 @@ class Job:
             "max_attempts": len(_AUTO_RETRY_DELAYS),
             "retry_of": self.retry_of,
             "retry_at": self.retry_at,
+            "check": _check_summary(self.check),
         }
 
     def _failed_counts(self) -> dict[str, int]:
@@ -314,6 +332,7 @@ class Job:
             unavailable_log=self.unavailable_log,
             debug_log=self.debug_log,
             artists={kind: list(items) for kind, items in self.artists.items()},
+            check=self.check,
             failed_items=[
                 {"url": redact_url(item["url"]), "service": item["service"], "title": item["title"],
                  "category": item["category"],
@@ -328,6 +347,7 @@ class Job:
         stays on the server, like the job itself)."""
         return {
             "id": self.id,
+            "type": self.type,
             "links": [link.url for link in self.links],
             "options": dict(self.options),
             "rejected": list(self.rejected),
@@ -350,7 +370,58 @@ class Job:
             "retry_of": self.retry_of,
             "retry_at": self.retry_at,
             "artists": {kind: list(items) for kind, items in self.artists.items()},
+            "check": self.check,
         }
+
+
+def _check_summary(report: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """The numbers of a check report that a job summary carries."""
+    if report is None:
+        return None
+    return {key: report.get(key) for key in ("tracks", "problems", "fixable", "fixed", "fix")}
+
+
+def _check_report(raw: Any) -> Optional[dict[str, Any]]:
+    """A check report (check.Report.to_json) from a worker event or the
+    jobs file, with only the fields and types the API documents."""
+    if not isinstance(raw, dict):
+        return None
+
+    def number(value: Any) -> Optional[int]:
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+    groups = []
+    for group in raw.get("groups") if isinstance(raw.get("groups"), list) else []:
+        if not isinstance(group, dict) or group.get("kind") not in _CHECK_KINDS:
+            continue
+        kind = _CHECK_KINDS[group["kind"]]
+        items = []
+        for item in group.get("items") if isinstance(group.get("items"), list) else []:
+            if isinstance(item, dict) and len(items) < _CHECK_ITEMS_KEPT:
+                service = item.get("service")
+                items.append({
+                    "artist": _text(item.get("artist"))[:300], "title": _text(item.get("title"))[:300],
+                    "path": _text(item.get("path")), "link": redact_url(_text(item.get("link"))),
+                    "service": service if service in ("spotify", "soundcloud") else "",
+                    "fixable": item.get("fixable") is True, "detail": _text(item.get("detail"))[:300],
+                })
+        groups.append({"kind": kind.name, "rule": kind.rule, "label": kind.label,
+                       "count": number(group.get("count")) or len(items),
+                       "fixable": number(group.get("fixable")) or 0, "items": items})
+    rules = raw.get("rules")
+    return {
+        "rules": [rule for rule in _CHECK_RULES if isinstance(rules, list) and rule in rules],
+        "offline": raw.get("offline") is True,
+        "fix": raw.get("fix") is True,
+        "tracks": number(raw.get("tracks")) or 0,
+        "problems": number(raw.get("problems")) or 0,
+        "fixable": number(raw.get("fixable")) or 0,
+        "fixed": number(raw.get("fixed")),
+        "before": number(raw.get("before")),
+        "unchecked": number(raw.get("unchecked")) or 0,
+        "log": _opt_text(raw.get("log")),
+        "groups": groups,
+    }
 
 
 def _opt_int(value: Any) -> Optional[int]:
@@ -388,17 +459,20 @@ def _job_from_state(data: Any, saved_at: Optional[int]) -> Optional[Job]:
              if link is not None] if isinstance(raw_links, list) else []
     created_at = _opt_int(data.get("created_at"))
     status = data.get("status")
-    if not links or created_at is None or status not in (*_FINISHED, "queued", "running"):
+    job_type = data.get("type", JOB_DOWNLOAD)
+    if job_type not in _JOB_TYPES or (not links and job_type == JOB_DOWNLOAD) \
+            or created_at is None or status not in (*_FINISHED, "queued", "running"):
         return None
     try:
-        options = _parse_options(data.get("options") or {})
+        options = _parse_options(data.get("options") or {}, job_type)
     except _RequestError:
         return None
     raw_rejected = data.get("rejected")
     rejected = [_text(item)[:200] for item in raw_rejected if isinstance(item, str)] \
         if isinstance(raw_rejected, list) else []
-    job = Job(id=job_id, links=links[:_MAX_LINKS_PER_JOB], options=options,
-              rejected=rejected[:_MAX_REJECTED_KEPT], created_at=created_at)
+    job = Job(id=job_id, links=links[:_MAX_LINKS_PER_JOB] if job_type == JOB_DOWNLOAD else [],
+              options=options, rejected=rejected[:_MAX_REJECTED_KEPT], created_at=created_at, type=job_type)
+    job.check = _check_report(data.get("check"))
     job.started_at = _opt_int(data.get("started_at"))
     job.finished_at = _opt_int(data.get("finished_at"))
     job.message = _opt_text(data.get("message"))
@@ -653,7 +727,7 @@ class JobManager:
                     pass
 
     def submit(self, links: list[Link], options: dict[str, Any], rejected: list[str],
-               attempt: int = 0, retry_of: Optional[str] = None) -> Job:
+               attempt: int = 0, retry_of: Optional[str] = None, job_type: str = JOB_DOWNLOAD) -> Job:
         with self._cond:
             if self.closed:
                 raise QueueFull("the server is shutting down")
@@ -663,12 +737,13 @@ class JobManager:
             while job_id in self._jobs:
                 job_id = secrets.token_hex(6)
             job = Job(id=job_id, links=links, options=options, rejected=rejected,
-                      attempt=attempt, retry_of=retry_of)
+                      attempt=attempt, retry_of=retry_of, type=job_type)
             self._jobs[job.id] = job
             self._pending.append(job.id)
             self._trim_history()
             self._changed(save=True)
-        self.console.print(f"[cyan]Job {job.id} queued:[/cyan] {len(links)} link(s)")
+        what = "library check" if job_type == JOB_CHECK else f"{len(links)} link(s)"
+        self.console.print(f"[cyan]Job {job.id} queued:[/cyan] {what}")
         return job
 
     def cancel(self, job_id: str) -> Optional[dict[str, Any]]:
@@ -701,6 +776,12 @@ class JobManager:
                 raise JobNotFound(job_id)
             if not job.finished:
                 raise JobConflict("The job has not finished yet")
+            if job.type == JOB_CHECK:
+                if scope != "all":
+                    raise JobConflict("A library check has no failed tracks to retry")
+                new = self.submit([], dict(job.options), [], retry_of=job.id, job_type=JOB_CHECK)
+                self._changed(save=True)
+                return new
             if scope == "all":
                 links = list(job.links)
             else:
@@ -748,7 +829,8 @@ class JobManager:
 
     def _schedule_retry(self, job: Job) -> None:
         """Called under the lock when a job finished: plans the next automatic attempt."""
-        if (job.status not in ("completed", "failed") or not job.options.get("auto_retry") or self.closed
+        if (job.type != JOB_DOWNLOAD or job.status not in ("completed", "failed")
+                or not job.options.get("auto_retry") or self.closed
                 or job.attempt >= len(_AUTO_RETRY_DELAYS) or not job.retryable()):
             return
         job.retry_at = int(self._clock() * 1000) + _AUTO_RETRY_DELAYS[job.attempt] * 1000
@@ -845,6 +927,7 @@ class JobManager:
 
     def _execute(self, job: Job) -> tuple[str, Optional[str]]:
         spec = {
+            "type": job.type,
             "links": [link.url for link in job.links],
             "output": str(self.music_dir),
             **job.options,
@@ -1037,6 +1120,8 @@ class JobManager:
             job.unavailable_log = _text(event.get("path")) or None
         elif kind == "debug_log":
             job.debug_log = _text(event.get("path")) or None
+        elif kind == "check" and job.type == JOB_CHECK:
+            job.check = _check_report(event.get("report"))
         elif kind == "artists":
             notes = job.artists.get(_text(event.get("kind")))
             text = _text(event.get("text"))[:300]
@@ -1045,6 +1130,9 @@ class JobManager:
 
     @staticmethod
     def _apply_failure(job: Job, event: dict[str, Any]) -> None:
+        if job.type != JOB_DOWNLOAD:
+            # A check's fix is run again as a whole, never track by track.
+            return
         link = parse_link(_text(event.get("url")))
         try:
             category = FailureCategory(event.get("category"))
@@ -1127,6 +1215,20 @@ class _RequestError(Exception):
         self.payload = {"error": message, **extra}
 
 
+def _job_type(body: Any) -> str:
+    job_type = body.get("type", JOB_DOWNLOAD) if isinstance(body, dict) else JOB_DOWNLOAD
+    if job_type not in _JOB_TYPES:
+        raise _RequestError(HTTPStatus.BAD_REQUEST, f"'type' must be one of {', '.join(_JOB_TYPES)}")
+    return job_type
+
+
+def _parse_check_request(body: dict[str, Any]) -> dict[str, Any]:
+    """`{"type": "check", "options": {...}}`: a library check, no links."""
+    if body.get("links"):
+        raise _RequestError(HTTPStatus.BAD_REQUEST, "A library check takes no links")
+    return _parse_options(body.get("options") or {}, JOB_CHECK)
+
+
 def _parse_job_request(body: Any) -> tuple[list[Link], dict[str, Any], list[str]]:
     if not isinstance(body, dict):
         raise _RequestError(HTTPStatus.BAD_REQUEST, "Expected a JSON object")
@@ -1158,7 +1260,7 @@ def _parse_job_request(body: Any) -> tuple[list[Link], dict[str, Any], list[str]
     return links, options, rejected
 
 
-def _parse_options(raw_options: Any) -> dict[str, Any]:
+def _parse_options(raw_options: Any, job_type: str = JOB_DOWNLOAD) -> dict[str, Any]:
     if not isinstance(raw_options, dict):
         raise _RequestError(HTTPStatus.BAD_REQUEST, "'options' must be an object")
     lyrics = raw_options.get("lyrics", LYRICS_MODE_STRICT)
@@ -1213,6 +1315,18 @@ def _parse_options(raw_options: Any) -> dict[str, Any]:
         if not isinstance(value, bool):
             raise _RequestError(HTTPStatus.BAD_REQUEST, f"'{key}' must be true or false")
         options[key] = value
+    if job_type == JOB_CHECK:
+        fix = raw_options.get("fix", False)
+        if not isinstance(fix, bool):
+            raise _RequestError(HTTPStatus.BAD_REQUEST, "'fix' must be true or false")
+        if not isinstance(raw_options.get("rules", []), list):
+            raise _RequestError(HTTPStatus.BAD_REQUEST, "'rules' must be a list")
+        try:
+            rules = parse_rules(raw_options.get("rules", list(_CHECK_RULES)))
+        except ValueError as exc:
+            raise _RequestError(HTTPStatus.BAD_REQUEST, f"'rules': {exc}")
+        # A check has no links to list, retry or rewrite by default.
+        options.update(fix=fix, rules=list(rules), auto_retry=False, existing=EXISTING_KEEP, recheck=False)
     return options
 
 
@@ -1359,9 +1473,13 @@ class _Handler(BaseHTTPRequestHandler):
                     request = json.loads(body.decode("utf-8") or "null")
                 except (UnicodeDecodeError, ValueError):
                     raise _RequestError(HTTPStatus.BAD_REQUEST, "Body is not valid JSON")
-                links, options, rejected = _parse_job_request(request)
+                job_type = _job_type(request)
+                if job_type == JOB_CHECK:
+                    links, options, rejected = [], _parse_check_request(request), []
+                else:
+                    links, options, rejected = _parse_job_request(request)
                 try:
-                    job = manager.submit(links, options, rejected)
+                    job = manager.submit(links, options, rejected, job_type=job_type)
                 except QueueFull as exc:
                     raise _RequestError(HTTPStatus.SERVICE_UNAVAILABLE, str(exc))
                 detail = manager.job(job.id)

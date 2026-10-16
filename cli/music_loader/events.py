@@ -18,6 +18,7 @@ Events:
     {"type": "log", "level": "info" | "error", "source": "Spotify" | null, "text": "..."}
     {"type": "artists", "kind": "alias" | "suggestion" | "undetermined", "text": "..."}
                                                     (an artist decision for the job summary)
+    {"type": "check", "report": {...}}             (the result of a library check, check.py)
     {"type": "file", "slot": 0, "visible": true, "label": "...", "percent": 42.0,
      "speed": "...", "eta": "..."}
     {"type": "finished", "status": "completed" | "cancelled" | "failed", "message": "..."}
@@ -106,6 +107,10 @@ class EventDashboard:
     def record_artists(self, kind: str, text: str) -> None:
         debuglog.event("run", "artists", kind=kind, text=text)
         self.emit({"type": "artists", "kind": kind, "text": redact_secrets(text)[:300]})
+
+    def record_check(self, report: dict[str, Any]) -> None:
+        debuglog.event("check", "report", problems=report.get("problems"), fixable=report.get("fixable"))
+        self.emit({"type": "check", "report": report})
 
     def record_lyrics(self, found: bool) -> None:
         self._bump("lyrics_ok" if found else "lyrics_fail", 1)

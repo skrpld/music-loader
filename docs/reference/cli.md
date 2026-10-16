@@ -7,6 +7,7 @@ Command-line interface of the `music-loader` package (`music-loader` command, or
 music-loader [OPTIONS] [SOURCE ...]
 music-loader serve -o <MUSIC_FOLDER> [OPTIONS]
 music-loader artists -o <MUSIC_FOLDER> [--json] [ACTION ACCOUNT [NAME]]
+music-loader check -o <MUSIC_FOLDER> [--fix] [--rules LIST] [--skip-rules LIST] [--offline]
 ```
 
 `SOURCE` is a Spotify or SoundCloud link, or a path to a `.txt` file with one link per line
@@ -117,6 +118,37 @@ handle. Every action but `reject` and `unlock` locks the account: no run changes
 shows each account's state (confirmed, suggestion, reupload account, not checked, account name), the
 name its tracks get, where that came from and when it was checked; suggestions come first. A change
 applies to files downloaded from then on; `--existing outdated` applies it to the files already there.
+
+## Library check
+
+`music-loader check` checks every file of a library against a set of rules and lists what is wrong,
+grouped by problem (rules and what `--fix` does: [Library check](../explanation/how-it-works.md#library-check)).
+Without `--fix` nothing is changed.
+
+```text
+music-loader check -o ~/Music                          # every rule
+music-loader check -o ~/Music --offline                # without asking SoundCloud and Spotify
+music-loader check -o ~/Music --rules cover,lyrics     # only these rules
+music-loader check -o ~/Music --fix                    # fix what can be fixed, then check again
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `-o, --output` | asked | The Music folder |
+| `--fix` | off | Fix what can be fixed automatically, then check again. Never deletes an audio file; duplicates and removed tracks are only reported |
+| `--rules LIST` | all | Only these rules, comma-separated: `id`, `cover`, `lyrics`, `artist`, `format`, `duplicates`, `available` |
+| `--skip-rules LIST` | none | Leave these rules out |
+| `--offline` | off | No network: leaves out `available` |
+
+The lyrics, SoundCloud worker, SoundCloud formatting and Spotify options of a download are accepted
+too and apply to `--fix` (how rewritten tracks are written, how lyrics are searched); `--no-lyrics`
+also makes missing lyrics not fixable.
+
+The report is a table of the problem groups, then the first 10 tracks of each group ("Artist —
+Title") and "and N more". Its last line says what `--fix` can fix ("--fix can fix 52 of 58
+problem(s)"), or, after a fix, what it fixed and what is left. The full list, with paths, links and
+reasons, is written to `.music-loader-logs/check-YYYYMMDD-HHMMSS.log` in the Music folder. Exit
+code `0` when the check ran (whether or not it found problems), `130` when interrupted.
 
 ## Debug log
 

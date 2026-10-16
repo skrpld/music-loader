@@ -453,6 +453,73 @@ second time. A file recognised without its URL (above) stays where it is in
 other file found by its URL and moves it to the current path. With *Update
 outdated* or *Update all* it moves at once and is rewritten.
 
+## Library check
+
+`music-loader check` (a server job of type `check`; *Settings → Check the
+library* in the app) reads every audio file of the library, works out which
+track it is and checks it against a set of rules. By default it only
+reports and changes nothing (except the availability cache below); `--fix`
+is a deliberate second step.
+
+A file belongs to a track when it carries `TXXX:SOUNDCLOUD_ID` or
+`TXXX:SPOTIFY_ID`, or when its track can still be recognised: a Spotify
+`WOAS` URL, or a path that `.sc_index.json` knows. Hidden folders and files
+(the indexes, `.music-loader-logs`) are skipped.
+
+| Rule | Problem | `--fix` |
+|---|---|---|
+| `id` | the file has no id frame | writes the id when the track is recognised (as in [Binding files without an id](#binding-files-without-an-id)); a file nothing recognises is listed as "not linked" and left alone |
+| `cover` | no embedded cover | rewrites the track, which downloads the cover again |
+| `lyrics` | no embedded lyrics, no `.lrc` and no recorded search (a search that found nothing counts as checked); instrumentals and files without a title are skipped | searches with the current lyrics settings; not fixable while lyrics are off |
+| `artist` | an artist is spelled differently from the artist registry, or the decision for a SoundCloud uploader's account changed since the file was written (the same test as "outdated") | rewrites the track (tags, folder, file name) |
+| `artist` | a reupload whose original artist was not found ([Accounts and reuploads](#accounts-and-reuploads)) | listed only |
+| `format` | `TXXX:MUSIC_LOADER_FORMAT` lower than `FORMAT_VERSION` | rewrites the track, like *Update outdated* |
+| `duplicates` | two or more files carry the same id | listed only |
+| `available` | the track was removed from (or blocked on) SoundCloud or Spotify | listed only |
+
+`artist` and `format` apply only to files that belong to a track; a file
+music-loader knows nothing about is reported once, as not linked (plus a
+missing cover or lyrics, which nothing can fetch for it).
+
+`available` is the only rule that uses the network, and `--offline` leaves
+it out. SoundCloud is asked for the ids in batches of 50 (a track missing
+from the answer is removed; a blocked one counts too), Spotify through its
+public oEmbed page, one track at a time. Answers are kept per id for 7 days
+in `.music-loader-availability.json` in the music folder. A track that could
+not be asked (no network, rate limited, a private SoundCloud link) is
+counted as unchecked, never as removed. A removed track cannot be rewritten
+from its platform, so its other problems are not counted as fixable.
+
+### Report
+
+The command line prints a table of the groups with their counts, then the
+first 10 tracks of each group ("Artist — Title"), "and N more", and as its
+last line what `--fix` would fix ("--fix can fix 52 of 58 problem(s)"). The
+full list, with the path, link and reason of every track, goes to
+`.music-loader-logs/check-<timestamp>.log`. A server job carries the same
+report in `check` ([server reference](../reference/server.md#library-check)); the app
+shows it with expandable groups, each track opening on its platform.
+
+### Fix
+
+`--fix` checks, fixes what can be fixed automatically, then checks again and
+reports what is left ("--fix fixed 50 of 58 problem(s); 8 problem(s) left").
+
+- Missing ids are written with the id frames only.
+- Tracks that need a rewrite (cover, artist, format) go through the
+  download pipelines with *Update all* for exactly those tracks: Spotify
+  tracks in batches of 50 links through spotDL, SoundCloud tracks by id
+  through the SoundCloud pipeline. Tags, covers, folders, file names, `.lrc`
+  files, indexes and playlists are updated the same way as by a download,
+  and lyrics are searched again.
+- Tracks that only lack lyrics get a lyrics search.
+
+A fix never deletes an audio file: where a download would remove or replace
+a file (a SoundCloud file whose length does not match, Spotify duplicates
+under other paths), the fix leaves it and reports it instead. Duplicates and
+removed tracks are for the user to decide. Cancelling (Ctrl+C, cancelling the
+job) stops the fix through the same cleanup as a download.
+
 ## SoundCloud links
 
 | Link | Downloads |
@@ -673,6 +740,7 @@ cli/music_loader/
 ├── spotify_cache.py      # remembers the web player's query hashes for spotDL's client
 ├── soundcloud.py         # SoundCloud: discovery, parallel pipeline, rewrites
 ├── existing.py           # tracks already in the library: outdated or current
+├── check.py              # library check: rules, availability cache, report, --fix
 ├── soundcloud_meta.py    # SoundCloud tags, album context, folders, covers
 ├── soundcloud_index.py   # SoundCloud id -> file index, archive
 ├── soundcloud_layout.py  # moves old "Artist - Album" SoundCloud folders to "Artist/Album"

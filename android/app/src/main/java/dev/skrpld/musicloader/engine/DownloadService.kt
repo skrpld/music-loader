@@ -146,7 +146,9 @@ class DownloadService : Service() {
         )
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_download)
-            .setContentTitle(getString(R.string.notification_downloading))
+            .setContentTitle(
+                getString(if (job?.isCheck == true) R.string.notification_checking else R.string.notification_downloading),
+            )
             .setContentIntent(open)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -158,6 +160,10 @@ class DownloadService : Service() {
             // Only waiting for the cooldown before an automatic retry.
             builder.setContentText(getString(R.string.notification_waiting_retry, timeFormat.format(Date(nextRetry))))
             builder.setProgress(0, 0, false)
+        } else if (job != null && job.isCheck) {
+            // The check reports its progress through its one file row.
+            val percent = job.files.firstOrNull()?.percent
+            if (percent != null) builder.setProgress(100, percent.toInt(), false) else builder.setProgress(0, 0, true)
         } else if (stats != null && stats.tracksTotal > 0) {
             builder.setContentText(getString(R.string.progress_tracks, stats.tracksProcessed, stats.tracksTotal))
             builder.setProgress(stats.tracksTotal, stats.tracksProcessed, false)

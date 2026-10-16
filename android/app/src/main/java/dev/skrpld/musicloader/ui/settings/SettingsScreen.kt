@@ -81,6 +81,8 @@ fun SettingsScreen(
     dynamicColorAvailable: Boolean,
     /** Opens Settings → Artists; null when the server has no artist decisions (older server). */
     onOpenArtists: (() -> Unit)?,
+    /** Opens Settings → Check the library; null when the server cannot check (older server). */
+    onOpenLibraryCheck: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
@@ -136,9 +138,9 @@ fun SettingsScreen(
                 FormattingCard(viewModel, settings, serverMode = mode == DownloadMode.Server)
                 SectionHeader(stringResource(R.string.settings_lyrics))
                 LyricsCard(viewModel, settings, serverMode = mode == DownloadMode.Server)
-                if (onOpenArtists != null) {
-                    SectionHeader(stringResource(R.string.settings_artists))
-                    ArtistsItem(onOpenArtists)
+                if (onOpenArtists != null || onOpenLibraryCheck != null) {
+                    SectionHeader(stringResource(R.string.settings_library))
+                    LibraryItems(onOpenArtists, onOpenLibraryCheck)
                 }
                 SectionHeader(stringResource(R.string.settings_appearance))
                 Text(
@@ -882,17 +884,46 @@ private fun DynamicColorItem(checked: Boolean, available: Boolean, onCheckedChan
     }
 }
 
+/** Settings → Artists and Settings → Check the library, each only when the server has it. */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun ArtistsItem(onClick: () -> Unit) {
+private fun LibraryItems(onOpenArtists: (() -> Unit)?, onOpenLibraryCheck: (() -> Unit)?) {
+    val count = listOfNotNull(onOpenArtists, onOpenLibraryCheck).size
+    Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
+        if (onOpenArtists != null) {
+            NavigationItem(
+                icon = R.drawable.ic_person,
+                title = R.string.settings_artists,
+                hint = R.string.settings_artists_hint,
+                index = 0,
+                count = count,
+                onClick = onOpenArtists,
+            )
+        }
+        if (onOpenLibraryCheck != null) {
+            NavigationItem(
+                icon = R.drawable.ic_search,
+                title = R.string.check_title,
+                hint = R.string.check_settings_hint,
+                index = count - 1,
+                count = count,
+                onClick = onOpenLibraryCheck,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun NavigationItem(icon: Int, title: Int, hint: Int, index: Int, count: Int, onClick: () -> Unit) {
     SegmentedListItem(
         onClick = onClick,
-        shapes = ListItemDefaults.segmentedShapes(index = 0, count = 1),
-        leadingContent = { Icon(painterResource(R.drawable.ic_person), contentDescription = null) },
-        supportingContent = { Text(stringResource(R.string.settings_artists_hint)) },
+        shapes = ListItemDefaults.segmentedShapes(index = index, count = count),
+        leadingContent = { Icon(painterResource(icon), contentDescription = null) },
+        supportingContent = { Text(stringResource(hint)) },
         trailingContent = { Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null) },
     ) {
-        Text(stringResource(R.string.settings_artists))
+        Text(stringResource(title))
     }
 }
 

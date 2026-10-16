@@ -109,7 +109,7 @@ JSON over HTTP, `Authorization: Bearer <token>` on every request.
 |---|---|
 | `GET /api/v1/info` | version, API version, `features`, library folder, queue state |
 | `GET /api/v1/jobs` | all jobs, newest first (summaries) |
-| `POST /api/v1/jobs` | queue links (body below); `201` with the job and the rejected entries |
+| `POST /api/v1/jobs` | queue links, or a library check (bodies below); `201` with the job and the rejected entries |
 | `GET /api/v1/jobs/<id>` | one job with its log, errors and active downloads |
 | `POST /api/v1/jobs/<id>/cancel` | cancel a queued or running job; on a finished job it cancels the pending automatic retry |
 | `POST /api/v1/jobs/<id>/retry` | queue a finished job again (body below); `201` with the new job |
@@ -190,9 +190,9 @@ stops the wait. The timer is saved with the job history, so it survives a
 restart (see [History across restarts](#history-across-restarts)).
 
 `GET /api/v1/info` and every `state` event carry `features`
-(`["retry", "auto_retry", "debug_log", "soundcloud_format", "lyrics_settings", "artists", "existing_tracks"]`).
+(`["retry", "auto_retry", "debug_log", "soundcloud_format", "lyrics_settings", "artists", "existing_tracks", "library_check"]`).
 An older server has no such list (or lacks an entry); the Android app then hides
-the retry actions, the debug log switch or Settings → Artists. A server without `soundcloud_format`
+the retry actions, the debug log switch, Settings → Artists or Settings → Check the library. A server without `soundcloud_format`
 ignores the formatting options and writes the default format; one without
 `lyrics_settings` ignores the lyrics settings and uses the defaults; one without
 `existing_tracks` only knows `recheck` (the app sends it for *Update all* and
@@ -230,6 +230,48 @@ curl -H "Authorization: Bearer $MUSIC_LOADER_TOKEN" -d '{"name": "AQUAKEY"}' \
 A job carries `artists`: `{"alias": [...], "suggestion": [...], "undetermined": [...]}`, the
 decisions of that run as text (accounts that got a name, suggestions waiting for the user, tracks
 whose artist was not found), kept in the job history.
+
+### Library check
+
+A job of type `check` is [`music-loader check`](cli.md#library-check) (rules and what the fix
+does: [Library check](../explanation/how-it-works.md#library-check)). It takes no links:
+
+```json
+{"type": "check", "options": {"fix": false, "rules": ["id", "cover", "lyrics", "artist", "format", "duplicates", "available"]}}
+```
+
+`rules` is a list of rule names (default: every rule; leaving out `available` is the CLI's
+`--offline`); `fix` (default `false`) fixes what can be fixed and checks again. The lyrics and
+SoundCloud formatting options of a download job are accepted too and decide how a fix writes
+tracks and searches lyrics. `auto_retry`, `existing` and `recheck` do not apply and are stored
+as `false` / `"keep"`. Errors: `400` for links in the request, an unknown rule, an empty list or a
+`fix` that is not `true` or `false`. A request without `type` (or with `"type": "download"`) is a
+download job.
+
+Every job carries `type` (`"download"` or `"check"`) and, for a check, `check`. Summaries (the job
+list, `state` events) carry only its numbers: `{"tracks", "problems", "fixable", "fixed", "fix"}`.
+The job detail and the job history carry the whole report:
+
+```json
+{"rules": ["id", "cover"], "offline": false, "fix": false, "tracks": 1200, "problems": 58,
+ "fixable": 52, "fixed": null, "before": null, "unchecked": 0,
+ "log": "/music/.music-loader-logs/check-20261016-101500.log",
+ "groups": [{"kind": "no_cover", "rule": "cover", "label": "No cover", "count": 40, "fixable": 40,
+             "items": [{"artist": "Alpha", "title": "Song", "path": "SoundCloud/Alpha/Album/01 - Song.mp3",
+                        "link": "https://soundcloud.com/alpha/song", "service": "soundcloud",
+                        "fixable": true, "detail": ""}]}]}
+```
+
+`kind` is one of `no_id`, `no_cover`, `no_lyrics`, `artist_changed`, `artist_unknown`,
+`old_format`, `duplicate`, `removed`; `label` is its English name. A group lists at most 500
+tracks (`count` is the real number; the log file has every one). `path` is relative to the music
+folder; `link` opens the track on its platform (private SoundCloud links are redacted). After a
+fix, `fixed` is how many problems it removed and `before` how many there were; `problems` and the
+groups are what is left. `unchecked` counts tracks whose availability could not be asked.
+
+A retry with scope `all` runs the same check again; scope `failed` is refused with `409`. While
+the check runs, the job's `files` carries its progress. The worker reports the report as one
+`check` event (`{"type": "check", "report": {...}}`).
 
 ### Debug log
 
