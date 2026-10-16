@@ -7,13 +7,21 @@ every player shows cleanly, and `TXXX:ARTISTS` holds the real list for the
 players that split artists. ID3v2.3 (what spotDL writes) can only glue
 artists together with "/", which turns "AC/DC" into two artists; such files
 are read with a guard for the names the artist registry knows and are
-rewritten by `set_artists` / `--recheck`.
+rewritten by `set_artists` / `--existing`.
+
+Every file is bound to its track in hidden user-defined frames, which
+players do not show: `TXXX:SOUNDCLOUD_ID`, `TXXX:SPOTIFY_ID` (next to the
+`WOAS` URL) and `TXXX:MUSIC_LOADER_FORMAT`, the version of the rules the
+file was written with (config.FORMAT_VERSION; missing = 0). `bind_ids`
+writes only the id frames into a file recognised without them.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
+
+from .config import FORMAT_VERSION
 
 try:
     from mutagen import File as mutagen_file
@@ -26,6 +34,8 @@ except ImportError:  # pragma: no cover - dependency is declared in pyproject
     MUTAGEN_AVAILABLE = False
 
 SOUNDCLOUD_ID_DESC = "SOUNDCLOUD_ID"
+SPOTIFY_ID_DESC = "SPOTIFY_ID"
+FORMAT_DESC = "MUSIC_LOADER_FORMAT"
 # Set on a file that was not taken from SoundCloud itself (the fallback to
 # YouTube Music): where it came from, and the page it was taken from.
 SOURCE_DESC = "MUSIC_LOADER_SOURCE"
@@ -190,6 +200,7 @@ def write_tags(path: Path, tags: TrackTags, cover: bytes | None = None) -> None:
         id3.add(COMM(encoding=3, lang="eng", desc="", text=tags.url))
     if tags.soundcloud_id:
         id3.add(TXXX(encoding=3, desc=SOUNDCLOUD_ID_DESC, text=tags.soundcloud_id))
+    id3.add(TXXX(encoding=3, desc=FORMAT_DESC, text=str(FORMAT_VERSION)))
     for desc, value in tags.extra.items():
         if value:
             id3.add(TXXX(encoding=3, desc=desc, text=value))
@@ -205,7 +216,7 @@ def read_tags(path: Path, is_known: Callable[[str], bool] | None = None) -> dict
     contain the separator, like "AC/DC", in one piece."""
     result = {
         "title": "", "artists": [], "album": "", "album_artist": "",
-        "url": "", "soundcloud_id": "", "has_lyrics": False,
+        "url": "", "soundcloud_id": "", "spotify_id": "", "format": 0, "has_lyrics": False,
     }
     if not MUTAGEN_AVAILABLE:
         return result
@@ -225,12 +236,72 @@ def read_tags(path: Path, is_known: Callable[[str], bool] | None = None) -> dict
     woas = id3.getall("WOAS")
     result["url"] = str(woas[0].url) if woas else ""
     for frame in id3.getall("TXXX"):
-        if frame.desc == SOUNDCLOUD_ID_DESC and frame.text:
+        if not frame.text:
+            continue
+        if frame.desc == SOUNDCLOUD_ID_DESC:
             result["soundcloud_id"] = str(frame.text[0])
+        elif frame.desc == SPOTIFY_ID_DESC:
+            result["spotify_id"] = str(frame.text[0])
+        elif frame.desc == FORMAT_DESC:
+            result["format"] = _format_number(frame.text[0])
     result["has_lyrics"] = any(
         str(getattr(frame, "text", "")).strip() for frame in id3.getall("USLT")
     ) or bool(id3.getall("SYLT"))
     return result
+
+
+def _format_number(value) -> int:
+    try:
+        return max(0, int(str(value).strip()))
+    except ValueError:
+        return 0
+
+
+def format_version(path: Path) -> int:
+    """The MUSIC_LOADER_FORMAT of a file; 0 when missing or unreadable."""
+    return _format_number(read_txxx(path, FORMAT_DESC) or 0)
+
+
+def spotify_track_id(url: str) -> str:
+    """"https://open.spotify.com/track/<id>" -> "<id>"; empty for anything else."""
+    prefix = "https://open.spotify.com/track/"
+    if not url.startswith(prefix):
+        return ""
+    track_id = url[len(prefix):].split("?", 1)[0].strip("/")
+    return track_id if track_id.isalnum() else ""
+
+
+def bind_ids(path: Path, soundcloud_id: str = "", spotify_url: str = "",
+             format_version: int | None = None) -> bool:
+    """Writes only the id frames (and, when given, the format version) into
+    a file. Every other frame, the ID3 version, the name and the folder stay
+    as they are. False when unreadable or when there is nothing to write."""
+    values: dict[str, str] = {}
+    if soundcloud_id:
+        values[SOUNDCLOUD_ID_DESC] = soundcloud_id
+    spotify_id = spotify_track_id(spotify_url)
+    if spotify_id:
+        values[SPOTIFY_ID_DESC] = spotify_id
+    if format_version is not None:
+        values[FORMAT_DESC] = str(format_version)
+    if not MUTAGEN_AVAILABLE or not values:
+        return False
+    try:
+        id3 = ID3(str(path), translate=False)
+    except Exception:
+        return False
+    version = 3 if id3.version[:2] == (2, 3) else ID3_VERSION
+    for desc, value in values.items():
+        id3.delall(f"TXXX:{desc}")
+        id3.add(TXXX(encoding=1 if version == 3 else 3, desc=desc, text=value))
+    if spotify_url and not any(str(frame.url) == spotify_url for frame in id3.getall("WOAS")):
+        id3.delall("WOAS")
+        id3.add(WOAS(url=spotify_url))
+    try:
+        id3.save(str(path), v2_version=version)
+    except Exception:
+        return False
+    return True
 
 
 def _read_artists(id3, text, is_known) -> list[str]:

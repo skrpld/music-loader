@@ -581,7 +581,7 @@ class RunAccounts:
                  abort: Callable[[], bool] = lambda: False) -> None:
         """Decides the accounts of the job's tracks. `infos` are the job's
         tracks with full metadata, `new_ids` the ones that will be written
-        (new downloads, or rechecked files)."""
+        (new downloads, or rewritten files)."""
         by_account: dict[str, list[TrackFacts]] = {}
         for info in infos:
             facts = track_facts(info, self.registry)

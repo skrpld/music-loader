@@ -7,7 +7,8 @@ moved or copied without every track being downloaded again.
 A file the index does not know is recognized by its tags: files written by
 this version carry the SoundCloud id (TXXX:SOUNDCLOUD_ID); files written by
 older versions are matched by the uploader/title/duration they were tagged
-with. That scan reads every file, so it runs lazily - only when an id lookup
+with, and get the id written into them (tags.bind_ids), so the next run finds
+them by id. That scan reads every file, so it runs lazily - only when an id lookup
 misses - once per run, and outside the main lock.
 
 The same file keeps, under the reserved key `ORIGINALS_KEY`, the original
@@ -172,19 +173,27 @@ class SoundCloudIndex:
         with self._legacy_lock:
             return bool(self._legacy_prints)
 
-    def add(self, info: dict[str, Any], path: Path) -> None:
+    def add(self, info: dict[str, Any], path: Path, account: str | None = None) -> None:
+        """Maps the track to its file. `account` is the account decision the
+        file was just written with (existing.account_state); None keeps what
+        the entry had, for a file that was only found or bound."""
         track_id = str(info.get("id") or "")
         if not track_id:
             return
         with self._lock:
-            self._data[track_id] = {
+            previous = self._data.get(track_id) or {}
+            entry = {
                 "path": self._store(path),
-                "title": info.get("title"),
-                "artist": info.get("uploader"),
-                "uploader_id": info.get("uploader_id"),
-                "duration": info.get("duration"),
-                "webpage_url": info.get("webpage_url"),
+                "title": info.get("title") or previous.get("title"),
+                "artist": info.get("uploader") or previous.get("artist"),
+                "uploader_id": info.get("uploader_id") or previous.get("uploader_id"),
+                "duration": info.get("duration") or previous.get("duration"),
+                "webpage_url": info.get("webpage_url") or previous.get("webpage_url"),
             }
+            written = account if account is not None else previous.get("account")
+            if isinstance(written, str):
+                entry["account"] = written
+            self._data[track_id] = entry
             self._dirty = True
             self._maybe_save_locked()
         with self._legacy_lock:

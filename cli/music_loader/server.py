@@ -25,7 +25,7 @@ the first start (printed at startup).
     POST   /api/v1/artists/<id>/<action>  change one: action "set" ({"name": "..."}), "keep",
                                       "reuploader", "accept", "reject" or "unlock"
 
-Job options: {"lyrics": "strict" | "loose" | "off", "recheck": false,
+Job options: {"lyrics": "strict" | "loose" | "off", "existing": "keep" | "outdated" | "all",
 "soundcloud_reposts": false, "soundcloud_likes": false, "soundcloud_fallback": false,
 "auto_retry": false, "debug_log": false, "soundcloud_feat": "both" | "artist" | "title",
 "soundcloud_keep_producers": false, "soundcloud_keep_versions": true,
@@ -33,6 +33,16 @@ Job options: {"lyrics": "strict" | "loose" | "off", "recheck": false,
 "lyrics_providers": ["lrclib", "musixmatch", "genius"], "lyrics_plain": true,
 "lyrics_length_tolerance": 10, "lyrics_original_for_versions": false,
 "lyrics_retry_days": 7}.
+
+Existing tracks (the "existing" option, feature "existing_tracks"): the same
+setting as the command line's --existing. "keep" (default) skips a track
+that is already in the library and only binds its id to the file,
+"outdated" rewrites it when it is outdated (an older format, a changed
+artist), "all" always rewrites it. The older option "recheck": true is
+"existing": "all", and a job lists both ("recheck" is true for "all"), so
+older clients keep working; "recheck": true with another "existing" is
+refused with 400. With "keep" the stats count the outdated tracks the run
+kept (`spotify_tracks_outdated`, `soundcloud_tracks_outdated`).
 
 Lyrics settings (the "lyrics_providers" ... "lyrics_retry_days" options,
 feature "lyrics_settings"): the same settings as the command line's
@@ -77,8 +87,8 @@ file that cannot be read is ignored.
 Artists (feature "artists"): the decision per SoundCloud account (see
 accounts.py), the same list and actions as `music-loader artists`. A change
 is written to the library's `.music-loader-artists.json` at once and applies
-from the next job (the running one keeps what it decided); `recheck` applies
-it to files already downloaded. A finished job lists its decisions in
+from the next job (the running one keeps what it decided); `existing:
+"outdated"` applies it to files already downloaded. A finished job lists its decisions in
 `artists`: {"alias": [...], "suggestion": [...], "undetermined": [...]}.
 
 `GET /api/v1/info` (and every `state` event) lists the server's `features`
@@ -123,6 +133,9 @@ from .artists import ArtistRegistry
 from .availability import FailureCategory
 from .config import (
     ARTISTS_FILENAME,
+    EXISTING_ALL,
+    EXISTING_KEEP,
+    EXISTING_MODES,
     FEAT_MODES,
     LOGS_DIRNAME,
     LYRICS_MODE_LOOSE,
@@ -140,7 +153,8 @@ from .ui import ARTIST_NOTE_KINDS, PHASE_DOWNLOADING, PHASE_RESOLVING, Stats
 
 API_VERSION = 1
 # Optional capabilities, for clients that may talk to an older server.
-FEATURES = ("retry", "auto_retry", "debug_log", "soundcloud_format", "lyrics_settings", "artists")
+FEATURES = ("retry", "auto_retry", "debug_log", "soundcloud_format", "lyrics_settings", "artists",
+            "existing_tracks")
 DEFAULT_PORT = 8765
 TOKEN_ENV = "MUSIC_LOADER_TOKEN"
 TOKEN_FILENAME = "server-token"
@@ -1156,6 +1170,16 @@ def _parse_options(raw_options: Any) -> dict[str, Any]:
         if not isinstance(value, bool):
             raise _RequestError(HTTPStatus.BAD_REQUEST, f"'{key}' must be true or false")
         options[key] = value
+    existing = raw_options.get("existing")
+    if existing is None:
+        existing = EXISTING_ALL if options["recheck"] else EXISTING_KEEP
+    elif existing not in EXISTING_MODES:
+        raise _RequestError(HTTPStatus.BAD_REQUEST, f"'existing' must be one of {', '.join(EXISTING_MODES)}")
+    elif options["recheck"] and existing != EXISTING_ALL:
+        raise _RequestError(HTTPStatus.BAD_REQUEST, "'recheck' is 'existing': 'all' and contradicts "
+                                                    f"'existing': '{existing}'")
+    options["existing"] = existing
+    options["recheck"] = existing == EXISTING_ALL
     default = SoundCloudFormat().options()
     feat = raw_options.get("soundcloud_feat", default["soundcloud_feat"])
     if feat not in FEAT_MODES:

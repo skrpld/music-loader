@@ -1,5 +1,5 @@
 """One naming scheme for both sources: title cleanup, folder and file names,
-multi-disc, Unicode, truncation, compilations, and the --recheck helpers."""
+multi-disc, Unicode, truncation, compilations, and the rewrite helpers."""
 import json
 
 import pytest
@@ -205,7 +205,6 @@ def test_place_downloads_renames_and_resolves_collisions(tmp_path):
 
 
 def test_stage_for_spotdl_narrows_the_song_list(tmp_path):
-    config = AppConfig(music_dir=tmp_path, soundcloud_dir=tmp_path / "sc")
     done = spotify._Song({"url": "u1"}, tmp_path / "A" / "01 - X.mp3", tmp_path / "B" / "01 - X.mp3")
     new = spotify._Song({"url": "u2"}, tmp_path / "A" / "02 - Y.mp3", tmp_path / "B" / "02 - Y.mp3")
     save = tmp_path / "q.spotdl"
@@ -214,7 +213,7 @@ def test_stage_for_spotdl_narrows_the_song_list(tmp_path):
     class Log:
         def log_error(self, *a): pass
 
-    todo = spotify._stage_for_spotdl([done, new], {"u1"}, config, save, Log())
+    todo = spotify._stage_for_spotdl([done, new], {"u1"}, set(), save, Log())
     assert todo == [new]
     assert json.loads(save.read_text()) == [{"url": "u2"}]
 
