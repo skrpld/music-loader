@@ -12,6 +12,6 @@
 
 ## Explanation
 
-- [How it works](explanation/how-it-works.md) — library layout, metadata rules, lyrics matching, download checks, track ids and existing tracks (`--existing`), SoundCloud and Spotify specifics
+- [How it works](explanation/how-it-works.md) — library layout, metadata rules, lyrics matching, download checks, track ids and existing tracks (`--existing`), the library check (`check --fix`), SoundCloud and Spotify specifics
 - [About the Android phone mode](explanation/android-phone-mode.md) — embedded Python, permissions, limits
 - [Security](explanation/security.md) — what is protected and how secrets are handled

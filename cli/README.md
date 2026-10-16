@@ -65,6 +65,7 @@ tracks where a verified match exists.
 ```text
 music-loader [OPTIONS] [SOURCE ...]
 music-loader serve -o <MUSIC_FOLDER> [OPTIONS]
+music-loader check -o <MUSIC_FOLDER> [--fix] [--rules LIST] [--offline]
 ```
 
 A file with one link per line (`#` starts a comment), together with another link:
@@ -84,6 +85,14 @@ every track, `--recheck` is the same):
 
 ```sh
 music-loader links.txt -o ~/Music --existing outdated
+```
+
+Check the library (missing covers, lyrics or ids, outdated files, duplicates, removed tracks) and
+fix what can be fixed; nothing is changed without `--fix`, and no audio file is ever deleted:
+
+```sh
+music-loader check -o ~/Music
+music-loader check -o ~/Music --fix
 ```
 
 Run as a server for the Android app (prints the address and an access token):
