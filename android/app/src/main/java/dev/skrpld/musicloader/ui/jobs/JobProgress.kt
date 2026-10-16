@@ -30,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -216,6 +217,12 @@ fun JobStatistics(job: Job, modifier: Modifier = Modifier) {
                 label = stringResource(R.string.stat_skipped),
                 cells = cells(stats.spotifyTracksSkipped, stats.soundcloudTracksSkipped, stats.tracksSkipped),
                 accent = colors.secondary,
+                // Kept outdated tracks (Existing tracks: Keep) are among the skipped ones.
+                note = if (stats.tracksOutdated > 0) {
+                    pluralStringResource(R.plurals.stat_outdated_note, stats.tracksOutdated, stats.tracksOutdated)
+                } else {
+                    null
+                },
             )
             StatRow(
                 label = stringResource(R.string.stat_failed),

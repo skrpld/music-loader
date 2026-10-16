@@ -104,7 +104,7 @@ class LyricsRequest:
     album: str = ""
     duration: float | None = None     # seconds, from the file itself
     featured: list[str] = field(default_factory=list)
-    force: bool = False               # --recheck: replace existing lyrics
+    force: bool = False               # a rewrite (--existing): replace existing lyrics
 
     @property
     def artists(self) -> list[str]:

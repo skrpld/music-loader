@@ -40,6 +40,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.skrpld.musicloader.R
+import dev.skrpld.musicloader.data.ExistingTracks
 import dev.skrpld.musicloader.data.Job
 import dev.skrpld.musicloader.data.JobStatus
 import dev.skrpld.musicloader.data.RetryScope
@@ -422,7 +423,12 @@ private fun OptionPills(job: Job) {
             text = stringResource(R.string.job_option_lyrics, lyricsModeName(options.lyricsMode)),
             icon = R.drawable.ic_lyrics,
         )
-        if (options.recheck) Pill(text = stringResource(R.string.option_recheck), icon = R.drawable.ic_sync)
+        if (options.existingTracks != ExistingTracks.Keep) {
+            Pill(
+                text = stringResource(R.string.job_option_existing, existingTracksName(options.existingTracks)),
+                icon = R.drawable.ic_sync,
+            )
+        }
         if (options.soundcloudReposts) Pill(text = stringResource(R.string.option_reposts), icon = R.drawable.ic_repeat)
         if (options.soundcloudLikes) Pill(text = stringResource(R.string.option_likes), icon = R.drawable.ic_favorite)
         if (options.soundcloudFallback) Pill(text = stringResource(R.string.option_fallback), icon = R.drawable.ic_library_music)

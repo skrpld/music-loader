@@ -31,6 +31,9 @@ from .artists import ArtistRegistry
 from .config import (
     ARTISTS_FILENAME,
     DEFAULT_FILENAME_TEMPLATE,
+    EXISTING_ALL,
+    EXISTING_KEEP,
+    EXISTING_MODES,
     FEAT_BOTH,
     FEAT_MODES,
     LOGS_DIRNAME,
@@ -175,10 +178,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
     library = parser.add_argument_group("library")
     library.add_argument(
+        "--existing",
+        choices=EXISTING_MODES,
+        default=None,
+        help="Tracks that are already downloaded: 'keep' (default) leaves them as they are and only "
+             "binds their id to the file; 'outdated' rewrites the ones written in an older format or "
+             "with an artist that changed since; 'all' rewrites every one. A rewrite applies the "
+             "current rules: tags, folder and file name, broken/preview files, lyrics.",
+    )
+    library.add_argument(
         "--recheck",
         action="store_true",
-        help="Check tracks that are already downloaded against the current rules again: "
-             "tags, folder and file name, broken/preview files, lyrics.",
+        help="The same as --existing all.",
     )
 
     soundcloud = parser.add_argument_group("SoundCloud")
@@ -216,7 +227,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
     formatting = parser.add_argument_group(
         "SoundCloud formatting",
-        "How SoundCloud titles are written. --recheck applies a change to tracks already there.",
+        "How SoundCloud titles are written. --existing all applies a change to tracks already there.",
     )
     formatting.add_argument(
         "--soundcloud-feat",
@@ -286,7 +297,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
              f"environment variable: command-line arguments are visible to other users "
              f"of the machine.",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.recheck:
+        if args.existing not in (None, EXISTING_ALL):
+            parser.error(f"--recheck is --existing all and cannot be combined with --existing {args.existing}")
+        args.existing = EXISTING_ALL
+    if args.existing is None:
+        args.existing = EXISTING_KEEP
+    return args
 
 
 def _reclaim_debug_log_link(args: argparse.Namespace) -> None:
@@ -476,6 +494,13 @@ def _resolve_links(links: list[Link], batches: dict[str, Any], dashboard: Dashbo
     return plans
 
 
+def outdated_note(count: int) -> str:
+    """The end-of-run hint of a run with `--existing keep`."""
+    tracks = "track is" if count == 1 else "tracks are"
+    return (f"{count} {tracks} in an older format; run with --existing outdated "
+            "('Update outdated') to rewrite them")
+
+
 def print_summary(console: Console, dashboard: Dashboard) -> None:
     stats = dashboard.stats
     total_ok = stats.spotify_ok + stats.soundcloud_ok
@@ -506,6 +531,9 @@ def print_summary(console: Console, dashboard: Dashboard) -> None:
         f"[yellow]{stats.lyrics_fail} not found[/yellow] / "
         f"[dim]{stats.lyrics_skipped} skipped[/dim]"
     )
+    outdated = stats.spotify_tracks_outdated + stats.soundcloud_tracks_outdated
+    if outdated:
+        console.print(f"[yellow]{outdated_note(outdated)}[/yellow]")
 
     notes = dashboard.artist_notes
     if notes["alias"]:
@@ -546,7 +574,7 @@ def parse_artists_args(argv: list[str]) -> argparse.Namespace:
         description="SoundCloud accounts and the artist names they are written with. Without an "
                     "action: the list. set, keep, reuploader and accept lock the account, so no run "
                     "changes it again (unlock gives it back to the automatic check). A change applies to files "
-                    "downloaded from now on; --recheck applies it to the files already there.",
+                    "downloaded from now on; --existing outdated applies it to the files already there.",
         epilog="ACCOUNT is the account's id, its profile link (soundcloud.com/name) or its handle.",
     )
     parser.add_argument("-o", "--output", required=True, help="The Music folder.")
@@ -602,7 +630,7 @@ def artists_main(argv: list[str], console: Console | None = None) -> int:
     written = account.alias or account.suggestion or account.handle
     console.print(f"{escape(account.name)}: {_STATUS_LABELS.get(account.status, account.status)}"
                   f"{' 🔒' if account.locked else ''}, written as {escape(written or '')}. "
-                  "Files already downloaded follow with --recheck.")
+                  "Files already downloaded follow with --existing outdated.")
     return 0
 
 
@@ -647,7 +675,7 @@ def main(argv: list[str] | None = None) -> int:
     config.lyrics_enabled = not args.no_lyrics
     config.lyrics_mode = LYRICS_MODE_LOOSE if args.lyrics_loose else LYRICS_MODE_STRICT
     config.lyrics_settings = LyricsSettings.from_args(args)
-    config.recheck = args.recheck
+    config.existing = args.existing
     config.soundcloud_reposts = args.soundcloud_reposts
     config.soundcloud_likes = args.soundcloud_likes
     config.soundcloud_fallback = args.soundcloud_fallback

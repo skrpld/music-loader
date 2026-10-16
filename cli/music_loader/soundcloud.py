@@ -23,8 +23,10 @@ over keeps at most a few unconverted downloads on disk.
 
 Every new file is checked before it enters the library: a length that does
 not match SoundCloud's (a 30-second Go+ preview, a cut-off download) fails the
-track instead of being filed as complete. `--recheck` applies the current
-rules to tracks that are already there: tags, folder, broken files, lyrics.
+track instead of being filed as complete. A track that is already there is
+kept as it is (only its id is bound to the file) or, with `--existing
+outdated` / `all`, rewritten under the current rules when it is outdated /
+always: tags, folder, broken files, lyrics (see existing.py).
 
 Tracks SoundCloud does not give out (DRM-protected, preview only, blocked) are
 not failures: they are recognized from SoundCloud's track JSON before any
@@ -78,8 +80,10 @@ from .config import (
     STAGING_DIRNAME,
     STALE_STAGING_SECONDS,
     SUBPROCESS_TIMEOUT_SECONDS,
+    EXISTING_KEEP,
     AppConfig,
 )
+from .existing import account_state, outdated_reason
 from .fallback import SOURCE_LABEL as _FALLBACK_LABEL
 from .fallback import Wanted, find_match
 from .links import Link, parse_link, redact_url
@@ -99,7 +103,7 @@ from .soundcloud_meta import (
     context_from_set,
     info_from_api,
 )
-from .tags import SOURCE_DESC, SOURCE_URL_DESC, audio_duration, read_tags, read_txxx, write_tags
+from .tags import SOURCE_DESC, SOURCE_URL_DESC, audio_duration, bind_ids, read_tags, read_txxx, write_tags
 from .text_utils import normalize_name, parse_soundcloud_title
 
 # yt-dlp's default (--newline) progress line, e.g.:
@@ -174,7 +178,7 @@ class _Context:
     # Account decisions of the job (accounts.RunAccounts).
     accounts: Any = None
     results: dict[str, Path] = field(default_factory=dict)
-    # Files renamed by --recheck, so playlists can follow them.
+    # Files renamed by a rewrite, so playlists can follow them.
     moves: list[tuple[Path, Path]] = field(default_factory=list)
     # Tracks recognized as not downloadable before any download (see _precheck).
     unavailable: dict[str, UnavailableTrack] = field(default_factory=dict)
@@ -580,9 +584,13 @@ def _precheck(jobs: list[TrackJob], ctx: _Context) -> None:
     are left out: the index knows their title, uploader and length. Whatever
     cannot be checked here is caught from yt-dlp's error after the download
     attempt."""
-    # Tracks not in the library yet; with --recheck every track is written again.
-    missing = {job.track_id for job in jobs if ctx.index.find(job.info) is None}
-    pending = [job for job in jobs if ctx.config.recheck or job.track_id in missing]
+    # Tracks not in the library yet, and those that will be rewritten.
+    paths = {job.track_id: ctx.index.find(job.info) for job in jobs}
+    missing = {track_id for track_id, path in paths.items() if path is None}
+    pending = [job for job in jobs if job.track_id in missing or (
+        ctx.config.existing != EXISTING_KEEP
+        and ctx.config.rewrites(_existing_check(job, paths[job.track_id], ctx)[0] is not None)
+    )]
     if not pending:
         return
     ids = list(dict.fromkeys(job.track_id for job in jobs if job.track_id in missing))
@@ -795,19 +803,55 @@ class _Processed:
     meta: TrackMeta | None = None
 
 
+def _existing_check(job: TrackJob, path: Path, ctx: _Context) -> tuple[str | None, dict[str, Any]]:
+    """Why a track found in the library is outdated (None: it is current),
+    and its tags (existing.py)."""
+    tags = read_tags(path, ctx.registry.is_known if ctx.registry is not None else None)
+    entry = ctx.index.entry(job.track_id) or {}
+    written = entry.get("account") if isinstance(entry.get("account"), str) else None
+    current = None
+    if written is not None:
+        account_id = str(job.info.get("uploader_id") or entry.get("uploader_id") or "")
+        current = account_state(ctx.accounts, account_id)
+    return outdated_reason(tags, ctx.registry, written, current), tags
+
+
+def _account_now(info: dict[str, Any], ctx: _Context) -> str:
+    """The decision for the uploader's account a file is written with now."""
+    entry = ctx.index.entry(str(info.get("id") or "")) or {}
+    return account_state(ctx.accounts, str(info.get("uploader_id") or entry.get("uploader_id") or ""))
+
+
+def _keep(job: TrackJob, path: Path, info: dict[str, Any], ctx: _Context,
+          reason: str | None, tags: dict[str, Any]) -> _Processed:
+    """A track found in the library that stays as it is: only its id is
+    written into the file when it has none."""
+    bound = False
+    if not tags.get("soundcloud_id"):
+        bound = bind_ids(path, soundcloud_id=job.track_id)
+        if bound:
+            debuglog.event("soundcloud", "bound", id=job.track_id, path=str(path))
+    if bound or ctx.index.get(job.track_id) is None:
+        # Promote a match found by tags into the exact id mapping.
+        ctx.index.add(info, path)
+    ctx.archive.add(job.track_id)
+    if reason is not None:
+        ctx.dashboard.record_track("soundcloud", "outdated")
+    return _Processed(True, path, True)
+
+
 def _postprocess(job: TrackJob, raw_path: Path, info: dict[str, Any], ctx: _Context) -> _Processed:
     track_id = job.track_id
     existing = ctx.index.find(info)
     if existing is not None:
         # Recognized only after the download (a file from an older version
-        # matched by its tags). Drop the redundant source; with --recheck the
-        # old file is brought up to date instead.
+        # matched by its tags). Drop the redundant source; the old file is
+        # kept, or rewritten when the setting says so.
         raw_path.unlink(missing_ok=True)
-        if ctx.config.recheck:
+        reason, tags = _existing_check(job, existing, ctx)
+        if ctx.config.rewrites(reason is not None):
             return _retag(job, existing, info, ctx)
-        ctx.index.add(info, existing)
-        ctx.archive.add(track_id)
-        return _Processed(True, existing, True)
+        return _keep(job, existing, info, ctx, reason, tags)
 
     meta = build_meta(info, _album_for(job, info, ctx), ctx.registry, ctx.config.soundcloud_format,
                       ctx.accounts)
@@ -863,13 +907,13 @@ def _postprocess(job: TrackJob, raw_path: Path, info: dict[str, Any], ctx: _Cont
             pass
         _release_output(output)
 
-    ctx.index.add(info, output)
+    ctx.index.add(info, output, account=_account_now(info, ctx))
     ctx.archive.add(track_id)
     return _Processed(True, output, False, meta)
 
 
 def _retag(job: TrackJob, existing: Path, info: dict[str, Any], ctx: _Context) -> _Processed:
-    """--recheck of a track that is already in the library: current tags,
+    """Rewrites a track that is already in the library: current tags,
     current folder/name, lyrics redone by the caller."""
     meta = build_meta(info, _album_for(job, info, ctx), ctx.registry, ctx.config.soundcloud_format,
                       ctx.accounts)
@@ -891,7 +935,7 @@ def _retag(job: TrackJob, existing: Path, info: dict[str, Any], ctx: _Context) -
                 ctx.moves.append((existing, output))
             prune_empty_dirs(existing.parent, ctx.soundcloud_dir)
     except OSError as exc:
-        ctx.dashboard.log_error("SoundCloud", f"Recheck failed for '{meta.title}': {exc}")
+        ctx.dashboard.log_error("SoundCloud", f"Update failed for '{meta.title}': {exc}")
         return _Processed(False)
     finally:
         try:
@@ -899,7 +943,7 @@ def _retag(job: TrackJob, existing: Path, info: dict[str, Any], ctx: _Context) -
         except OSError:
             pass
         _release_output(output)
-    ctx.index.add(info, output)
+    ctx.index.add(info, output, account=_account_now(info, ctx))
     ctx.archive.add(job.track_id)
     return _Processed(True, output, True, meta)
 
@@ -1208,7 +1252,7 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
         debuglog.event(
             "soundcloud", "track_result", id=job.track_id, ok=result.ok,
             status=("failed" if not result.ok or result.path is None
-                    else "rechecked" if result.existed and recheck
+                    else "updated" if result.existed and recheck
                     else "skipped (already in library)" if result.existed else "downloaded"),
             path=(str(result.path.relative_to(ctx.soundcloud_dir))
                   if result.path is not None and result.path.is_relative_to(ctx.soundcloud_dir)
@@ -1226,11 +1270,11 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
             dashboard.log(f"[SoundCloud] Already exists: {result.path.name}")
         elif result.existed:
             dashboard.record_track("soundcloud", "skipped")
-            dashboard.log(f"[SoundCloud] Rechecked: {result.path.relative_to(ctx.soundcloud_dir)}")
+            dashboard.log(f"[SoundCloud] Updated: {result.path.relative_to(ctx.soundcloud_dir)}")
         else:
             dashboard.record_track("soundcloud", "done")
             dashboard.log(f"[SoundCloud] Ready: {result.path.relative_to(ctx.soundcloud_dir)}")
-        submit_lyrics(result.path, job.track_id, result.meta, force=config.recheck)
+        submit_lyrics(result.path, job.track_id, result.meta, force=recheck or config.rewrite_all)
 
     def pp_task(job: TrackJob, kind: str, path: Path, info: dict[str, Any]) -> None:
         try:
@@ -1309,7 +1353,7 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
             return
         info: dict[str, Any] | None = None
         existing = ctx.index.find(job.info)
-        if existing is None and (config.recheck or ctx.index.has_unindexed_legacy_files()):
+        if existing is None and (config.rewrite_all or ctx.index.has_unindexed_legacy_files()):
             # Files of older versions are recognized by their title/uploader/
             # length, which a flat listing does not have: fetch the track's
             # metadata first instead of downloading it a second time.
@@ -1318,23 +1362,20 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
             if full is not None:
                 info = _merge_info(job.info, full)
                 existing = ctx.index.find(info)
-        if existing is not None and not config.recheck:
-            if ctx.index.get(job.track_id) is None:
-                # Promote a match found by tags into the exact id mapping.
-                ctx.index.add(job.info, existing)
-            ctx.archive.add(job.track_id)
-            finished(job, _Processed(True, existing, True), recheck=False)
-            return
-
         if existing is not None:
-            dashboard.start_file(label=f"SoundCloud: rechecking {existing.name[:50]}", slot=slot)
+            reason, tags = _existing_check(job, existing, ctx)
+            if not config.rewrites(reason is not None):
+                finished(job, _keep(job, existing, info or job.info, ctx, reason, tags), recheck=False)
+                return
+            debuglog.event("soundcloud", "update", id=job.track_id, reason=reason or "all")
+            dashboard.start_file(label=f"SoundCloud: updating {existing.name[:50]}", slot=slot)
             if info is None:
                 full = _fetch_full_info(job.url, ctx)
                 if full is None:
                     ctx.fail(job)
                     dashboard.record_track("soundcloud", "failed")
                     _note_failure(dashboard, job, FailureCategory.FAILED)
-                    dashboard.log_error("SoundCloud", f"Recheck: could not fetch metadata for '{existing.name}'")
+                    dashboard.log_error("SoundCloud", f"Update: could not fetch metadata for '{existing.name}'")
                     return
                 info = _merge_info(job.info, full)
             ok, actual = _duration_ok(existing, info.get("duration"))
@@ -1342,7 +1383,7 @@ def _run_pipeline(jobs: list[TrackJob], ctx: _Context) -> None:
                 hand_over(job, "retag", existing, info)
                 return
             dashboard.log(
-                f"[SoundCloud] Recheck: '{existing.name}' is {actual or 0:.0f}s instead of "
+                f"[SoundCloud] Update: '{existing.name}' is {actual or 0:.0f}s instead of "
                 f"{float(info.get('duration') or 0):.0f}s, downloading again"
             )
             remove_with_sidecars(existing)

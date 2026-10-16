@@ -5,9 +5,15 @@ Used to find a track that already exists under another path - a folder
 layout of an older version, a renamed album - and move it to the current
 path instead of downloading it again, and to spot duplicate copies.
 
+A file without a Spotify URL (another tool, a copy without its tags) is
+recognised by its artist, title and length (`find_match`: the same main
+artist and title, length within 2 s of a song of the link); the caller then
+binds the URL and id into it (tags.bind_ids).
+
 Reading tags of a large library is slow, so results are cached in
-`.spotify_index.json` per file (size + modification time) and the scan only
-happens when it is actually needed.
+`.spotify_index.json` per file (size + modification time, plus title,
+artists and length for a file without a URL) and the scan only happens when
+it is actually needed.
 """
 from __future__ import annotations
 
@@ -16,7 +22,12 @@ import os
 from pathlib import Path
 
 from .config import AUDIO_EXTENSIONS, SPOTIFY_INDEX_FILENAME
-from .tags import read_woas
+from .tags import audio_duration, read_tags, read_woas
+from .text_utils import normalize_name
+
+_SPOTIFY_PREFIX = "https://open.spotify.com/"
+# A file without a URL matches a song when the lengths differ by at most this.
+MATCH_TOLERANCE_SECONDS = 2.0
 
 
 class SpotifyLibrary:
@@ -25,6 +36,8 @@ class SpotifyLibrary:
         self.exclude = [path.resolve() for path in exclude]
         self.cache_path = music_dir / SPOTIFY_INDEX_FILENAME
         self._by_url: dict[str, list[Path]] | None = None
+        # Files without a Spotify URL: (path, title key, artist keys, length).
+        self._prints: list[tuple[Path, str, set[str], float | None]] = []
         self._cache: dict[str, list] = {}
 
     def _load_cache(self) -> dict[str, list]:
@@ -49,6 +62,7 @@ class SpotifyLibrary:
         old = self._load_cache()
         cache: dict[str, list] = {}
         by_url: dict[str, list[Path]] = {}
+        prints: list[tuple[Path, str, set[str], float | None]] = []
         for path in self._walk():
             try:
                 stat = path.stat()
@@ -56,15 +70,25 @@ class SpotifyLibrary:
             except (OSError, ValueError):
                 continue
             entry = old.get(relative)
-            if isinstance(entry, list) and len(entry) == 3 and entry[0] == stat.st_mtime_ns and entry[1] == stat.st_size:
-                url = str(entry[2])
-            else:
-                url = read_woas(path)
-            cache[relative] = [stat.st_mtime_ns, stat.st_size, url]
-            if url.startswith("https://open.spotify.com/"):
+            fresh = isinstance(entry, list) and len(entry) >= 3 \
+                and entry[0] == stat.st_mtime_ns and entry[1] == stat.st_size
+            url = str(entry[2]) if fresh else read_woas(path)
+            if url.startswith(_SPOTIFY_PREFIX):
+                cache[relative] = [stat.st_mtime_ns, stat.st_size, url]
                 by_url.setdefault(url, []).append(path)
+                continue
+            if fresh and len(entry) == 6:
+                title, artists, duration = entry[3], entry[4], entry[5]
+            else:
+                tags = read_tags(path)
+                title, artists, duration = tags["title"], tags["artists"], audio_duration(path)
+            cache[relative] = [stat.st_mtime_ns, stat.st_size, url, title, artists, duration]
+            if title and artists:
+                prints.append((path, normalize_name(str(title)),
+                               {normalize_name(str(name)) for name in artists}, _seconds(duration)))
         self._cache = cache
         self._by_url = by_url
+        self._prints = prints
         self._save()
 
     def _save(self) -> None:
@@ -83,6 +107,29 @@ class SpotifyLibrary:
             self._build()
         return [path for path in (self._by_url or {}).get(url, []) if path.exists()]
 
+    def find_match(self, artist: str, titles: list[str], duration) -> Path | None:
+        """A file without a Spotify URL that is this song: `artist` among its
+        artists, one of `titles` as its title, the length within 2 s (both
+        lengths known)."""
+        if self._by_url is None:
+            self._build()
+        artist_key = normalize_name(artist)
+        title_keys = {normalize_name(title) for title in titles if title}
+        length = _seconds(duration)
+        if not artist_key or not title_keys or length is None:
+            return None
+        for path, title, artists, other in self._prints:
+            if title in title_keys and artist_key in artists and other is not None \
+                    and abs(other - length) <= MATCH_TOLERANCE_SECONDS and path.exists():
+                return path
+        return None
+
+    def bound(self, path: Path, url: str) -> None:
+        """`path` got the URL of a song written into it."""
+        self._prints = [item for item in self._prints if item[0] != path]
+        if self._by_url is not None:
+            self._by_url.setdefault(url, []).append(path)
+
     def moved(self, source: Path, target: Path, url: str) -> None:
         if self._by_url is None:
             return
@@ -94,6 +141,14 @@ class SpotifyLibrary:
         if self._by_url is None:
             return
         self._by_url[url] = [item for item in self._by_url.get(url, []) if item != path]
+
+
+def _seconds(value) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
 
 
 _LIBRARIES: dict[Path, SpotifyLibrary] = {}

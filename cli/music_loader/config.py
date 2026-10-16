@@ -99,6 +99,27 @@ SUBPROCESS_TIMEOUT_SECONDS = 6 * 60 * 60
 LYRICS_MODE_STRICT = "strict"
 LYRICS_MODE_LOOSE = "loose"
 
+# Version of what music-loader writes: tag rules, title formatting, folder
+# layout, file naming. Bump it whenever the written result changes, so files
+# written before count as outdated (TXXX:MUSIC_LOADER_FORMAT, see tags.py; a
+# file without the frame is version 0).
+FORMAT_VERSION = 1
+
+# What happens to a track that is already in the library ("Existing tracks").
+EXISTING_KEEP = "keep"            # skipped; only its id is bound to the file
+EXISTING_OUTDATED = "outdated"    # rewritten when outdated (older format, changed artist)
+EXISTING_ALL = "all"              # always rewritten (the old --recheck)
+EXISTING_MODES = (EXISTING_KEEP, EXISTING_OUTDATED, EXISTING_ALL)
+
+
+def existing_from_options(options: dict[str, Any]) -> str:
+    """The "Existing tracks" mode of server job options: `existing`, else
+    the older `recheck: true` (= all); anything else means keep."""
+    value = options.get("existing")
+    if value in EXISTING_MODES:
+        return value
+    return EXISTING_ALL if options.get("recheck") is True else EXISTING_KEEP
+
 
 # -- SoundCloud formatting settings ---------------------------------------------------
 # Where featured artists go: "(feat. X)" in the title and X in the artist tag
@@ -145,8 +166,8 @@ def validate_filename_template(template: Any) -> str:
 @dataclass(frozen=True)
 class SoundCloudFormat:
     """How SoundCloud tracks are written. The defaults are the behaviour of
-    versions before these settings existed. `--recheck` applies a change to
-    tracks already in the library."""
+    versions before these settings existed. `--existing all` applies a change
+    to tracks already in the library."""
     feat: str = FEAT_BOTH
     keep_producers: bool = False      # "(prod. X)" in the title
     keep_versions: bool = True        # "(Sped Up)", "(Remix)", "(Live)"... in the title
@@ -328,7 +349,8 @@ class AppConfig:
     lyrics_enabled: bool = True
     lyrics_mode: str = LYRICS_MODE_STRICT
     lyrics_settings: LyricsSettings = field(default_factory=LyricsSettings)
-    recheck: bool = False
+    # EXISTING_MODES: what happens to tracks already in the library.
+    existing: str = EXISTING_KEEP
     soundcloud_reposts: bool = False
     soundcloud_likes: bool = False
     # Opt-in: a track SoundCloud does not give out (DRM, preview, blocked) is
@@ -342,6 +364,15 @@ class AppConfig:
         music_dir = output_dir.expanduser().resolve()
         soundcloud_dir = music_dir / SOUNDCLOUD_SUBDIR
         return cls(music_dir=music_dir, soundcloud_dir=soundcloud_dir)
+
+    @property
+    def rewrite_all(self) -> bool:
+        """Every track found in the library is rewritten (the old --recheck)."""
+        return self.existing == EXISTING_ALL
+
+    def rewrites(self, outdated: bool) -> bool:
+        """Whether a track already in the library is rewritten."""
+        return self.existing == EXISTING_ALL or (self.existing == EXISTING_OUTDATED and outdated)
 
     def ensure_dirs(self) -> None:
         self.music_dir.mkdir(parents=True, exist_ok=True)

@@ -10,7 +10,7 @@ removes partial files and keeps the indexes consistent.
 Job spec:
 
     {"links": ["https://open.spotify.com/album/..."], "output": "/srv/Music",
-     "lyrics": "strict" | "loose" | "off", "recheck": false,
+     "lyrics": "strict" | "loose" | "off", "existing": "keep" | "outdated" | "all",
      "soundcloud_reposts": false, "soundcloud_likes": false,
      "soundcloud_fallback": false, "debug_log": false,
      "soundcloud_feat": "both", "soundcloud_keep_producers": false,
@@ -22,7 +22,8 @@ Job spec:
      "spotify_threads": 4, "soundcloud_download_workers": 2,
      "soundcloud_workers": 4, "lyrics_workers": 2}
 
-Spotify credentials are read from the environment, as in the CLI.
+"recheck": true (older servers) is read as "existing": "all". Spotify
+credentials are read from the environment, as in the CLI.
 """
 from __future__ import annotations
 
@@ -42,6 +43,7 @@ from .config import (
     AppConfig,
     LyricsSettings,
     SoundCloudFormat,
+    existing_from_options,
 )
 from . import debuglog
 from .events import EventDashboard
@@ -80,7 +82,7 @@ def build_config(spec: dict[str, Any]) -> AppConfig:
     config.lyrics_enabled = lyrics != "off"
     config.lyrics_mode = LYRICS_MODE_LOOSE if lyrics == LYRICS_MODE_LOOSE else LYRICS_MODE_STRICT
     config.lyrics_settings = LyricsSettings.from_options(spec)
-    config.recheck = spec.get("recheck") is True
+    config.existing = existing_from_options(spec)
     config.soundcloud_reposts = spec.get("soundcloud_reposts") is True
     config.soundcloud_likes = spec.get("soundcloud_likes") is True
     config.soundcloud_fallback = spec.get("soundcloud_fallback") is True

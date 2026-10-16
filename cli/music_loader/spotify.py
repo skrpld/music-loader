@@ -18,6 +18,13 @@ Knowing every song and its path up front makes the run checkable:
   skipped as "already exists" forever) - it is deleted and downloaded again;
 * a song that exists under an older folder layout is moved, with its
   lyrics, instead of being downloaded a second time;
+* a file without a Spotify URL that is the same song (main artist, title,
+  length within 2 s) gets the URL and id written into it and is kept where
+  it is; with `--existing outdated` / `all` it then joins the current
+  layout like any other file;
+* a song already in the library is kept, or rewritten (spotDL's metadata
+  refresh plus the artist frames) when it is outdated / always, depending on
+  `--existing` (see existing.py);
 * after the download every song is checked on disk, so the counters show
   what really happened: spotdl exits with 0 even when tracks failed, and its
   error lines come in many shapes.
@@ -62,8 +69,11 @@ from .config import (
     AUDIO_EXTENSIONS,
     SPOTIFY_LYRICS_ATTEMPTS_FILENAME,
     SUBPROCESS_TIMEOUT_SECONDS,
+    EXISTING_OUTDATED,
+    FORMAT_VERSION,
     AppConfig,
 )
+from .existing import outdated_reason
 from .links import Link
 from .lyrics import LyricsRequest, LyricsService, get_attempts
 from .net import probe
@@ -78,7 +88,17 @@ from .process import (
     ytdlp_extra_args,
 )
 from .spotify_index import get_library
-from .tags import artists_current, audio_duration, read_woas, set_album_artist, set_artists
+from .tags import (
+    SPOTIFY_ID_DESC,
+    artists_current,
+    audio_duration,
+    bind_ids,
+    read_tags,
+    read_txxx,
+    read_woas,
+    set_album_artist,
+    set_artists,
+)
 
 _FOUND_RE = re.compile(r"Found (\d+) songs? in", re.IGNORECASE)
 _STATUS_RE = re.compile(r"^(?P<name>.+): (?P<status>Searching for song|Downloading|Converting|"
@@ -540,14 +560,16 @@ class SpotifyBatch:
 
             # -- check what is already there ------------------------------------------------
             existed = _prepare(songs, config, dashboard)
+            rewrite = _to_rewrite(songs, existed, config, registry, dashboard)
+            _remove_duplicates(songs, rewrite, config, dashboard)
 
             # -- download -----------------------------------------------------------------------
             run = _Run(dashboard, music_dir, total=len(songs))
-            todo = _stage_for_spotdl(songs, existed, config, save_file, dashboard)
+            todo = _stage_for_spotdl(songs, existed, rewrite, save_file, dashboard)
             code = 0
             if todo:
                 dashboard.start_file(label="Spotify: downloading...")
-                overwrite = "metadata" if config.recheck else "skip"
+                overwrite = "metadata" if rewrite else "skip"
                 code = run_streamed(
                     tool.base + ["download", str(save_file), "--bitrate", "320k", "--overwrite", overwrite,
                                  "--print-errors"] + tool.common,
@@ -566,13 +588,13 @@ class SpotifyBatch:
                 _refusal_hint(run.refused, config, dashboard)
 
             # -- artist tags ----------------------------------------------------------------------
-            _tag_artists(songs, existed, config, registry, dashboard)
+            _tag_artists(songs, existed, rewrite, registry, dashboard)
             if debuglog.enabled():
                 _debug_results(songs, existed, failed, registry, music_dir)
 
             # -- lyrics ---------------------------------------------------------------------------
             if lyrics is not None and config.lyrics_enabled:
-                _lyrics(songs, config, dashboard, lyrics)
+                _lyrics(songs, config, dashboard, lyrics, rewrite)
             return None if code != 0 else failed
         except KeyboardInterrupt:
             # spotDL writes straight into the final file; never leave a half
@@ -630,10 +652,10 @@ def _int(value: Any, default: int) -> int:
         return default
 
 
-def _stage_for_spotdl(songs: list[_Song], existed: set[str], config: AppConfig,
+def _stage_for_spotdl(songs: list[_Song], existed: set[str], rewrite: set[str],
                       save_file: Path, dashboard) -> list[_Song]:
     """spotDL looks for a song at its own path. Complete songs are left out
-    of its run; with --recheck they are put at its path for the metadata
+    of its run; the ones to rewrite are put at its path for the metadata
     refresh and renamed back afterwards (a crash in between is repaired by
     the lookup by URL on the next run)."""
     todo: list[_Song] = []
@@ -641,7 +663,7 @@ def _stage_for_spotdl(songs: list[_Song], existed: set[str], config: AppConfig,
         if song.url not in existed or song.path is None or song.work is None:
             todo.append(song)
             continue
-        if not config.recheck:
+        if song.url not in rewrite:
             continue
         if song.work != song.path:
             try:
@@ -706,6 +728,18 @@ def _prepare(songs: list[_Song], config: AppConfig, dashboard) -> set[str]:
                 dashboard.log(f"[Spotify] Unfinished file from an earlier run, downloading again: {path.name}")
             continue
         others = library.find(song.url)
+        if not others:
+            match = _find_unbound(song, library)
+            if match is not None and bind_ids(match, spotify_url=song.url):
+                library.bound(match, song.url)
+                debuglog.event("spotify", "bound", url=song.url, path=str(match))
+                dashboard.log(f"[Spotify] Recognised without its Spotify id, id written: {match.name}")
+                if not config.rewrites(True):
+                    # Kept: the file stays where it is.
+                    song.path = match
+                    existed.add(song.url)
+                    continue
+                others = [match]
         if others:
             source = max(others, key=lambda item: item.stat().st_mtime)
             try:
@@ -717,43 +751,88 @@ def _prepare(songs: list[_Song], config: AppConfig, dashboard) -> set[str]:
             prune_empty_dirs(source.parent, config.music_dir)
             existed.add(song.url)
             dashboard.log(f"[Spotify] Moved to the current folder layout: {path.relative_to(config.music_dir)}")
-    if config.recheck:
-        # Copies of the same Spotify track under other paths (an older
-        # layout, a renamed album) only clutter the library.
-        for song in songs:
-            if song.path is None or song.url not in existed:
-                continue
-            for duplicate in library.find(song.url):
-                if duplicate != song.path and duplicate.exists():
-                    remove_with_sidecars(duplicate)
-                    library.removed(duplicate, song.url)
-                    prune_empty_dirs(duplicate.parent, config.music_dir)
-                    dashboard.log(f"[Spotify] Removed duplicate copy: {duplicate}")
     return existed
 
 
-def _tag_artists(songs: list[_Song], existed: set[str], config: AppConfig,
+def _find_unbound(song: _Song, library) -> Path | None:
+    """A file without a Spotify URL that is this song (spotify_index.py)."""
+    data = song.data
+    artists = [str(name) for name in data.get("artists") or [] if name]
+    artist = str(data.get("artist") or (artists[0] if artists else ""))
+    name = str(data.get("name") or "")
+    if not artist or not name:
+        return None
+    return library.find_match(artist, [name, spotify_title(name)], data.get("duration"))
+
+
+def _to_rewrite(songs: list[_Song], existed: set[str], config: AppConfig,
+                registry, dashboard) -> set[str]:
+    """URLs of the songs already in the library that are rewritten, by the
+    "Existing tracks" setting. Kept outdated songs are counted."""
+    rewrite: set[str] = set()
+    outdated = 0
+    for song in songs:
+        if song.path is None or song.url not in existed:
+            continue
+        if config.rewrite_all:
+            rewrite.add(song.url)
+            continue
+        reason = outdated_reason(read_tags(song.path, registry.is_known), registry)
+        if reason is None:
+            continue
+        if config.existing == EXISTING_OUTDATED:
+            rewrite.add(song.url)
+            debuglog.event("spotify", "update", url=song.url, reason=reason)
+        else:
+            outdated += 1
+    if outdated:
+        dashboard.record_track("spotify", "outdated", outdated)
+    return rewrite
+
+
+def _remove_duplicates(songs: list[_Song], rewrite: set[str], config: AppConfig, dashboard) -> None:
+    """Copies of a rewritten Spotify track under other paths (an older
+    layout, a renamed album) only clutter the library."""
+    if not rewrite:
+        return
+    library = get_library(config.music_dir, [config.soundcloud_dir])
+    for song in songs:
+        if song.path is None or song.url not in rewrite:
+            continue
+        for duplicate in library.find(song.url):
+            if duplicate != song.path and duplicate.exists():
+                remove_with_sidecars(duplicate)
+                library.removed(duplicate, song.url)
+                prune_empty_dirs(duplicate.parent, config.music_dir)
+                dashboard.log(f"[Spotify] Removed duplicate copy: {duplicate}")
+
+
+def _tag_artists(songs: list[_Song], existed: set[str], rewrite: set[str],
                  registry, dashboard) -> None:
     """spotDL writes ID3v2.3 with "/" between artists. Rewrites the artist
-    frames of new files (and of every file with --recheck, which migrates an
-    existing library) as "A, B" plus the real list in TXXX:ARTISTS."""
+    frames of new and rewritten files as "A, B" plus the real list in
+    TXXX:ARTISTS, and stamps them with the Spotify id and the format version.
+    A kept file only gets its id when it has none."""
     changed = 0
     for song in songs:
         path = song.path
         if path is None or not path.exists() or not _is_complete(path, song.url):
             continue
-        if song.url in existed and not config.recheck:
+        if song.url in existed and song.url not in rewrite:
+            if not read_txxx(path, SPOTIFY_ID_DESC):
+                bind_ids(path, spotify_url=song.url)
             continue
         names = [registry.canonical(str(name)) for name in song.data.get("artists") or [] if name]
         if song.album_artist and song.album_artist != str(song.data.get("album_artist") or ""):
             if not set_album_artist(path, song.album_artist):
                 dashboard.log_error("Spotify", f"Could not write the album artist of {path.name}")
-        if not names or artists_current(path, names):
-            continue
-        if set_artists(path, names):
-            changed += 1
-        else:
-            dashboard.log_error("Spotify", f"Could not write the artist tags of {path.name}")
+        if names and not artists_current(path, names):
+            if set_artists(path, names):
+                changed += 1
+            else:
+                dashboard.log_error("Spotify", f"Could not write the artist tags of {path.name}")
+        if not bind_ids(path, spotify_url=song.url, format_version=FORMAT_VERSION):
+            dashboard.log_error("Spotify", f"Could not write the Spotify id of {path.name}")
     if changed:
         dashboard.log(f"[Spotify] Artist tags written for {changed} file(s)")
 
@@ -842,7 +921,8 @@ def _song_category(reason: str, run: "_Run", missing: bool = False) -> FailureCa
     return category
 
 
-def _lyrics(songs: list[_Song], config: AppConfig, dashboard, service: LyricsService) -> None:
+def _lyrics(songs: list[_Song], config: AppConfig, dashboard, service: LyricsService,
+            rewrite: set[str] = frozenset()) -> None:
     attempts = get_attempts(config.music_dir / SPOTIFY_LYRICS_ATTEMPTS_FILENAME)
     requests: list[LyricsRequest] = []
     for song in songs:
@@ -859,7 +939,7 @@ def _lyrics(songs: list[_Song], config: AppConfig, dashboard, service: LyricsSer
             title=str(song.data.get("name") or ""),
             album=str(song.data.get("album_name") or ""),
             duration=audio_duration(path) or song.data.get("duration"),
-            force=config.recheck,
+            force=config.rewrite_all or song.url in rewrite,
         ))
     if not requests:
         return

@@ -15,7 +15,7 @@ data class AppSettings(
     val token: String = "",
     val themeMode: ThemeMode = ThemeMode.System,
     val dynamicColor: Boolean = true,
-    /** Options preselected for the next job; "recheck" is never remembered. */
+    /** Options preselected for the next job; "existing" (and "recheck") is never remembered. */
     val jobOptions: JobOptions = JobOptions(),
 ) {
     val server: ServerConfig?

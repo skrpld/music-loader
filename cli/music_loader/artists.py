@@ -8,7 +8,8 @@ punctuation-insensitively) and every tag is written with that form.
 
 Sources rank by reliability: Spotify's own artist list first, then a
 SoundCloud account name, then a name parsed out of a title. A better source
-replaces a worse spelling; `--recheck` then rewrites older tags.
+replaces a worse spelling; files written with the older spelling are then
+outdated, and `--existing outdated` rewrites them (existing.py).
 
 The same file keeps the decision per SoundCloud account (accounts.py) under
 the reserved key `ACCOUNTS_KEY`, which no normalized name can be. The entry

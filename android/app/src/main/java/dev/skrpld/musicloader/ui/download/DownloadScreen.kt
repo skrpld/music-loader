@@ -64,18 +64,22 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.skrpld.musicloader.R
 import dev.skrpld.musicloader.data.Connection
+import dev.skrpld.musicloader.data.ExistingTracks
 import dev.skrpld.musicloader.data.Features
 import dev.skrpld.musicloader.data.JobOptions
 import dev.skrpld.musicloader.data.LinkScan
 import dev.skrpld.musicloader.data.LyricsMode
+import dev.skrpld.musicloader.data.serverState
 import dev.skrpld.musicloader.data.supports
 import dev.skrpld.musicloader.ui.components.ConnectionBanner
 import dev.skrpld.musicloader.ui.components.Pill
 import dev.skrpld.musicloader.ui.components.SectionHeader
+import dev.skrpld.musicloader.ui.jobs.existingTracksName
 import dev.skrpld.musicloader.ui.jobs.lyricsModeName
 import dev.skrpld.musicloader.ui.rememberClipboardAccess
 import kotlinx.coroutines.launch
@@ -108,6 +112,8 @@ fun DownloadScreen(
     // An older server would ignore the option: do not offer what it cannot do.
     val showAutoRetry = connection.supports(Features.AutoRetry)
     val showDebugLog = connection.supports(Features.DebugLog)
+    // Unknown until connected; the server in the app always has it.
+    val outdatedSupported = connection.serverState == null || connection.supports(Features.ExistingTracks)
 
     val messages by rememberUpdatedState(
         DownloadMessages(
@@ -197,7 +203,7 @@ fun DownloadScreen(
                 )
                 OptionsSummary(
                     options = options,
-                    recheck = viewModel.recheck,
+                    existing = viewModel.existing,
                     showAutoRetry = showAutoRetry,
                     showDebugLog = showDebugLog,
                     onClick = { showOptions = true },
@@ -259,16 +265,32 @@ fun DownloadScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
                 )
+                SectionHeader(stringResource(R.string.existing_title))
+                ExistingTracksSelector(
+                    selected = viewModel.existing,
+                    outdatedSupported = outdatedSupported,
+                    onSelect = { viewModel.existing = it },
+                )
+                Text(
+                    text = stringResource(
+                        if (viewModel.existing == ExistingTracks.Outdated && !outdatedSupported) {
+                            R.string.existing_outdated_unsupported
+                        } else {
+                            existingTracksDescription(viewModel.existing)
+                        },
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
+                )
                 SectionHeader(stringResource(R.string.options_title))
                 OptionsList(
-                    recheck = viewModel.recheck,
                     reposts = options.soundcloudReposts,
                     likes = options.soundcloudLikes,
                     fallback = options.soundcloudFallback,
                     showAutoRetry = showAutoRetry,
                     autoRetry = options.autoRetry,
                     onAutoRetryChange = viewModel::setAutoRetry,
-                    onRecheckChange = { viewModel.recheck = it },
                     onRepostsChange = viewModel::setSoundcloudReposts,
                     onLikesChange = viewModel::setSoundcloudLikes,
                     onFallbackChange = viewModel::setSoundcloudFallback,
@@ -279,6 +301,12 @@ fun DownloadScreen(
             }
         }
     }
+}
+
+private fun existingTracksDescription(mode: ExistingTracks): Int = when (mode) {
+    ExistingTracks.Keep -> R.string.existing_keep_description
+    ExistingTracks.Outdated -> R.string.existing_outdated_description
+    ExistingTracks.All -> R.string.existing_all_description
 }
 
 private fun lyricsModeDescription(mode: LyricsMode): Int = when (mode) {
@@ -292,7 +320,7 @@ private fun lyricsModeDescription(mode: LyricsMode): Int = when (mode) {
 @Composable
 private fun OptionsSummary(
     options: JobOptions,
-    recheck: Boolean,
+    existing: ExistingTracks,
     showAutoRetry: Boolean,
     showDebugLog: Boolean,
     onClick: () -> Unit,
@@ -322,9 +350,15 @@ private fun OptionsSummary(
                         text = stringResource(R.string.job_option_lyrics, lyricsModeName(options.lyricsMode)),
                         icon = R.drawable.ic_lyrics,
                     )
-                    if (recheck) {
+                    if (existing != ExistingTracks.Keep) {
                         Pill(
-                            text = stringResource(R.string.option_short_recheck),
+                            text = stringResource(
+                                if (existing == ExistingTracks.All) {
+                                    R.string.option_short_existing_all
+                                } else {
+                                    R.string.option_short_existing_outdated
+                                },
+                            ),
                             icon = R.drawable.ic_sync,
                             containerColor = MaterialTheme.colorScheme.tertiaryContainer,
                             contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
@@ -474,17 +508,48 @@ private fun LyricsModeSelector(selected: LyricsMode, onSelect: (LyricsMode) -> U
     }
 }
 
+/** Keep / Update outdated / Update all for the tracks already in the library. */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun ExistingTracksSelector(
+    selected: ExistingTracks,
+    outdatedSupported: Boolean,
+    onSelect: (ExistingTracks) -> Unit,
+) {
+    val modes = ExistingTracks.entries
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
+    ) {
+        modes.forEachIndexed { index, mode ->
+            ToggleButton(
+                checked = selected == mode,
+                onCheckedChange = { onSelect(mode) },
+                enabled = mode != ExistingTracks.Outdated || outdatedSupported || selected == mode,
+                modifier = Modifier
+                    .weight(1f)
+                    .semantics { role = Role.RadioButton },
+                shapes = when (index) {
+                    0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                    modes.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                    else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                },
+            ) {
+                Text(text = existingTracksName(mode), maxLines = 2, textAlign = TextAlign.Center)
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun OptionsList(
-    recheck: Boolean,
     reposts: Boolean,
     likes: Boolean,
     fallback: Boolean,
     showAutoRetry: Boolean,
     autoRetry: Boolean,
     onAutoRetryChange: (Boolean) -> Unit,
-    onRecheckChange: (Boolean) -> Unit,
     onRepostsChange: (Boolean) -> Unit,
     onLikesChange: (Boolean) -> Unit,
     onFallbackChange: (Boolean) -> Unit,
@@ -492,19 +557,10 @@ private fun OptionsList(
     debugLog: Boolean,
     onDebugLogChange: (Boolean) -> Unit,
 ) {
-    val count = 4 + (if (showAutoRetry) 1 else 0) + (if (showDebugLog) 1 else 0)
+    val count = 3 + (if (showAutoRetry) 1 else 0) + (if (showDebugLog) 1 else 0)
     Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
         OptionItem(
             index = 0,
-            count = count,
-            icon = R.drawable.ic_sync,
-            title = stringResource(R.string.option_recheck),
-            description = stringResource(R.string.option_recheck_description),
-            checked = recheck,
-            onCheckedChange = onRecheckChange,
-        )
-        OptionItem(
-            index = 1,
             count = count,
             icon = R.drawable.ic_repeat,
             title = stringResource(R.string.option_reposts),
@@ -513,7 +569,7 @@ private fun OptionsList(
             onCheckedChange = onRepostsChange,
         )
         OptionItem(
-            index = 2,
+            index = 1,
             count = count,
             icon = R.drawable.ic_favorite,
             title = stringResource(R.string.option_likes),
@@ -522,7 +578,7 @@ private fun OptionsList(
             onCheckedChange = onLikesChange,
         )
         OptionItem(
-            index = 3,
+            index = 2,
             count = count,
             icon = R.drawable.ic_library_music,
             title = stringResource(R.string.option_fallback),
@@ -532,7 +588,7 @@ private fun OptionsList(
         )
         if (showAutoRetry) {
             OptionItem(
-                index = 4,
+                index = 3,
                 count = count,
                 icon = R.drawable.ic_schedule,
                 title = stringResource(R.string.option_auto_retry),

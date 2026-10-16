@@ -79,10 +79,11 @@ Interactive mode, which asks for links and the target folder:
 music-loader
 ```
 
-Bring tracks downloaded by an older version up to the current rules:
+Bring tracks downloaded by an older version up to the current rules (`--existing all` rewrites
+every track, `--recheck` is the same):
 
 ```sh
-music-loader links.txt -o ~/Music --recheck
+music-loader links.txt -o ~/Music --existing outdated
 ```
 
 Run as a server for the Android app (prints the address and an access token):

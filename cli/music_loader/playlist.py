@@ -102,7 +102,7 @@ def write_named_playlist(
 
 
 def apply_moves(soundcloud_dir: Path, moves: list[tuple[Path, Path]], dashboard=None) -> int:
-    """Rewrites playlist entries after files were renamed (`--recheck`).
+    """Rewrites playlist entries after files were renamed (a rewrite, `--existing`).
     Returns the number of changed entries."""
     mapping: dict[str, str] = {}
     for old, new in moves:

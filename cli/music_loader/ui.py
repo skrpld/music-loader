@@ -73,6 +73,12 @@ class Stats:
     # blocked, removed). Not a failure, see availability.py.
     soundcloud_tracks_unavailable: int = 0
 
+    # Tracks already in the library that are outdated (an older format, a
+    # changed artist) and were kept because of `--existing keep`. Only among
+    # the tracks of the run; not an outcome of its own (they are "skipped").
+    spotify_tracks_outdated: int = 0
+    soundcloud_tracks_outdated: int = 0
+
 
 class Dashboard:
     def __init__(
