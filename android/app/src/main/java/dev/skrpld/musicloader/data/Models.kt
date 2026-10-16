@@ -24,10 +24,24 @@ enum class LyricsMode(val wire: String) {
     }
 }
 
+/** What a job does with tracks already in the library (the `existing` job option). */
+enum class ExistingTracks(val wire: String) {
+    Keep("keep"),
+    Outdated("outdated"),
+    All("all");
+
+    companion object {
+        fun fromWire(value: String?): ExistingTracks? = entries.firstOrNull { it.wire == value }
+    }
+}
+
 @Serializable
 data class JobOptions(
     val lyrics: String = LyricsMode.Strict.wire,
+    /** The same as [existing] "all"; what servers before [Features.ExistingTracks] understand. */
     val recheck: Boolean = false,
+    /** [ExistingTracks] (needs [Features.ExistingTracks]); missing from an older server. */
+    val existing: String? = null,
     @SerialName("soundcloud_reposts") val soundcloudReposts: Boolean = false,
     @SerialName("soundcloud_likes") val soundcloudLikes: Boolean = false,
     @SerialName("soundcloud_fallback") val soundcloudFallback: Boolean = false,
@@ -51,6 +65,14 @@ data class JobOptions(
     val lyricsMode: LyricsMode get() = LyricsMode.fromWire(lyrics)
     val featPlacement: FeatPlacement get() = FeatPlacement.fromWire(soundcloudFeat)
     val providers: List<LyricsProvider> get() = LyricsProvider.fromWire(lyricsProviders)
+
+    /** An older server sends only [recheck]. */
+    val existingTracks: ExistingTracks
+        get() = ExistingTracks.fromWire(existing) ?: if (recheck) ExistingTracks.All else ExistingTracks.Keep
+
+    /** Both fields, so an older server still understands "all". */
+    fun withExisting(mode: ExistingTracks): JobOptions =
+        copy(existing = mode.wire, recheck = mode == ExistingTracks.All)
 }
 
 /** Lyrics providers, asked in the order of [JobOptions.lyricsProviders] (see LYRICS_PROVIDERS in config.py). */
@@ -152,6 +174,9 @@ object Features {
 
     /** `GET /artists` and `POST /artists/<id>/<action>`, and the job's `artists` notes. */
     const val Artists = "artists"
+
+    /** The `existing` job option (keep / outdated / all) and the outdated counters. */
+    const val ExistingTracks = "existing_tracks"
 }
 
 /** What a retry queues: every link of the job again, or only the failures worth another try. */
@@ -209,7 +234,11 @@ data class JobStats(
     @SerialName("soundcloud_tracks_failed") val soundcloudTracksFailed: Int = 0,
     /** Tracks SoundCloud does not give out (DRM, preview, blocked): skipped, not failed. */
     @SerialName("soundcloud_tracks_unavailable") val soundcloudTracksUnavailable: Int = 0,
+    /** Outdated tracks a job with [ExistingTracks.Keep] left as they were (already in "skipped"). */
+    @SerialName("spotify_tracks_outdated") val spotifyTracksOutdated: Int = 0,
+    @SerialName("soundcloud_tracks_outdated") val soundcloudTracksOutdated: Int = 0,
 ) {
+    val tracksOutdated: Int get() = spotifyTracksOutdated + soundcloudTracksOutdated
     val tracksDone: Int get() = spotifyTracksDone + soundcloudTracksDone
     val tracksSkipped: Int get() = spotifyTracksSkipped + soundcloudTracksSkipped
     val tracksFailed: Int get() = spotifyTracksFailed + soundcloudTracksFailed

@@ -61,15 +61,22 @@
     <string name="lyrics_loose_description">Fuzzy artist and title match, length difference up to the limit in Settings (10 s by default). When the timing may not fit, only plain text is saved.</string>
     <string name="lyrics_off_description">Lyrics are not looked up.</string>
     <string name="options_title">Options</string>
-    <string name="option_recheck">Recheck the library</string>
-    <string name="option_recheck_description">Apply the current rules to tracks that are already downloaded: tags, folders, broken files, lyrics.</string>
+    <string name="existing_title">Existing tracks</string>
+    <string name="existing_keep">Keep</string>
+    <string name="existing_outdated">Update outdated</string>
+    <string name="existing_all">Update all</string>
+    <string name="existing_keep_description">Tracks already in the library stay as they are; only their id is written into the file, so they are found again quickly.</string>
+    <string name="existing_outdated_description">Tracks written in an older format, or with an artist that changed since (Artists), are rewritten with the current rules: tags, folders, broken files, lyrics.</string>
+    <string name="existing_all_description">Every track already in the library is rewritten with the current rules: tags, folders, broken files, lyrics.</string>
+    <string name="existing_outdated_unsupported">Update outdated needs a newer music-loader on the server.</string>
     <string name="option_reposts">SoundCloud reposts</string>
     <string name="option_likes">SoundCloud likes</string>
     <string name="option_fallback">Look for blocked tracks elsewhere</string>
     <string name="option_fallback_description">For tracks SoundCloud does not give out (DRM, 30-second preview), take the same track from YouTube Music when artist, title, version and length match. A different recording or master; the tags say where it came from.</string>
     <string name="option_profile_only">For profile links only</string>
     <string name="download_options_title">Download options</string>
-    <string name="option_short_recheck">Recheck</string>
+    <string name="option_short_existing_outdated">Update outdated</string>
+    <string name="option_short_existing_all">Update all</string>
     <string name="option_short_reposts">Reposts</string>
     <string name="option_short_likes">Likes</string>
     <string name="option_short_fallback">Blocked elsewhere</string>
@@ -98,6 +105,7 @@
     </plurals>
     <string name="job_options">Options</string>
     <string name="job_option_lyrics">Lyrics: %1$s</string>
+    <string name="job_option_existing">Existing tracks: %1$s</string>
     <string name="job_created_at">Created %1$s</string>
     <string name="job_finished_at">Finished %1$s</string>
     <string name="job_finished_took">Finished %1$s · took %2$s</string>
@@ -144,6 +152,10 @@
     <string name="stat_skipped">Already had</string>
     <string name="stat_failed">Failed</string>
     <string name="stat_unavailable">Unavailable</string>
+    <plurals name="stat_outdated_note">
+        <item quantity="one">%1$d track is in an older format; run with Update outdated to rewrite it</item>
+        <item quantity="other">%1$d tracks are in an older format; run with Update outdated to rewrite them</item>
+    </plurals>
     <string name="stat_total">Total</string>
     <string name="stat_lyrics_found">Lyrics found</string>
     <string name="stat_lyrics_missing">Lyrics not found</string>
@@ -231,8 +243,8 @@
     <string name="notification_queued">Queued: %1$d</string>
     <string name="notification_waiting_retry">Waiting to retry failed tracks at %1$s</string>
     <string name="settings_formatting">SoundCloud formatting</string>
-    <string name="settings_formatting_description">How SoundCloud titles, tags and file names are written. Applies to new downloads; turn on Recheck in a download to bring tracks already in the library up to date.</string>
-    <string name="settings_formatting_description_server">How SoundCloud titles, tags and file names are written. Applies to new downloads; turn on Recheck in a download to bring tracks already in the library up to date. Needs music-loader 2.8.0 or newer on the server.</string>
+    <string name="settings_formatting_description">How SoundCloud titles, tags and file names are written. Applies to new downloads; choose Existing tracks: Update all in a download to bring tracks already in the library up to date.</string>
+    <string name="settings_formatting_description_server">How SoundCloud titles, tags and file names are written. Applies to new downloads; choose Existing tracks: Update all in a download to bring tracks already in the library up to date. Needs music-loader 2.8.0 or newer on the server.</string>
     <string name="settings_feat">Featured artists</string>
     <string name="settings_feat_both">Both</string>
     <string name="settings_feat_artist">Artist tag</string>
@@ -271,7 +283,7 @@
         <item quantity="one">%1$d day</item>
         <item quantity="other">%1$d days</item>
     </plurals>
-    <string name="settings_lyrics_retry_hint">A track whose lyrics were not found is searched again after this time; Recheck the library searches again anyway</string>
+    <string name="settings_lyrics_retry_hint">A track whose lyrics were not found is searched again after this time; updating existing tracks searches again anyway</string>
     <string name="settings_artists">Artists</string>
     <string name="settings_artists_hint">Artist names for SoundCloud accounts and reupload accounts</string>
     <string name="artists_description">An account\'s tracks get an artist name only when your library, Spotify or Deezer confirms it. Suggestions wait for you; whatever you choose is locked and automatic checks leave it as is.</string>

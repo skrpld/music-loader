@@ -59,15 +59,22 @@
     <string name="lyrics_loose_description">Нечёткое совпадение исполнителя и названия, расхождение длительности до предела из настроек (по умолчанию 10 с). Если тайминги могут не совпасть, сохраняется только текст.</string>
     <string name="lyrics_off_description">Тексты не ищутся.</string>
     <string name="options_title">Параметры</string>
-    <string name="option_recheck">Перепроверить библиотеку</string>
-    <string name="option_recheck_description">Применить текущие правила к уже скачанным трекам: теги, папки, битые файлы, тексты.</string>
+    <string name="existing_title">Уже скачанные треки</string>
+    <string name="existing_keep">Оставить</string>
+    <string name="existing_outdated">Обновить устаревшие</string>
+    <string name="existing_all">Обновить все</string>
+    <string name="existing_keep_description">Треки, которые уже есть в библиотеке, остаются как есть; в файл записывается только их id, чтобы их быстро находить снова.</string>
+    <string name="existing_outdated_description">Треки, записанные в старом формате или с артистом, который с тех пор изменился (Артисты), перезаписываются по текущим правилам: теги, папки, битые файлы, тексты.</string>
+    <string name="existing_all_description">Все треки, которые уже есть в библиотеке, перезаписываются по текущим правилам: теги, папки, битые файлы, тексты.</string>
+    <string name="existing_outdated_unsupported">Для «Обновить устаревшие» нужен более новый music-loader на сервере.</string>
     <string name="option_reposts">Репосты SoundCloud</string>
     <string name="option_likes">Лайки SoundCloud</string>
     <string name="option_fallback">Искать недоступные треки в другом месте</string>
     <string name="option_fallback_description">Для треков, которые SoundCloud не отдаёт (DRM, 30-секундный фрагмент), брать тот же трек с YouTube Music, если совпадают исполнитель, название, версия и длительность. Это другая запись или мастер; в тегах указан источник.</string>
     <string name="option_profile_only">Только для ссылок на профиль</string>
     <string name="download_options_title">Параметры загрузки</string>
-    <string name="option_short_recheck">Перепроверка</string>
+    <string name="option_short_existing_outdated">Обновить устаревшие</string>
+    <string name="option_short_existing_all">Обновить все</string>
     <string name="option_short_reposts">Репосты</string>
     <string name="option_short_likes">Лайки</string>
     <string name="option_short_fallback">Замена недоступных</string>
@@ -98,6 +105,7 @@
     </plurals>
     <string name="job_options">Параметры</string>
     <string name="job_option_lyrics">Тексты: %1$s</string>
+    <string name="job_option_existing">Уже скачанные: %1$s</string>
     <string name="job_created_at">Создано %1$s</string>
     <string name="job_finished_at">Завершено %1$s</string>
     <string name="job_finished_took">Завершено %1$s · заняло %2$s</string>
@@ -144,6 +152,12 @@
     <string name="stat_skipped">Уже были</string>
     <string name="stat_failed">Ошибки</string>
     <string name="stat_unavailable">Недоступны</string>
+    <plurals name="stat_outdated_note">
+        <item quantity="one">%1$d трек в старом формате; запустите с «Обновить устаревшие», чтобы перезаписать его</item>
+        <item quantity="few">%1$d трека в старом формате; запустите с «Обновить устаревшие», чтобы перезаписать их</item>
+        <item quantity="many">%1$d треков в старом формате; запустите с «Обновить устаревшие», чтобы перезаписать их</item>
+        <item quantity="other">%1$d трека в старом формате; запустите с «Обновить устаревшие», чтобы перезаписать их</item>
+    </plurals>
     <string name="stat_total">Всего</string>
     <string name="stat_lyrics_found">Тексты найдены</string>
     <string name="stat_lyrics_missing">Тексты не найдены</string>
@@ -231,8 +245,8 @@
     <string name="notification_queued">В очереди: %1$d</string>
     <string name="notification_waiting_retry">Ожидание повтора неудачных треков в %1$s</string>
     <string name="settings_formatting">Оформление SoundCloud</string>
-    <string name="settings_formatting_description">Как записываются названия, теги и имена файлов треков SoundCloud. Действует на новые загрузки; включите «Перепроверить» в загрузке, чтобы обновить треки, которые уже в библиотеке.</string>
-    <string name="settings_formatting_description_server">Как записываются названия, теги и имена файлов треков SoundCloud. Действует на новые загрузки; включите «Перепроверить» в загрузке, чтобы обновить треки, которые уже в библиотеке. Нужен music-loader 2.8.0 или новее на сервере.</string>
+    <string name="settings_formatting_description">Как записываются названия, теги и имена файлов треков SoundCloud. Действует на новые загрузки; выберите «Уже скачанные треки: Обновить все» в загрузке, чтобы обновить треки, которые уже в библиотеке.</string>
+    <string name="settings_formatting_description_server">Как записываются названия, теги и имена файлов треков SoundCloud. Действует на новые загрузки; выберите «Уже скачанные треки: Обновить все» в загрузке, чтобы обновить треки, которые уже в библиотеке. Нужен music-loader 2.8.0 или новее на сервере.</string>
     <string name="settings_feat">Приглашённые артисты</string>
     <string name="settings_feat_both">Везде</string>
     <string name="settings_feat_artist">В артистах</string>
@@ -273,7 +287,7 @@
         <item quantity="many">%1$d дней</item>
         <item quantity="other">%1$d дня</item>
     </plurals>
-    <string name="settings_lyrics_retry_hint">Трек без найденного текста ищется снова через это время; «Перепроверить библиотеку» ищет в любом случае</string>
+    <string name="settings_lyrics_retry_hint">Трек без найденного текста ищется снова через это время; при обновлении уже скачанных треков поиск идёт в любом случае</string>
     <string name="settings_artists">Артисты</string>
     <string name="settings_artists_hint">Имена артистов для аккаунтов SoundCloud и аккаунты перезаливов</string>
     <string name="artists_description">Треки аккаунта получают имя артиста, только когда его подтверждает ваша библиотека, Spotify или Deezer. Предложения ждут вашего решения; выбранное вами закрепляется, и автоматические проверки его не меняют.</string>

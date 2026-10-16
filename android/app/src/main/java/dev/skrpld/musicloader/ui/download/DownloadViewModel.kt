@@ -7,6 +7,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.skrpld.musicloader.data.ApiException
+import dev.skrpld.musicloader.data.ExistingTracks
 import dev.skrpld.musicloader.data.JobOptions
 import dev.skrpld.musicloader.data.LinkScan
 import dev.skrpld.musicloader.data.Links
@@ -41,12 +42,12 @@ class DownloadViewModel(
 
     val scan: LinkScan by derivedStateOf { Links.scan(linksText) }
 
-    /** Remembered options; "recheck" is per job and lives in [recheck]. */
+    /** Remembered options; "existing" is per job and lives in [existing]. */
     val options: StateFlow<JobOptions> = settingsStore.settings
         .map { it.jobOptions }
         .stateIn(viewModelScope, SharingStarted.Eagerly, JobOptions())
 
-    var recheck by mutableStateOf(false)
+    var existing by mutableStateOf(ExistingTracks.Keep)
 
     var submitting by mutableStateOf(false)
         private set
@@ -103,9 +104,9 @@ class DownloadViewModel(
         submitting = true
         viewModelScope.launch {
             try {
-                val response = repository.submit(links, options.value.copy(recheck = recheck))
+                val response = repository.submit(links, options.value.withExisting(existing))
                 linksText = ""
-                recheck = false
+                existing = ExistingTracks.Keep
                 _events.send(DownloadEvent.Submitted(response.job.id, response.rejected.size))
             } catch (e: CancellationException) {
                 throw e

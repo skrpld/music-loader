@@ -6,6 +6,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import dev.skrpld.musicloader.R
+import dev.skrpld.musicloader.data.ExistingTracks
 import dev.skrpld.musicloader.data.Job
 import dev.skrpld.musicloader.data.JobStatus
 import dev.skrpld.musicloader.data.LyricsMode
@@ -105,6 +106,15 @@ fun lyricsModeName(mode: LyricsMode): String = stringResource(
         LyricsMode.Strict -> R.string.lyrics_strict
         LyricsMode.Loose -> R.string.lyrics_loose
         LyricsMode.Off -> R.string.lyrics_off
+    },
+)
+
+@Composable
+fun existingTracksName(mode: ExistingTracks): String = stringResource(
+    when (mode) {
+        ExistingTracks.Keep -> R.string.existing_keep
+        ExistingTracks.Outdated -> R.string.existing_outdated
+        ExistingTracks.All -> R.string.existing_all
     },
 )
 
